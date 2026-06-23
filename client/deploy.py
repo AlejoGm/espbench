@@ -548,7 +548,9 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
         if resp.get("ok"):
             print("[REMOTE] ✓ Flash completado exitosamente")
         else:
-            print("[REMOTE] ✗ Flash falló")
+            hint = resp.get("error_hint", "")
+            write_rc = resp.get("write_rc")
+            print(f"[REMOTE] ✗ Flash falló (write_rc={write_rc}){': ' + hint if hint else ''}")
         return 0 if resp.get("ok") else 1
     finally:
         s.close()

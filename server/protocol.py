@@ -260,6 +260,13 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
 
         ok = (rc_erase == 0) and (rc_write == 0)
 
+        _ESPTOOL_RC_HINTS = {
+            0:  "OK",
+            1:  "Error general de esptool.",
+            2:  "Error fatal de conexión: boot mode incorrecto, chip no responde o puerto ocupado.",
+            -1: "Error interno al lanzar esptool.",
+        }
+
         if ok:
             if missing_app:
                 status_msg = "parcial (sin aplicación)"
@@ -278,8 +285,11 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
             "device": cfg["tty"], "chip": chip, "baud": flash_baud,
             "erase_rc": rc_erase, "write_rc": rc_write, "pairs": pairs,
             "log_file": str(job_log_path), "status": status_msg,
-            "missing_app": missing_app
+            "missing_app": missing_app,
         }
+        if not ok:
+            failing_rc = rc_write if rc_write != 0 else rc_erase
+            resp["error_hint"] = _ESPTOOL_RC_HINTS.get(failing_rc, f"exit code {failing_rc} desconocido.")
         svc_log.info(f"[flash] enviando respuesta al cliente...\r\n")
         nprint("[flash] enviando respuesta al cliente...")
         send_msg(sock, resp)
