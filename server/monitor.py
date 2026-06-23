@@ -367,7 +367,7 @@ class EspMonitor:
 
         cmd = [sys.executable, "-m", "esp_idf_monitor", "--port", self.tty_path, "--baud", str(self.baud)]
         if self.elf_path and pathlib.Path(self.elf_path).exists():
-            cmd += ["--elf", str(self.elf_path)]
+            cmd += [str(self.elf_path)]
         nprint(f"[monitor] comando: {' '.join(cmd)}")
 
         master_fd, slave_fd = pty.openpty()
