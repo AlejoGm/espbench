@@ -38,7 +38,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 3. Create directory structure
 # ---------------------------------------------------------------------------
 info "Creando directorios..."
-mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs
+mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard
 
 # ---------------------------------------------------------------------------
 # 4. Create venv and install Python dependencies
@@ -61,6 +61,12 @@ info "Copiando common.py -> /opt/esp/common.py..."
 cp "$REPO_DIR/common.py" /opt/esp/common.py
 
 # ---------------------------------------------------------------------------
+# 6b. Copy dashboard static files
+# ---------------------------------------------------------------------------
+info "Copiando dashboard/ -> /opt/esp/dashboard/..."
+cp -r "$REPO_DIR/dashboard/"* /opt/esp/dashboard/
+
+# ---------------------------------------------------------------------------
 # 6. Install devremote CLI
 # ---------------------------------------------------------------------------
 info "Instalando devremote en /usr/local/bin/..."
@@ -81,10 +87,13 @@ info "Instalando reglas udev..."
 cp "$REPO_DIR/infra/99-esp32.rules" /etc/udev/rules.d/99-esp32.rules
 
 # ---------------------------------------------------------------------------
-# 9. Install systemd service
+# 9. Install systemd services
 # ---------------------------------------------------------------------------
 info "Instalando servicio systemd devremote..."
 cp "$REPO_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
+
+info "Instalando servicio systemd dashboard..."
+cp "$REPO_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
 
 # ---------------------------------------------------------------------------
 # 10. Reload udev
@@ -94,11 +103,12 @@ udevadm control --reload-rules
 udevadm trigger
 
 # ---------------------------------------------------------------------------
-# 11. Enable systemd service
+# 11. Enable systemd services
 # ---------------------------------------------------------------------------
-info "Habilitando servicio devremote..."
+info "Habilitando servicios systemd..."
 systemctl daemon-reload
 systemctl enable devremote
+systemctl enable dashboard
 
 # ---------------------------------------------------------------------------
 # 12. Summary
@@ -109,6 +119,7 @@ echo "  remoteFlashServer — instalacion OK"
 echo "========================================"
 echo "  Archivos instalados:"
 echo "    /opt/esp/server/          <- servidor"
+echo "    /opt/esp/dashboard/       <- dashboard frontend"
 echo "    /opt/esp/common.py        <- modulo compartido"
 echo "    /opt/esp/logs/            <- logs"
 echo "    /opt/esp/jobs/            <- jobs temporales"
@@ -116,8 +127,11 @@ echo "    /usr/local/bin/devremote  <- CLI"
 echo "    /usr/local/bin/esp32_tmux.sh"
 echo "    /etc/udev/rules.d/99-esp32.rules"
 echo "    /etc/systemd/system/devremote.service"
+echo "    /etc/systemd/system/dashboard.service"
 echo ""
-echo "  Servicio habilitado (no iniciado)."
-echo "  Para iniciar ahora: systemctl start devremote"
-echo "  Para ver estado:    devremote --status"
+echo "  Servicios habilitados (no iniciados)."
+echo "  Para iniciar:    systemctl start devremote"
+echo "                   systemctl start dashboard"
+echo "  Dashboard:       http://<host>:8080/"
+echo "  Para ver estado: devremote --status"
 echo "========================================"

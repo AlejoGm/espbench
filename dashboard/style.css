@@ -1,0 +1,187 @@
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    padding: 24px;
+    line-height: 1.6;
+}
+
+header {
+    margin-bottom: 24px;
+}
+
+h1 {
+    color: #e0e0e0;
+    font-size: 1.4rem;
+    font-weight: bold;
+}
+
+/* ── Cards grid ── */
+
+.cards-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.device-card {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 16px;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* ── Card sections ── */
+
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.card-title {
+    font-size: 1rem;
+    font-weight: bold;
+    color: #e0e0e0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.card-row {
+    display: flex;
+    gap: 8px;
+}
+
+.card-label {
+    color: #888;
+    white-space: nowrap;
+}
+
+.card-value {
+    color: #e0e0e0;
+    word-break: break-all;
+}
+
+.card-footer {
+    margin-top: auto;
+}
+
+/* ── Status badges ── */
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.badge-running {
+    background: #1a4a1a;
+    color: #4caf50;
+}
+
+.badge-down {
+    background: #4a1a1a;
+    color: #f44336;
+}
+
+/* ── Button ── */
+
+.btn-monitor {
+    display: inline-block;
+    background: #1a3a5a;
+    color: #ffffff;
+    text-decoration: none;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.btn-monitor:hover {
+    background: #224a72;
+    text-decoration: none;
+}
+
+/* ── Empty state ── */
+
+.empty-state {
+    width: 100%;
+    text-align: center;
+    color: #888;
+    padding: 48px 0;
+    font-size: 1rem;
+}
+
+.hidden {
+    display: none;
+}
+
+/* ── Terminal / log area (device.html) ── */
+
+.terminal {
+    background: #0d0d0d;
+    border: 1px solid #444;
+    padding: 16px;
+    overflow-x: auto;
+    overflow-y: auto;
+    color: #c8c8c8;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    white-space: pre;
+    min-height: 400px;
+    max-height: 80vh;
+    border-radius: 0;
+}
+
+/* ── Misc ── */
+
+a {
+    color: #6aadff;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.back-link {
+    margin-bottom: 16px;
+    display: inline-block;
+    color: #888;
+}
+
+.back-link:hover {
+    color: #e0e0e0;
+    text-decoration: none;
+}
+
+h2 {
+    color: #aaa;
+    font-size: 1rem;
+    font-weight: normal;
+    margin-bottom: 16px;
+}

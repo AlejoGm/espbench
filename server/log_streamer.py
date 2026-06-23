@@ -1,0 +1,158 @@
+"""
+Log streamer: tail async del log file de un dispositivo con broadcast a WebSockets.
+Parsea CHIPID en el stream y notifica al DeviceRegistry.
+"""
+
+import asyncio
+import pathlib
+import re
+from datetime import datetime
+from typing import Optional
+
+CHIPID_RE = re.compile(r"CHIPID\s*=\s*(\d+)")
+
+
+class LogStreamer:
+    """
+    Mantiene una tarea de tail por ttyUSBX y hace broadcast a todos los
+    WebSocket suscritos a ese tty.
+    """
+
+    def __init__(self, logs_base: str = "/opt/esp/logs", registry=None):
+        self._logs_base = pathlib.Path(logs_base)
+        self._registry = registry
+        # tty_name → set of websockets
+        self._subscribers: dict[str, set] = {}
+        # tty_name → asyncio.Task (tail loop)
+        self._tasks: dict[str, asyncio.Task] = {}
+        # tty_name → asyncio.Lock
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _log_path(self) -> pathlib.Path:
+        today = datetime.now().strftime("%Y%m%d")
+        return self._logs_base / today / "serial.log"
+
+    def _ensure_lock(self, tty_name: str) -> asyncio.Lock:
+        if tty_name not in self._locks:
+            self._locks[tty_name] = asyncio.Lock()
+        return self._locks[tty_name]
+
+    async def subscribe(self, tty_name: str, websocket) -> None:
+        """
+        Conecta un WebSocket al stream del tty dado.
+        1. Envía el contenido actual del log.
+        2. Arranca la tarea de tail si no existe.
+        3. Queda registrado hasta que el WebSocket se desconecte.
+        """
+        await websocket.accept()
+
+        lock = self._ensure_lock(tty_name)
+        async with lock:
+            if tty_name not in self._subscribers:
+                self._subscribers[tty_name] = set()
+            self._subscribers[tty_name].add(websocket)
+
+        # Enviar contenido existente del log
+        log_path = self._log_path()
+        if log_path.exists():
+            content = log_path.read_text(errors="replace")
+            if content:
+                try:
+                    await websocket.send_text(content)
+                    self._check_chipid(tty_name, content)
+                except Exception:
+                    pass
+
+        # Arrancar la tarea de tail si no está corriendo
+        if tty_name not in self._tasks or self._tasks[tty_name].done():
+            task = asyncio.get_event_loop().create_task(
+                self._tail_loop(tty_name)
+            )
+            self._tasks[tty_name] = task
+
+        # Esperar hasta que el websocket se desconecte
+        try:
+            while True:
+                await asyncio.sleep(1)
+                # Mantener conexión activa; la tarea de tail hace el broadcast
+        except (asyncio.CancelledError, Exception):
+            pass
+        finally:
+            await self.unsubscribe(tty_name, websocket)
+
+    async def unsubscribe(self, tty_name: str, websocket) -> None:
+        lock = self._ensure_lock(tty_name)
+        async with lock:
+            subs = self._subscribers.get(tty_name)
+            if subs is not None:
+                subs.discard(websocket)
+                if not subs:
+                    del self._subscribers[tty_name]
+                    task = self._tasks.pop(tty_name, None)
+                    if task is not None and not task.done():
+                        task.cancel()
+
+    async def _tail_loop(self, tty_name: str) -> None:
+        """
+        Tarea de background: lee el log file desde el final y hace broadcast
+        de los nuevos bytes a todos los suscriptores del tty.
+        """
+        log_path = self._log_path()
+        position = log_path.stat().st_size if log_path.exists() else 0
+
+        while True:
+            try:
+                await asyncio.sleep(0.2)
+
+                # Releer la ruta por si cambia el día (edge case)
+                log_path = self._log_path()
+
+                if not log_path.exists():
+                    continue
+
+                current_size = log_path.stat().st_size
+                if current_size <= position:
+                    continue
+
+                with open(log_path, "r", errors="replace") as f:
+                    f.seek(position)
+                    new_content = f.read()
+
+                position = current_size
+
+                if not new_content:
+                    continue
+
+                self._check_chipid(tty_name, new_content)
+                await self._broadcast(tty_name, new_content)
+
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                # No romper el loop por errores de lectura
+                await asyncio.sleep(0.5)
+
+    async def _broadcast(self, tty_name: str, text: str) -> None:
+        lock = self._ensure_lock(tty_name)
+        async with lock:
+            subs = set(self._subscribers.get(tty_name, set()))
+
+        dead = set()
+        for ws in subs:
+            try:
+                await ws.send_text(text)
+            except Exception:
+                dead.add(ws)
+
+        if dead:
+            async with lock:
+                existing = self._subscribers.get(tty_name, set())
+                existing -= dead
+
+    def _check_chipid(self, tty_name: str, text: str) -> None:
+        if self._registry is None:
+            return
+        match = CHIPID_RE.search(text)
+        if match:
+            chip_id = match.group(1)
+            self._registry.set_chip_id(tty_name, chip_id)
