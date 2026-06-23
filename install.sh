@@ -41,13 +41,21 @@ info "Creando directorios..."
 mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs
 
 # ---------------------------------------------------------------------------
-# 4. Copy server files
+# 4. Create venv and install Python dependencies
+# ---------------------------------------------------------------------------
+info "Creando venv en /opt/esp/venv..."
+python3 -m venv /opt/esp/venv
+info "Instalando dependencias Python..."
+/opt/esp/venv/bin/pip install --quiet -r "$REPO_DIR/requirements.txt"
+
+# ---------------------------------------------------------------------------
+# 5. Copy server files
 # ---------------------------------------------------------------------------
 info "Copiando server/ -> /opt/esp/server/..."
 cp -r "$REPO_DIR/server/"* /opt/esp/server/
 
 # ---------------------------------------------------------------------------
-# 5. Copy common.py
+# 6. Copy common.py
 # ---------------------------------------------------------------------------
 info "Copiando common.py -> /opt/esp/common.py..."
 cp "$REPO_DIR/common.py" /opt/esp/common.py

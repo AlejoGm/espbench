@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_PORT=5000
 PREFIX="esp32_"
-CMD="sudo /opt/esp/server/remote_esp32.py"
+CMD="sudo /opt/esp/venv/bin/python3 /opt/esp/server/remote_esp32.py"
 
 usage() {
   echo "Usage: devremote [--reset|--status]"
