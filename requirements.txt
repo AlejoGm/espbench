@@ -1,0 +1,2 @@
+esptool
+esp-idf-monitor

@@ -1,0 +1,14 @@
+[Unit]
+Description=Start remote_esp32 tmux sessions for ttyUSB devices (one-shot)
+After=dev-ttyUSB0.device
+Wants=dev-ttyUSB0.device
+
+[Service]
+Type=oneshot
+User=sfypi
+Group=sfypi
+ExecStart=/usr/local/bin/devremote
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

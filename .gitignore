@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# config local (gitignored por diseño)
+.flashcfg.json
+.custom_flash_files.json
+
+# logs y jobs generados en runtime
+logs/
+jobs/
+
+# ELF generados
+*.elf

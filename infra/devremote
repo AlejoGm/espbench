@@ -1,0 +1,114 @@
+#!/bin/bash
+set -euo pipefail
+
+BASE_PORT=5000
+PREFIX="esp32_"
+CMD="sudo /opt/esp/server/remote_esp32.py"
+
+usage() {
+  echo "Usage: devremote [--reset|--status]"
+  exit 1
+}
+
+list_devs() {
+  ls -1 /dev/ttyUSB* 2>/dev/null || true
+}
+
+session_name_for_dev() {
+  local dev="$1"
+  echo "${PREFIX}$(basename "$dev")"
+}
+
+port_for_dev() {
+  local dev="$1"
+  local name num
+  name="$(basename "$dev")"      # ttyUSBX
+  num="${name#ttyUSB}"           # X
+  echo $((BASE_PORT + num))
+}
+
+start_one() {
+  local dev="$1"
+  local sess port
+  sess="$(session_name_for_dev "$dev")"
+  port="$(port_for_dev "$dev")"
+
+  if tmux has-session -t "$sess" 2>/dev/null; then
+    return 0
+  fi
+
+  tmux new-session -d -s "$sess" \
+    "$CMD -p $dev -tcp $port"
+}
+
+scan_start_missing() {
+  local dev
+  while read -r dev; do
+    [ -e "$dev" ] || continue
+    start_one "$dev"
+  done < <(list_devs)
+}
+
+reset_all() {
+  tmux ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do
+    tmux kill-session -t "$s" || true
+  done
+
+  scan_start_missing
+}
+
+status() {
+  local dev sess port state pid
+  while read -r dev; do
+    [ -e "$dev" ] || continue
+
+    sess="$(session_name_for_dev "$dev")"
+    port="$(port_for_dev "$dev")"
+
+    if tmux has-session -t "$sess" 2>/dev/null; then
+      pid="$(tmux list-panes -t "$sess" -F "#{pane_pid}" 2>/dev/null | head -n1 || true)"
+      state="RUNNING"
+    else
+      pid="-"
+      state="DOWN"
+    fi
+
+    printf "%-12s  %-16s  tcp=%-5s  %-7s  pid=%s\n" "$(basename "$dev")" "$sess" "$port" "$state" "$pid"
+  done < <(list_devs)
+}
+
+attach_one() {
+  local num="$1"
+  local dev="/dev/ttyUSB${num}"
+  local sess
+
+  if [ ! -e "$dev" ]; then
+    echo "Error: dispositivo $dev no existe" >&2
+    exit 1
+  fi
+
+  sess="$(session_name_for_dev "$dev")"
+
+  if ! tmux has-session -t "$sess" 2>/dev/null; then
+    echo "Error: sesión tmux '$sess' no existe" >&2
+    exit 1
+  fi
+
+  exec tmux attach-session -t "$sess"
+}
+
+if [ "${1:-}" = "--reset" ]; then
+  reset_all
+  exit 0
+elif [ "${1:-}" = "--status" ]; then
+  status
+  exit 0
+elif [ -z "${1:-}" ]; then
+  scan_start_missing
+  exit 0
+elif [[ "$1" =~ ^[0-9]+$ ]]; then
+  attach_one "$1"
+  exit 0
+else
+  usage
+fi
