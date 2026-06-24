@@ -13,6 +13,9 @@ class DeviceInfo:
     status: str
     last_flash_ts: Optional[str]
     chip_id: Optional[str]
+    fw_project: Optional[str]
+    fw_version: Optional[str]
+    fw_idf: Optional[str]
 
 
 class DeviceRegistry:
@@ -20,6 +23,7 @@ class DeviceRegistry:
         self._dev_dir = pathlib.Path(dev_dir)
         self._jobs_dir = pathlib.Path(jobs_dir)
         self._chip_ids: dict[str, str] = {}
+        self._fw_info: dict[str, dict] = {}
         self._lock = threading.Lock()
 
     def list_devices(self) -> list[DeviceInfo]:
@@ -39,6 +43,13 @@ class DeviceRegistry:
         with self._lock:
             self._chip_ids[tty_name] = chip_id
 
+    def set_firmware_info(self, tty_name: str, project: str = None, version: str = None, idf: str = None) -> None:
+        with self._lock:
+            info = self._fw_info.setdefault(tty_name, {})
+            if project: info['fw_project'] = project
+            if version: info['fw_version'] = version
+            if idf:     info['fw_idf'] = idf
+
     def _build_device_info(self, tty_name: str) -> DeviceInfo:
         tty = str(self._dev_dir / tty_name)
         number = self._parse_tty_number(tty_name)
@@ -47,6 +58,7 @@ class DeviceRegistry:
         last_flash_ts = self._get_last_flash_ts(tty_name)
         with self._lock:
             chip_id = self._chip_ids.get(tty_name)
+            fw = self._fw_info.get(tty_name, {})
         return DeviceInfo(
             tty=tty,
             tty_name=tty_name,
@@ -54,6 +66,9 @@ class DeviceRegistry:
             status=status,
             last_flash_ts=last_flash_ts,
             chip_id=chip_id,
+            fw_project=fw.get('fw_project'),
+            fw_version=fw.get('fw_version'),
+            fw_idf=fw.get('fw_idf'),
         )
 
     @staticmethod

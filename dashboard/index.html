@@ -36,17 +36,21 @@
                     <span class="badge ${statusClass}">${escapeHtml(device.status)}</span>
                 </div>
                 <div class="card-body">
-                    <div class="card-row">
-                        <span class="card-label">Puerto TCP:</span>
-                        <span class="card-value">${escapeHtml(String(device.port_tcp))}</span>
-                    </div>
+                    ${device.fw_project ? `<div class="card-row">
+                        <span class="card-label">Proyecto:</span>
+                        <span class="card-value">${escapeHtml(device.fw_project)}${device.fw_version ? ' v' + escapeHtml(device.fw_version) : ''}</span>
+                    </div>` : ''}
+                    ${device.fw_idf ? `<div class="card-row">
+                        <span class="card-label">ESP-IDF:</span>
+                        <span class="card-value">${escapeHtml(device.fw_idf)}</span>
+                    </div>` : ''}
                     <div class="card-row">
                         <span class="card-label">Último flash:</span>
                         <span class="card-value">${escapeHtml(lastFlash)}</span>
                     </div>
                     <div class="card-row">
-                        <span class="card-label">TTY:</span>
-                        <span class="card-value">${escapeHtml(device.tty_name)}</span>
+                        <span class="card-label">Puerto TCP:</span>
+                        <span class="card-value">${escapeHtml(String(device.port_tcp))}</span>
                     </div>
                 </div>
                 <div class="card-footer">

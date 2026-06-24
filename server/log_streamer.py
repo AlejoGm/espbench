@@ -9,7 +9,10 @@ import re
 from datetime import datetime
 from typing import Optional
 
-CHIPID_RE = re.compile(r"CHIPID\s*=\s*(\d+)")
+CHIPID_RE   = re.compile(r"CHIPID\s*=\s*(\d+)")
+FW_PROJECT_RE = re.compile(r"app_init: Project name:\s+(\S+)")
+FW_VERSION_RE = re.compile(r"app_init: App version:\s+(\S+)")
+FW_IDF_RE     = re.compile(r"app_init: ESP-IDF:\s+(\S+)")
 
 
 class LogStreamer:
@@ -157,7 +160,16 @@ class LogStreamer:
     def _check_chipid(self, tty_name: str, text: str) -> None:
         if self._registry is None:
             return
-        match = CHIPID_RE.search(text)
-        if match:
-            chip_id = match.group(1)
-            self._registry.set_chip_id(tty_name, chip_id)
+        m = CHIPID_RE.search(text)
+        if m:
+            self._registry.set_chip_id(tty_name, m.group(1))
+        m_proj = FW_PROJECT_RE.search(text)
+        m_ver  = FW_VERSION_RE.search(text)
+        m_idf  = FW_IDF_RE.search(text)
+        if m_proj or m_ver or m_idf:
+            self._registry.set_firmware_info(
+                tty_name,
+                project=m_proj.group(1) if m_proj else None,
+                version=m_ver.group(1)  if m_ver  else None,
+                idf=m_idf.group(1)      if m_idf  else None,
+            )
