@@ -26,7 +26,8 @@ MONITOR_RESTART_DELAY = 0.8
 
 
 def nprint(s):
-    print(s + "\r\n", flush=True)
+    sys.stdout.write(s + "\r\n")
+    sys.stdout.flush()
 
 
 def normalize_line_endings(data: bytes) -> bytes:

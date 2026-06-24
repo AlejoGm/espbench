@@ -41,8 +41,43 @@
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
+        // Procesa \r como carriage return real (sobreescribe línea actual).
+        // Las secuencias ANSI se tratan como unidades atómicas (no afectan posición).
+        function applyCarriageReturns(text) {
+            text = text.replace(/\r\n/g, '\n');
+            var lines = [];
+            var line = '';
+            var i = 0;
+            while (i < text.length) {
+                var ch = text[i];
+                if (ch === '\x1b') {
+                    // colectar secuencia ANSI completa
+                    var j = i + 1;
+                    if (j < text.length && text[j] === '[') {
+                        j++;
+                        while (j < text.length && !/[A-Za-z]/.test(text[j])) j++;
+                        j++;
+                    }
+                    line += text.slice(i, j);
+                    i = j;
+                } else if (ch === '\n') {
+                    lines.push(line);
+                    line = '';
+                    i++;
+                } else if (ch === '\r') {
+                    line = '';
+                    i++;
+                } else {
+                    line += ch;
+                    i++;
+                }
+            }
+            lines.push(line);
+            return lines.join('\n');
+        }
+
         function ansiToHtml(text) {
-            text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            text = applyCarriageReturns(text);
             var result = '';
             var openSpan = false;
             var parts = text.split(/\x1b\[([0-9;]*)m/);
