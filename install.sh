@@ -52,19 +52,24 @@ install_xtensa_toolchain() {
     fi
 
     info "Descargando toolchain xtensa-esp32-elf (ESP-IDF ${IDF_VER}, ~100 MB)..."
-    mkdir -p /tmp/fake_idf/tools
+    local IDFSCRIPTS
+    IDFSCRIPTS=$(mktemp -d)
+    mkdir -p "$IDFSCRIPTS/tools"
 
-    wget -q --show-progress -O /tmp/idf_tools.py \
-        "https://raw.githubusercontent.com/espressif/esp-idf/${IDF_VER}/tools/idf_tools.py" \
+    # idf_tools.py importa python_version_checker del mismo directorio
+    local BASE_URL="https://raw.githubusercontent.com/espressif/esp-idf/${IDF_VER}/tools"
+    wget -q --show-progress -O "$IDFSCRIPTS/idf_tools.py"             "$BASE_URL/idf_tools.py" \
         || { warn "No se pudo descargar idf_tools.py — backtrace decoding no disponible."; return 0; }
-
-    wget -q --show-progress -O /tmp/fake_idf/tools/tools.json \
-        "https://raw.githubusercontent.com/espressif/esp-idf/${IDF_VER}/tools/tools.json" \
+    wget -q --show-progress -O "$IDFSCRIPTS/python_version_checker.py" "$BASE_URL/python_version_checker.py" \
+        || { warn "No se pudo descargar python_version_checker.py — backtrace decoding no disponible."; return 0; }
+    wget -q --show-progress -O "$IDFSCRIPTS/tools/tools.json"          "$BASE_URL/tools.json" \
         || { warn "No se pudo descargar tools.json — backtrace decoding no disponible."; return 0; }
 
-    IDF_PATH=/tmp/fake_idf IDF_TOOLS_PATH=/opt/esp/toolchain \
-        python3 /tmp/idf_tools.py install xtensa-esp32-elf \
+    # Correr desde el mismo dir para que import python_version_checker funcione
+    IDF_PATH="$IDFSCRIPTS" IDF_TOOLS_PATH=/opt/esp/toolchain \
+        python3 "$IDFSCRIPTS/idf_tools.py" install xtensa-esp32-elf \
         || { warn "Instalación del toolchain falló — backtrace decoding no disponible."; return 0; }
+    rm -rf "$IDFSCRIPTS"
 
     # Symlinks en /usr/local/bin → en PATH de todos los servicios y usuarios
     local addr2line
