@@ -38,7 +38,11 @@
                 <div class="card-body">
                     ${device.fw_project ? `<div class="card-row">
                         <span class="card-label">Proyecto:</span>
-                        <span class="card-value">${escapeHtml(device.fw_project)}${device.fw_version ? ' v' + escapeHtml(device.fw_version) : ''}</span>
+                        <span class="card-value">${escapeHtml(device.fw_project)}</span>
+                    </div>` : ''}
+                    ${device.fw_version ? `<div class="card-row">
+                        <span class="card-label">App version:</span>
+                        <span class="card-value">${escapeHtml(device.fw_version)}</span>
                     </div>` : ''}
                     ${device.fw_idf ? `<div class="card-row">
                         <span class="card-label">ESP-IDF:</span>

@@ -11,7 +11,6 @@
     <div class="device-header">
         <a class="back-link" href="/">← inicio</a>
         <span class="separator">/</span>
-        <span class="device-name" id="device-name">—</span>
         <div class="device-badges" id="device-badges"></div>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
@@ -29,7 +28,6 @@
         var terminal = document.getElementById('terminal');
         var statusDot = document.getElementById('status-dot');
         var statusLabel = document.getElementById('status-label');
-        var deviceName = document.getElementById('device-name');
         var deviceBadges = document.getElementById('device-badges');
         var ws = null;
         var reconnectTimer = null;
@@ -96,28 +94,31 @@
         }
 
         // ── Device info badges ────────────────────────────────────────────────
+        function makeBadge(label, value) {
+            return '<span class="dev-badge"><span class="dev-badge-label">' +
+                   escHtml(label) + '</span><span class="dev-badge-value">' +
+                   escHtml(value) + '</span></span>';
+        }
+
         function loadDeviceInfo() {
             fetch('/api/device/' + tty)
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(d) {
-                    if (!d) return;
-                    var badges = [];
-                    if (d.port_tcp)  badges.push({label: 'tcp', value: ':' + d.port_tcp});
-                    if (d.fw_project) {
-                        var proj = d.fw_project + (d.fw_version ? ' v' + d.fw_version : '');
-                        badges.push({label: 'fw', value: proj});
+                    var badges = [makeBadge('tty', tty)];
+                    if (d) {
+                        if (d.port_tcp)   badges.push(makeBadge('tcp',     ':' + d.port_tcp));
+                        if (d.fw_project) badges.push(makeBadge('project', d.fw_project));
+                        if (d.fw_version) badges.push(makeBadge('version', 'v' + d.fw_version));
+                        if (d.fw_idf)     badges.push(makeBadge('idf',     d.fw_idf));
+                        if (d.fw_project) {
+                            document.title = 'espbench — ' + tty + ' (' + d.fw_project + ')';
+                        }
                     }
-                    if (d.fw_idf)    badges.push({label: 'idf', value: d.fw_idf});
-                    deviceBadges.innerHTML = badges.map(function(b) {
-                        return '<span class="dev-badge"><span class="dev-badge-label">' +
-                               escHtml(b.label) + '</span><span class="dev-badge-value">' +
-                               escHtml(b.value) + '</span></span>';
-                    }).join('');
-                    if (d.fw_project) {
-                        document.title = 'espbench — ' + tty + ' (' + d.fw_project + ')';
-                    }
+                    deviceBadges.innerHTML = badges.join('');
                 })
-                .catch(function() {});
+                .catch(function() {
+                    deviceBadges.innerHTML = makeBadge('tty', tty);
+                });
         }
 
         // ── Device commands ───────────────────────────────────────────────────
@@ -134,7 +135,6 @@
         if (!tty) {
             terminal.textContent = 'Error: parámetro ?tty= faltante.';
         } else {
-            deviceName.textContent = tty;
             document.title = 'espbench — ' + tty;
 
             connect();
