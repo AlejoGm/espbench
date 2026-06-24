@@ -12,6 +12,7 @@
         <a class="back-link" href="/">← inicio</a>
         <span class="separator">/</span>
         <span class="device-name" id="device-name">—</span>
+        <div class="device-badges" id="device-badges"></div>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
@@ -29,6 +30,7 @@
         var statusDot = document.getElementById('status-dot');
         var statusLabel = document.getElementById('status-label');
         var deviceName = document.getElementById('device-name');
+        var deviceBadges = document.getElementById('device-badges');
         var ws = null;
         var reconnectTimer = null;
         var rawContent = '';
@@ -93,6 +95,31 @@
             return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
         }
 
+        // ── Device info badges ────────────────────────────────────────────────
+        function loadDeviceInfo() {
+            fetch('/api/device/' + tty)
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    if (!d) return;
+                    var badges = [];
+                    if (d.port_tcp)  badges.push({label: 'tcp', value: ':' + d.port_tcp});
+                    if (d.fw_project) {
+                        var proj = d.fw_project + (d.fw_version ? ' v' + d.fw_version : '');
+                        badges.push({label: 'fw', value: proj});
+                    }
+                    if (d.fw_idf)    badges.push({label: 'idf', value: d.fw_idf});
+                    deviceBadges.innerHTML = badges.map(function(b) {
+                        return '<span class="dev-badge"><span class="dev-badge-label">' +
+                               escHtml(b.label) + '</span><span class="dev-badge-value">' +
+                               escHtml(b.value) + '</span></span>';
+                    }).join('');
+                    if (d.fw_project) {
+                        document.title = 'espbench — ' + tty + ' (' + d.fw_project + ')';
+                    }
+                })
+                .catch(function() {});
+        }
+
         // ── Device commands ───────────────────────────────────────────────────
         function sendCommand(cmd) {
             var btn = document.getElementById('btn-' + cmd);
@@ -111,6 +138,8 @@
             document.title = 'espbench — ' + tty;
 
             connect();
+            loadDeviceInfo();
+            setInterval(loadDeviceInfo, 10000);
             document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
             document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
         }

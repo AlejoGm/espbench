@@ -86,6 +86,35 @@ body.device-page {
     margin-left: auto;
 }
 
+.device-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.dev-badge {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 0.72rem;
+    line-height: 1;
+}
+
+.dev-badge-label {
+    background: #1e1e1e;
+    color: #555;
+    padding: 2px 5px;
+    border-right: 1px solid #2a2a2a;
+}
+
+.dev-badge-value {
+    color: #8b9498;
+    padding: 2px 6px;
+    font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
 .header-actions {
     display: flex;
     gap: 6px;
