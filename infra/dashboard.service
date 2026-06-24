@@ -9,6 +9,8 @@ Group=sfypi
 WorkingDirectory=/opt/esp
 ExecStart=/opt/esp/venv/bin/uvicorn server.dashboard:app --host 0.0.0.0 --port 8080
 Restart=on-failure
+KillSignal=SIGINT
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target
