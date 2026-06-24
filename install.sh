@@ -39,6 +39,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 info "Creando directorios..."
 mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard
+chmod 777 /opt/esp/logs
 
 # ---------------------------------------------------------------------------
 # 4. Create venv and install Python dependencies
