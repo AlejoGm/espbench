@@ -157,6 +157,21 @@ h1 {
     border-radius: 0;
 }
 
+/* ── Status dot (device.html) ── */
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin: 0 4px;
+    background: #888;
+}
+
+.status-dot.connected    { background: #4caf50; }
+.status-dot.reconnecting { background: #ff9800; }
+.status-dot.error        { background: #f44336; }
+
 /* ── Misc ── */
 
 a {

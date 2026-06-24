@@ -29,6 +29,11 @@ class LogStreamer:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _log_path(self) -> pathlib.Path:
+        # Busca el serial.log más reciente entre todos los subdirectorios de fecha.
+        # Necesario porque el monitor escribe en la fecha en que arrancó, no la fecha actual.
+        candidates = sorted(self._logs_base.glob("*/serial.log"), reverse=True)
+        if candidates:
+            return candidates[0]
         today = datetime.now().strftime("%Y%m%d")
         return self._logs_base / today / "serial.log"
 
