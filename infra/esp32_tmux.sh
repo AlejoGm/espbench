@@ -11,8 +11,10 @@ tmux has-session -t "$SESSION" 2>/dev/null && exit 0
 
 LOG_DIR="/opt/esp/logs/$BASENAME"
 mkdir -p "$LOG_DIR"
-# Truncar log al arrancar sesión nueva — log fresco por sesión
-> "$LOG_DIR/output.log"
+# Rotar log anterior si existe
+if [ -s "$LOG_DIR/output.log" ]; then
+    mv "$LOG_DIR/output.log" "$LOG_DIR/output_$(date +%Y%m%d_%H%M%S).log"
+fi
 
 tmux new-session -d -s "$SESSION" \
   "sudo /opt/esp/venv/bin/python3 /opt/esp/server/remote_esp32.py -p $DEV -tcp $PORT"
