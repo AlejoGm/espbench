@@ -65,15 +65,15 @@ install_xtensa_toolchain() {
     wget -q --show-progress -O "$IDFSCRIPTS/tools/tools.json"          "$BASE_URL/tools.json" \
         || { warn "No se pudo descargar tools.json — backtrace decoding no disponible."; return 0; }
 
-    # Correr desde el mismo dir para que import python_version_checker funcione
+    # ESP-IDF 5.x usa "xtensa-esp-elf"; 4.x usaba "xtensa-esp32-elf"
     IDF_PATH="$IDFSCRIPTS" IDF_TOOLS_PATH=/opt/esp/toolchain \
-        python3 "$IDFSCRIPTS/idf_tools.py" install xtensa-esp32-elf \
+        python3 "$IDFSCRIPTS/idf_tools.py" install xtensa-esp-elf \
         || { warn "Instalación del toolchain falló — backtrace decoding no disponible."; return 0; }
     rm -rf "$IDFSCRIPTS"
 
-    # Symlinks en /usr/local/bin → en PATH de todos los servicios y usuarios
+    # Symlinks en /usr/local/bin
     local addr2line
-    addr2line=$(find /opt/esp/toolchain -name "*elf-addr2line" 2>/dev/null | head -1)
+    addr2line=$(find /opt/esp/toolchain -name "*elf-addr2line" -type f 2>/dev/null | head -1)
     if [ -n "$addr2line" ]; then
         local bindir
         bindir=$(dirname "$addr2line")
@@ -81,6 +81,16 @@ install_xtensa_toolchain() {
             [ -f "$f" ] || continue
             ln -sf "$f" "/usr/local/bin/$(basename "$f")"
         done
+        # esp_idf_monitor busca "xtensa-esp32-elf-addr2line" específicamente
+        # Si el binario instalado es xtensa-esp-elf-*, crear aliases
+        if [ ! -e /usr/local/bin/xtensa-esp32-elf-addr2line ] && \
+           [ -e /usr/local/bin/xtensa-esp-elf-addr2line ]; then
+            for f in /usr/local/bin/xtensa-esp-elf-*; do
+                local base32
+                base32="xtensa-esp32-elf-${f##*xtensa-esp-elf-}"
+                ln -sf "$f" "/usr/local/bin/$base32"
+            done
+        fi
         info "Toolchain instalado: $bindir"
     else
         warn "addr2line no encontrado tras instalar — backtrace decoding no disponible."
