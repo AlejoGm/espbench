@@ -57,7 +57,7 @@ class LogStreamer:
         # Enviar contenido existente del log
         log_path = self._log_path(tty_name)
         if log_path.exists():
-            content = log_path.read_text(errors="replace")
+            content = log_path.read_text(errors="replace", newline='')
             if content:
                 try:
                     await websocket.send_text(content)
@@ -116,7 +116,7 @@ class LogStreamer:
                 if current_size <= position:
                     continue
 
-                with open(log_path, "r", errors="replace") as f:
+                with open(log_path, "r", errors="replace", newline='') as f:
                     f.seek(position)
                     new_content = f.read()
 
