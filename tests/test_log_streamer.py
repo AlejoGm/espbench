@@ -53,13 +53,11 @@ class MockRegistry:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_log_path(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Crea el directorio de hoy y devuelve la ruta del log."""
-    from datetime import datetime
-    today = datetime.now().strftime("%Y%m%d")
-    day_dir = tmp_path / today
-    day_dir.mkdir(parents=True, exist_ok=True)
-    return day_dir / "serial.log"
+def make_log_path(tmp_path: pathlib.Path, tty_name: str = "ttyUSB0") -> pathlib.Path:
+    """Crea el directorio del dispositivo y devuelve la ruta del log."""
+    dev_dir = tmp_path / tty_name
+    dev_dir.mkdir(parents=True, exist_ok=True)
+    return dev_dir / "output.log"
 
 
 async def subscribe_and_cancel(streamer, tty, ws, cancel_after=0.05):

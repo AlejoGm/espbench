@@ -31,14 +31,8 @@ class LogStreamer:
         # tty_name → asyncio.Lock
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def _log_path(self) -> pathlib.Path:
-        # Busca el serial.log más reciente entre todos los subdirectorios de fecha.
-        # Necesario porque el monitor escribe en la fecha en que arrancó, no la fecha actual.
-        candidates = sorted(self._logs_base.glob("*/serial.log"), reverse=True)
-        if candidates:
-            return candidates[0]
-        today = datetime.now().strftime("%Y%m%d")
-        return self._logs_base / today / "serial.log"
+    def _log_path(self, tty_name: str) -> pathlib.Path:
+        return self._logs_base / tty_name / "output.log"
 
     def _ensure_lock(self, tty_name: str) -> asyncio.Lock:
         if tty_name not in self._locks:
@@ -61,7 +55,7 @@ class LogStreamer:
             self._subscribers[tty_name].add(websocket)
 
         # Enviar contenido existente del log
-        log_path = self._log_path()
+        log_path = self._log_path(tty_name)
         if log_path.exists():
             content = log_path.read_text(errors="replace")
             if content:
@@ -105,7 +99,7 @@ class LogStreamer:
         Tarea de background: lee el log file desde el final y hace broadcast
         de los nuevos bytes a todos los suscriptores del tty.
         """
-        log_path = self._log_path()
+        log_path = self._log_path(tty_name)
         position = log_path.stat().st_size if log_path.exists() else 0
 
         while True:
@@ -113,7 +107,7 @@ class LogStreamer:
                 await asyncio.sleep(0.2)
 
                 # Releer la ruta por si cambia el día (edge case)
-                log_path = self._log_path()
+                log_path = self._log_path(tty_name)
 
                 if not log_path.exists():
                     continue
