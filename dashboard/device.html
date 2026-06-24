@@ -6,14 +6,15 @@
     <title>espbench — monitor</title>
     <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-    <header>
-        <h1>espbench — monitor</h1>
-        <a class="back-link" href="/">← volver</a>
-        <span id="device-heading">—</span>
+<body class="device-page">
+
+    <div class="device-header">
+        <a class="back-link" href="/">← inicio</a>
+        <span class="separator">/</span>
+        <span class="device-name" id="device-name">—</span>
         <span class="status-dot" id="status-dot"></span>
-        <span id="status-label">Conectando...</span>
-    </header>
+        <span class="status-label" id="status-label">Conectando...</span>
+    </div>
 
     <pre id="terminal" class="terminal"></pre>
 
@@ -23,16 +24,17 @@
         var terminal = document.getElementById('terminal');
         var statusDot = document.getElementById('status-dot');
         var statusLabel = document.getElementById('status-label');
+        var deviceName = document.getElementById('device-name');
         var ws = null;
         var reconnectTimer = null;
         var rawContent = '';
 
         // ── ANSI → HTML ───────────────────────────────────────────────────────
         var ANSI_COLORS = {
-            30: '#555555', 31: '#cd3131', 32: '#0dbc79', 33: '#e5e510',
-            34: '#2472c8', 35: '#bc3fbc', 36: '#11a8cd', 37: '#e5e5e5',
-            90: '#777777', 91: '#f14c4c', 92: '#23d18b', 93: '#f5f543',
-            94: '#3b8eea', 95: '#d670d6', 96: '#29b8db', 97: '#ffffff',
+            30: '#555555', 31: '#f85149', 32: '#3fb950', 33: '#d29922',
+            34: '#388bfd', 35: '#bc8cff', 36: '#39c5cf', 37: '#b1bac4',
+            90: '#6e7681', 91: '#ff7b72', 92: '#56d364', 93: '#e3b341',
+            94: '#79c0ff', 95: '#d2a8ff', 96: '#56d4dd', 97: '#f0f6fc',
         };
 
         function escHtml(s) {
@@ -40,14 +42,10 @@
         }
 
         function ansiToHtml(text) {
-            // Normalizar saltos de línea — \r\n y \r suelto → \n
             text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
             var result = '';
             var openSpan = false;
-            // Split en secuencias ESC[...m; partes pares = texto, impares = códigos
             var parts = text.split(/\x1b\[([0-9;]*)m/);
-
             for (var i = 0; i < parts.length; i++) {
                 if (i % 2 === 0) {
                     result += escHtml(parts[i]);
@@ -58,7 +56,7 @@
                     for (var j = 0; j < codes.length; j++) {
                         var c = codes[j];
                         if (c === 0) { style = ''; }
-                        else if (c === 1) { style += 'font-weight:bold;'; }
+                        else if (c === 1) { style += 'font-weight:600;'; }
                         else if (ANSI_COLORS[c]) { style += 'color:' + ANSI_COLORS[c] + ';'; }
                     }
                     if (style) { result += '<span style="' + style + '">'; openSpan = true; }
@@ -73,9 +71,7 @@
             var atBottom = isAtBottom();
             rawContent += text;
             terminal.innerHTML = ansiToHtml(rawContent);
-            if (atBottom) {
-                terminal.scrollTop = terminal.scrollHeight;
-            }
+            if (atBottom) terminal.scrollTop = terminal.scrollHeight;
         }
 
         function isAtBottom() {
@@ -86,14 +82,15 @@
         if (!tty) {
             terminal.textContent = 'Error: parámetro ?tty= faltante.';
         } else {
-            document.getElementById('device-heading').textContent = tty;
-            document.title = 'espbench — monitor — ' + tty;
+            deviceName.textContent = tty;
+            document.title = 'espbench — ' + tty;
 
             fetch('/api/device/' + tty)
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(d) {
                     if (d && d.chip_id) {
-                        document.getElementById('device-heading').textContent = tty + ' (' + d.chip_id + ')';
+                        deviceName.textContent = d.chip_id + '  (' + tty + ')';
+                        document.title = 'espbench — ' + d.chip_id;
                     }
                 })
                 .catch(function() {});
@@ -103,37 +100,26 @@
 
         function setStatus(state) {
             statusDot.className = 'status-dot ' + state;
-            if (state === 'connected')    statusLabel.textContent = 'Conectado';
-            if (state === 'reconnecting') statusLabel.textContent = 'Reconectando...';
-            if (state === 'error')        statusLabel.textContent = 'Error';
+            if (state === 'connected')    statusLabel.textContent = 'conectado';
+            if (state === 'reconnecting') statusLabel.textContent = 'reconectando...';
+            if (state === 'error')        statusLabel.textContent = 'error';
         }
 
         function connect() {
             if (ws) { ws.close(); }
             setStatus('reconnecting');
-
             var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            var wsUrl = wsProto + '//' + location.host + '/ws/device/' + tty;
-            ws = new WebSocket(wsUrl);
-
+            ws = new WebSocket(wsProto + '//' + location.host + '/ws/device/' + tty);
             ws.onopen = function() {
                 setStatus('connected');
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             };
-
-            ws.onmessage = function(evt) {
-                appendText(evt.data);
-            };
-
-            ws.onclose = function() {
+            ws.onmessage = function(evt) { appendText(evt.data); };
+            ws.onclose   = function() {
                 setStatus('reconnecting');
                 reconnectTimer = setTimeout(connect, 2000);
             };
-
-            ws.onerror = function() {
-                setStatus('error');
-                ws.close();
-            };
+            ws.onerror   = function() { setStatus('error'); ws.close(); };
         }
     </script>
 </body>
