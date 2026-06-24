@@ -57,7 +57,8 @@ class LogStreamer:
         # Enviar contenido existente del log
         log_path = self._log_path(tty_name)
         if log_path.exists():
-            content = log_path.read_text(errors="replace", newline='')
+            with open(log_path, "r", errors="replace", newline='') as f:
+                content = f.read()
             if content:
                 try:
                     await websocket.send_text(content)
