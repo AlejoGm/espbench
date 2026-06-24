@@ -24,7 +24,7 @@
         }
 
         function buildCard(device) {
-            const title = device.chip_id != null ? device.chip_id : device.tty_name;
+            const title = device.tty_name;
             const statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
             const lastFlash = formatTimestamp(device.last_flash_ts);
 

@@ -85,16 +85,6 @@
             deviceName.textContent = tty;
             document.title = 'espbench — ' + tty;
 
-            fetch('/api/device/' + tty)
-                .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(d) {
-                    if (d && d.chip_id) {
-                        deviceName.textContent = d.chip_id + '  (' + tty + ')';
-                        document.title = 'espbench — ' + d.chip_id;
-                    }
-                })
-                .catch(function() {});
-
             connect();
         }
 
