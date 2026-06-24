@@ -4,32 +4,92 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench — monitor</title>
-    <link rel="stylesheet" href="/dashboard/style.css">
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     <header>
         <h1>espbench — monitor</h1>
+        <a class="back-link" href="/">← volver</a>
+        <span id="device-heading">—</span>
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-label">Conectando...</span>
     </header>
 
-    <a class="back-link" href="/dashboard/index.html">← volver</a>
-
-    <h2 id="device-heading">Dispositivo: —</h2>
-
-    <pre id="terminal" class="terminal">Conectando...</pre>
+    <pre id="terminal" class="terminal"></pre>
 
     <script>
         var params = new URLSearchParams(window.location.search);
         var tty = params.get('tty') || '';
+        var terminal = document.getElementById('terminal');
+        var statusDot = document.getElementById('status-dot');
+        var statusLabel = document.getElementById('status-label');
+        var ws = null;
+        var reconnectTimer = null;
 
-        if (tty) {
-            document.getElementById('device-heading').textContent = 'Dispositivo: ' + tty;
-            document.title = 'espbench — monitor — ' + tty;
+        if (!tty) {
+            terminal.textContent = 'Error: parámetro ?tty= faltante.';
         } else {
-            document.getElementById('device-heading').textContent = 'Dispositivo: desconocido';
-            document.getElementById('terminal').textContent = 'No se especificó dispositivo (parámetro ?tty= faltante).';
+            document.getElementById('device-heading').textContent = tty;
+            document.title = 'espbench — monitor — ' + tty;
+
+            fetch('/api/device/' + tty)
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    if (d && d.chip_id) {
+                        document.getElementById('device-heading').textContent = tty + ' (' + d.chip_id + ')';
+                    }
+                })
+                .catch(function() {});
+
+            connect();
         }
 
-        // Terminal output will be wired in #13
+        function setStatus(state) {
+            statusDot.className = 'status-dot ' + state;
+            if (state === 'connected')    statusLabel.textContent = 'Conectado';
+            if (state === 'reconnecting') statusLabel.textContent = 'Reconectando...';
+            if (state === 'error')        statusLabel.textContent = 'Error';
+        }
+
+        function isAtBottom() {
+            return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
+        }
+
+        function appendText(text) {
+            var atBottom = isAtBottom();
+            terminal.textContent += text;
+            if (atBottom) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        function connect() {
+            if (ws) { ws.close(); }
+            setStatus('reconnecting');
+
+            var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = wsProto + '//' + location.host + '/ws/device/' + tty;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                setStatus('connected');
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            };
+
+            ws.onmessage = function(evt) {
+                appendText(evt.data);
+            };
+
+            ws.onclose = function() {
+                setStatus('reconnecting');
+                reconnectTimer = setTimeout(connect, 2000);
+            };
+
+            ws.onerror = function() {
+                setStatus('error');
+                ws.close();
+            };
+        }
     </script>
 </body>
 </html>
