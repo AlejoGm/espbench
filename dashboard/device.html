@@ -25,7 +25,64 @@
         var statusLabel = document.getElementById('status-label');
         var ws = null;
         var reconnectTimer = null;
+        var rawContent = '';
 
+        // ── ANSI → HTML ───────────────────────────────────────────────────────
+        var ANSI_COLORS = {
+            30: '#555555', 31: '#cd3131', 32: '#0dbc79', 33: '#e5e510',
+            34: '#2472c8', 35: '#bc3fbc', 36: '#11a8cd', 37: '#e5e5e5',
+            90: '#777777', 91: '#f14c4c', 92: '#23d18b', 93: '#f5f543',
+            94: '#3b8eea', 95: '#d670d6', 96: '#29b8db', 97: '#ffffff',
+        };
+
+        function escHtml(s) {
+            return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function ansiToHtml(text) {
+            // Normalizar saltos de línea — \r\n y \r suelto → \n
+            text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+            var result = '';
+            var openSpan = false;
+            // Split en secuencias ESC[...m; partes pares = texto, impares = códigos
+            var parts = text.split(/\x1b\[([0-9;]*)m/);
+
+            for (var i = 0; i < parts.length; i++) {
+                if (i % 2 === 0) {
+                    result += escHtml(parts[i]);
+                } else {
+                    if (openSpan) { result += '</span>'; openSpan = false; }
+                    var codes = parts[i] === '' ? [0] : parts[i].split(';').map(Number);
+                    var style = '';
+                    for (var j = 0; j < codes.length; j++) {
+                        var c = codes[j];
+                        if (c === 0) { style = ''; }
+                        else if (c === 1) { style += 'font-weight:bold;'; }
+                        else if (ANSI_COLORS[c]) { style += 'color:' + ANSI_COLORS[c] + ';'; }
+                    }
+                    if (style) { result += '<span style="' + style + '">'; openSpan = true; }
+                }
+            }
+            if (openSpan) result += '</span>';
+            return result;
+        }
+
+        // ── Terminal rendering ────────────────────────────────────────────────
+        function appendText(text) {
+            var atBottom = isAtBottom();
+            rawContent += text;
+            terminal.innerHTML = ansiToHtml(rawContent);
+            if (atBottom) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        function isAtBottom() {
+            return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
+        }
+
+        // ── Init ──────────────────────────────────────────────────────────────
         if (!tty) {
             terminal.textContent = 'Error: parámetro ?tty= faltante.';
         } else {
@@ -49,18 +106,6 @@
             if (state === 'connected')    statusLabel.textContent = 'Conectado';
             if (state === 'reconnecting') statusLabel.textContent = 'Reconectando...';
             if (state === 'error')        statusLabel.textContent = 'Error';
-        }
-
-        function isAtBottom() {
-            return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
-        }
-
-        function appendText(text) {
-            var atBottom = isAtBottom();
-            terminal.textContent += text;
-            if (atBottom) {
-                terminal.scrollTop = terminal.scrollHeight;
-            }
         }
 
         function connect() {
