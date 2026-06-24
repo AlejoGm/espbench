@@ -38,11 +38,53 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 3. Create directory structure
 # ---------------------------------------------------------------------------
 info "Creando directorios..."
-mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard
+mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp/toolchain
 chmod 777 /opt/esp/logs
 
 # ---------------------------------------------------------------------------
-# 4. Create venv and install Python dependencies
+# 4. Toolchain xtensa-esp32-elf (addr2line para backtrace decoding)
+# ---------------------------------------------------------------------------
+IDF_VER="v5.3.2"
+install_xtensa_toolchain() {
+    if command -v xtensa-esp32-elf-addr2line &>/dev/null; then
+        info "Toolchain xtensa ya presente: $(which xtensa-esp32-elf-addr2line)"
+        return 0
+    fi
+
+    info "Descargando toolchain xtensa-esp32-elf (ESP-IDF ${IDF_VER}, ~100 MB)..."
+    mkdir -p /tmp/fake_idf/tools
+
+    wget -q --show-progress -O /tmp/idf_tools.py \
+        "https://raw.githubusercontent.com/espressif/esp-idf/${IDF_VER}/tools/idf_tools.py" \
+        || { warn "No se pudo descargar idf_tools.py — backtrace decoding no disponible."; return 0; }
+
+    wget -q --show-progress -O /tmp/fake_idf/tools/tools.json \
+        "https://raw.githubusercontent.com/espressif/esp-idf/${IDF_VER}/tools/tools.json" \
+        || { warn "No se pudo descargar tools.json — backtrace decoding no disponible."; return 0; }
+
+    IDF_PATH=/tmp/fake_idf IDF_TOOLS_PATH=/opt/esp/toolchain \
+        python3 /tmp/idf_tools.py install xtensa-esp32-elf \
+        || { warn "Instalación del toolchain falló — backtrace decoding no disponible."; return 0; }
+
+    # Symlinks en /usr/local/bin → en PATH de todos los servicios y usuarios
+    local addr2line
+    addr2line=$(find /opt/esp/toolchain -name "*elf-addr2line" 2>/dev/null | head -1)
+    if [ -n "$addr2line" ]; then
+        local bindir
+        bindir=$(dirname "$addr2line")
+        for f in "$bindir"/*elf-*; do
+            [ -f "$f" ] || continue
+            ln -sf "$f" "/usr/local/bin/$(basename "$f")"
+        done
+        info "Toolchain instalado: $bindir"
+    else
+        warn "addr2line no encontrado tras instalar — backtrace decoding no disponible."
+    fi
+}
+install_xtensa_toolchain
+
+# ---------------------------------------------------------------------------
+# 5. Create venv and install Python dependencies
 # ---------------------------------------------------------------------------
 info "Creando venv en /opt/esp/venv..."
 python3 -m venv /opt/esp/venv
