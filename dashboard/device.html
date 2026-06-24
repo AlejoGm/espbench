@@ -14,6 +14,10 @@
         <span class="device-name" id="device-name">—</span>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
+        <div class="header-actions">
+            <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)">↺ Reset</button>
+            <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
+        </div>
     </div>
 
     <pre id="terminal" class="terminal"></pre>
@@ -89,6 +93,16 @@
             return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
         }
 
+        // ── Device commands ───────────────────────────────────────────────────
+        function sendCommand(cmd) {
+            var btn = document.getElementById('btn-' + cmd);
+            btn.disabled = true;
+            fetch('/api/device/' + tty + '/command/' + cmd, {method: 'POST'})
+                .then(function(r) { return r.json(); })
+                .catch(function() {})
+                .finally(function() { setTimeout(function() { btn.disabled = false; }, 1000); });
+        }
+
         // ── Init ──────────────────────────────────────────────────────────────
         if (!tty) {
             terminal.textContent = 'Error: parámetro ?tty= faltante.';
@@ -97,6 +111,8 @@
             document.title = 'espbench — ' + tty;
 
             connect();
+            document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
+            document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
         }
 
         function setStatus(state) {

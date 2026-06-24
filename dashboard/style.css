@@ -86,6 +86,35 @@ body.device-page {
     margin-left: auto;
 }
 
+.header-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: 12px;
+}
+
+.action-btn {
+    background: #1e1e1e;
+    border: 1px solid #333;
+    color: #aaa;
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.action-btn:hover {
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border-color: #444;
+}
+
+.action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 /* ── Terminal (device.html) ── */
 
 .terminal {

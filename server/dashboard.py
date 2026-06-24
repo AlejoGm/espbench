@@ -1,5 +1,7 @@
+import asyncio
 import dataclasses
 import pathlib
+import subprocess
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +28,22 @@ async def get_device(tty: str):
     if device is None:
         raise HTTPException(status_code=404, detail=f"Device '{tty}' not found")
     return dataclasses.asdict(device)
+
+
+_COMMANDS = {
+    "reset":      ["C-t", "C-r"],  # Ctrl+T Ctrl+R — reset via RTS
+    "bootloader": ["C-t", "C-p"],  # Ctrl+T Ctrl+P — reset into bootloader
+}
+
+@app.post("/api/device/{tty}/command/{command}")
+async def device_command(tty: str, command: str):
+    if command not in _COMMANDS:
+        raise HTTPException(status_code=400, detail=f"Comando desconocido: {command}")
+    session = f"esp32_{tty}"
+    for key in _COMMANDS[command]:
+        subprocess.run(["tmux", "send-keys", "-t", session, key], check=False)
+        await asyncio.sleep(0.05)
+    return {"ok": True, "command": command, "session": session}
 
 
 @app.websocket("/ws/device/{tty:path}")
