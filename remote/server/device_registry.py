@@ -133,15 +133,15 @@ class DeviceRegistry:
 
     @staticmethod
     def _parse_job_timestamp(dirname: str) -> Optional[str]:
-        # dirname format: job_YYYYMMDD_HHMMSS
+        # dirname format: job_YYYYMMDD_HHMMSS  or  job_YYYYMMDD_HHMMSS_<name>
         prefix = "job_"
         if not dirname.startswith(prefix):
             return None
         rest = dirname[len(prefix):]
         parts = rest.split("_")
-        if len(parts) != 2:
+        if len(parts) < 2:
             return None
-        date_part, time_part = parts
+        date_part, time_part = parts[0], parts[1]
         if len(date_part) != 8 or len(time_part) != 6:
             return None
         year = date_part[0:4]

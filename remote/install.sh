@@ -120,6 +120,12 @@ info "Copiando common.py -> /opt/esp/common.py..."
 cp "$REPO_DIR/common.py" /opt/esp/common.py
 
 # ---------------------------------------------------------------------------
+# 6c. Copy VERSION
+# ---------------------------------------------------------------------------
+info "Copiando VERSION -> /opt/esp/VERSION..."
+cp "$REPO_DIR/VERSION" /opt/esp/VERSION
+
+# ---------------------------------------------------------------------------
 # 6b. Copy dashboard static files
 # ---------------------------------------------------------------------------
 info "Copiando dashboard/ -> /opt/esp/dashboard/..."

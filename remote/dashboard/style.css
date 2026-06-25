@@ -37,6 +37,15 @@ body.device-page {
     letter-spacing: 0.02em;
 }
 
+.version-badge {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: #444;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    vertical-align: middle;
+    letter-spacing: 0;
+}
+
 /* ── Device page header bar ── */
 
 .device-header {

@@ -12,10 +12,20 @@ from server.log_streamer import LogStreamer
 
 BASE_DIR = pathlib.Path(__file__).parent.parent
 DASHBOARD_DIR = BASE_DIR / "dashboard"
+_VERSION_FILE = pathlib.Path("/opt/esp/VERSION")
 
 app = FastAPI()
 registry = DeviceRegistry()
 streamer = LogStreamer(registry=registry)
+
+
+@app.get("/api/version")
+async def get_version():
+    try:
+        version = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "dev"
+    except Exception:
+        version = "dev"
+    return {"version": version}
 
 
 @app.get("/api/devices")

@@ -8,7 +8,7 @@
 </head>
 <body>
     <header class="home-header">
-        <h1>espbench</h1>
+        <h1>espbench <span id="version-badge" class="version-badge"></span></h1>
     </header>
 
     <main>
@@ -107,6 +107,14 @@
                     console.error('Error al obtener dispositivos:', err);
                 });
         }
+
+        fetch('/api/version')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var el = document.getElementById('version-badge');
+                if (el && d.version) el.textContent = 'v' + d.version;
+            })
+            .catch(function() {});
 
         fetchDevices();
         setInterval(fetchDevices, 5000);
