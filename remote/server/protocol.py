@@ -348,6 +348,14 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
 
         svc_log.info(f"[flash] resultado: {status_msg} (erase={rc_erase}, write={rc_write})\r\n")
         nprint(f"[flash] resultado: {status_msg} (erase={rc_erase}, write={rc_write})")
+        if ok:
+            try:
+                last_user_file = pathlib.Path(cfg["logs_dir"]) / tty_name / "last_user"
+                last_user_file.parent.mkdir(parents=True, exist_ok=True)
+                last_user_file.write_text(lock_user)
+                last_user_file.chmod(0o666)
+            except Exception:
+                pass
 
         resp = {
             "ok": ok, "job_id": job_id, "started_at": t0, "finished_at": t1,

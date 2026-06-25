@@ -111,10 +111,11 @@
                         if (d.port_tcp)   badges.push(makeBadge('tcp',     ':' + d.port_tcp));
                         if (d.fw_project) badges.push(makeBadge('project', d.fw_project));
                         if (d.fw_version) badges.push(makeBadge('version', 'v' + d.fw_version));
-                        if (d.fw_idf)     badges.push(makeBadge('idf',     d.fw_idf));
+                        if (d.fw_idf)          badges.push(makeBadge('idf',      d.fw_idf));
+                        if (d.last_flash_user) badges.push(makeBadge('deployer', d.last_flash_user));
                         if (d.lock_user) {
                             currentLockUser = d.lock_user;
-                            badges.push(makeBadge('🔒', d.lock_user, 'badge-locked'));
+                            badges.push(makeBadge('🔒 locked', d.lock_user, 'badge-locked'));
                         } else {
                             currentLockUser = '';
                         }

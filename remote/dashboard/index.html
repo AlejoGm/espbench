@@ -29,7 +29,7 @@
             const lastFlash = formatTimestamp(device.last_flash_ts);
 
             const card = document.createElement('div');
-            card.className = 'device-card';
+            card.className = 'device-card' + (device.lock_user ? ' locked' : '');
             card.innerHTML = `
                 <div class="card-header">
                     <span class="card-title">${escapeHtml(title)}</span>
@@ -50,6 +50,10 @@
                     ${device.fw_idf ? `<div class="card-row">
                         <span class="card-label">ESP-IDF:</span>
                         <span class="card-value">${escapeHtml(device.fw_idf)}</span>
+                    </div>` : ''}
+                    ${device.last_flash_user ? `<div class="card-row">
+                        <span class="card-label">Deployer:</span>
+                        <span class="card-value">${escapeHtml(device.last_flash_user)}</span>
                     </div>` : ''}
                     <div class="card-row">
                         <span class="card-label">Último flash:</span>

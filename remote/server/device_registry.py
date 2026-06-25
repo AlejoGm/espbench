@@ -7,6 +7,8 @@ from typing import Optional
 _LOCKS_DIR = pathlib.Path("/opt/esp/locks")
 
 
+_LOGS_DIR = pathlib.Path("/opt/esp/logs")
+
 @dataclasses.dataclass
 class DeviceInfo:
     tty: str
@@ -14,6 +16,7 @@ class DeviceInfo:
     port_tcp: int
     status: str
     last_flash_ts: Optional[str]
+    last_flash_user: Optional[str]
     chip_id: Optional[str]
     fw_project: Optional[str]
     fw_version: Optional[str]
@@ -63,18 +66,30 @@ class DeviceRegistry:
             chip_id = self._chip_ids.get(tty_name)
             fw = self._fw_info.get(tty_name, {})
         lock_user = self._get_lock_user(tty_name)
+        last_flash_user = self._get_last_flash_user(tty_name)
         return DeviceInfo(
             tty=tty,
             tty_name=tty_name,
             port_tcp=port_tcp,
             status=status,
             last_flash_ts=last_flash_ts,
+            last_flash_user=last_flash_user,
             chip_id=chip_id,
             fw_project=fw.get('fw_project'),
             fw_version=fw.get('fw_version'),
             fw_idf=fw.get('fw_idf'),
             lock_user=lock_user,
         )
+
+    @staticmethod
+    def _get_last_flash_user(tty_name: str) -> Optional[str]:
+        try:
+            f = _LOGS_DIR / tty_name / "last_user"
+            if f.exists():
+                return f.read_text().strip() or None
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _get_lock_user(tty_name: str) -> Optional[str]:

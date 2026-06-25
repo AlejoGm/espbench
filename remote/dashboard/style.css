@@ -201,6 +201,15 @@ body.device-page {
     border-color: #444;
 }
 
+.device-card.locked {
+    border-color: #3a2f00;
+    border-left: 3px solid #d29922;
+}
+
+.device-card.locked:hover {
+    border-color: #5a4a00;
+}
+
 .card-header {
     display: flex;
     align-items: center;
@@ -293,9 +302,14 @@ body.device-page {
     flex-shrink: 0;
 }
 
-.dev-badge.badge-locked .dev-badge-label,
-.dev-badge.badge-locked .dev-badge-value {
+.dev-badge.badge-locked .dev-badge-label {
     color: #d29922;
+    background: #2a1f00;
+    border-right-color: #3a2f00;
+}
+.dev-badge.badge-locked .dev-badge-value {
+    color: #f0c040;
+    background: #1e1700;
 }
 .dev-badge.badge-locked {
     border-color: #3a2f00;
