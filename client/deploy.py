@@ -528,7 +528,7 @@ def _remote_name(r: dict) -> str:
 
 def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
               job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
-              on_status=None, verbose: bool = False) -> dict:
+              on_status=None, on_line=None, verbose: bool = False) -> dict:
     name = _remote_name(remote_cfg)
     logs = []
 
@@ -556,6 +556,7 @@ def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
         "encrypt": bool(encrypt), "erase": bool(erase),
         "artifact_size": size, "artifact_sha256": digest, "artifact_name": artifact.name,
         "lock_user": lock_user, "lock_token": lock_token,
+        "stream": True,
     }
     try:
         status("conectando...")
@@ -571,11 +572,24 @@ def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
             with artifact.open("rb") as f:
                 for chunk in iter(lambda: f.read(1024 * 1024), b""):
                     s.sendall(chunk)
-            status("flasheando (esperando resultado)...")
+            status("flasheando...")
             s.settimeout(300)
-            resp = recv_msg(s)
+            stream_lines = []
+            resp = None
+            while True:
+                msg = recv_msg(s)
+                if "ok" in msg:  # mensaje final (server nuevo o viejo)
+                    resp = msg
+                    break
+                if msg.get("phase") == "log":
+                    line = msg.get("line", "")
+                    stream_lines.append(line)
+                    if verbose:
+                        print(line, flush=True)
+                    if on_line:
+                        on_line(line)
             resp.setdefault("name", name)
-            resp["logs"] = logs
+            resp["logs"] = logs + stream_lines
             return resp
         finally:
             s.close()
@@ -587,6 +601,9 @@ def _flash_parallel(remotes: list, artifact: pathlib.Path, digest: str, size: in
                     results_out: dict):
     results_lock = threading.Lock()
 
+    _INTERESTING = ("Writing at", "Wrote", "Hash of", "Leaving", "Hard resetting",
+                    "Compressed", "esptool", "Chip is", "WARNING", "ERROR")
+
     if HAS_RICH:
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=_console) as progress:
             task_ids = {_remote_name(r): progress.add_task(f"[cyan]{_remote_name(r)}[/cyan]  conectando...", total=None)
@@ -596,8 +613,13 @@ def _flash_parallel(remotes: list, artifact: pathlib.Path, digest: str, size: in
                 n = _remote_name(r)
                 def on_status(phase):
                     progress.update(task_ids[n], description=f"[cyan]{n}[/cyan]  {phase}")
+                def on_line(line):
+                    stripped = line.strip()
+                    if any(kw in stripped for kw in _INTERESTING):
+                        short = stripped[:70]
+                        progress.update(task_ids[n], description=f"[cyan]{n}[/cyan]  {short}")
                 result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase,
-                                   on_status=on_status)
+                                   on_status=on_status, on_line=on_line)
                 if result.get("ok"):
                     progress.update(task_ids[n], description=f"[green]✓ {n}[/green]")
                 else:
@@ -613,7 +635,10 @@ def _flash_parallel(remotes: list, artifact: pathlib.Path, digest: str, size: in
         def worker(r):
             n = _remote_name(r)
             print(f"[{n}] iniciando...")
-            result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase)
+            def on_line(line):
+                print(f"[{n}] {line}", flush=True)
+            result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase,
+                               on_line=on_line)
             with results_lock:
                 results_out[n] = result
             print(f"[{n}] {'✓ OK' if result.get('ok') else '✗ ' + result.get('error','error')}")

@@ -159,13 +159,16 @@ def build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir: pat
     return erase_cmd, write_cmd, pairs
 
 
-def run_cmd(cmd, log: logging.Logger):
+def run_cmd(cmd, log: logging.Logger, on_line=None):
     log.info("RUN: %s", " ".join(shlex.quote(c) for c in cmd))
     nprint(f">>> {' '.join(shlex.quote(c) for c in cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in proc.stdout:
-        log.info(line.rstrip())
-        print(line.rstrip(), flush=True)
+        stripped = line.rstrip()
+        log.info(stripped)
+        print(stripped, flush=True)
+        if on_line:
+            on_line(stripped)
     rc = proc.wait()
     log.info("EXIT %d", rc)
     nprint(f"<<< EXIT CODE: {rc}")

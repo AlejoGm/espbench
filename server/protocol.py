@@ -42,11 +42,20 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
         return
 
     action = header.get("action")
-    svc_log.info(f"[control] acción solicitada: {action}\r\n")
+    stream = bool(header.get("stream", False))
+    svc_log.info(f"[control] acción solicitada: {action}, stream={stream}\r\n")
     if action not in ("upload_and_flash", "pull_and_flash", "unlock"):
         svc_log.error(f"[control] acción inválida: {action}")
         send_msg(sock, {"ok": False, "error": "bad_action"})
         return
+
+    def stream_line(line: str):
+        if not stream:
+            return
+        try:
+            send_msg(sock, {"phase": "log", "line": line})
+        except Exception:
+            pass
 
     # Lock check
     lock_user = header.get("lock_user", "").strip()
@@ -263,12 +272,17 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
         svc_log.info(f"[flash] inicio del flasheo: {t0}\r\n")
         nprint(f"[flash] inicio del flasheo: {t0}")
 
+        stream_line(f"[espbench] artifact OK — {len(pairs)} archivos a flashear")
+        for off, path in pairs:
+            stream_line(f"[espbench]   {off}: {pathlib.Path(path).name}")
+
         rc_erase = 0
         if erase_cmd:
             svc_log.info("[flash] ejecutando erase_flash...\r\n")
             nprint("[flash] ejecutando erase_flash...")
+            stream_line("[espbench] erase_flash...")
             try:
-                rc_erase = run_cmd(erase_cmd, job_log)
+                rc_erase = run_cmd(erase_cmd, job_log, on_line=stream_line)
                 svc_log.info(f"[flash] erase_flash terminado con código: {rc_erase}\r\n")
                 nprint(f"[flash] erase_flash terminado con código: {rc_erase}")
             except Exception as e:
@@ -278,14 +292,16 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
 
         svc_log.info("[flash] ejecutando write_flash...\r\n")
         nprint("[flash] ejecutando write_flash...")
+        stream_line("[espbench] write_flash...")
         try:
-            rc_write = run_cmd(write_cmd, job_log)
+            rc_write = run_cmd(write_cmd, job_log, on_line=stream_line)
             svc_log.info(f"[flash] write_flash terminado con código: {rc_write}\r\n")
             nprint(f"[flash] write_flash terminado con código: {rc_write}")
 
             if rc_write == 2 and encrypt:
                 nprint("[flash] write_flash falló con código 2, intentando sin --encrypt...")
                 svc_log.info("[flash] intentando write_flash sin --encrypt\r\n")
+                stream_line("[espbench] reintentando sin --encrypt...")
 
                 write_cmd_no_encrypt = esptool + ["--chip", chip, "--port", cfg["tty"], "--baud", str(flash_baud),
                                                   "--before", "default-reset", "--after", "hard-reset",
@@ -295,7 +311,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
 
                 nprint("[flash] ejecutando write_flash SIN --encrypt...")
                 try:
-                    rc_write = run_cmd(write_cmd_no_encrypt, job_log)
+                    rc_write = run_cmd(write_cmd_no_encrypt, job_log, on_line=stream_line)
                     svc_log.info(f"[flash] write_flash sin --encrypt terminado con código: {rc_write}\r\n")
                     nprint(f"[flash] write_flash sin --encrypt terminado con código: {rc_write}")
                 except Exception as e:
@@ -345,7 +361,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
             resp["error_hint"] = _ESPTOOL_RC_HINTS.get(failing_rc, f"exit code {failing_rc} desconocido.")
         svc_log.info(f"[flash] enviando respuesta al cliente...\r\n")
         nprint("[flash] enviando respuesta al cliente...")
-        send_msg(sock, resp)
+        send_msg(sock, {**resp, "phase": "done"})
         svc_log.info(f"[flash] respuesta enviada\r\n")
         nprint("[flash] respuesta enviada")
         nprint("=" * 60)
