@@ -9,7 +9,7 @@ con soporte de ELF para decodificación de backtraces.
 
 import logging, os, pathlib, select, shlex, signal, subprocess, sys, threading, time, pty, tty, termios
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 from flash import find_esptool_cmd, run_cmd
 
 # Bandera compartida para ignorar señales durante operaciones temporales (erase_region, etc.)

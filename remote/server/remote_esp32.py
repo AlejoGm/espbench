@@ -9,7 +9,7 @@ servidor TCP de control (implementado en protocol.py).
 
 import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 from monitor import EspMonitor, _ignore_signals_flag
 from protocol import control_server, ensure_dir
 

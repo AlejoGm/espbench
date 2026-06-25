@@ -1,5 +1,5 @@
 import pytest, pathlib, tempfile, json, zipfile, sys
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from client.deploy import collect_artifact
 
 def make_build_dir(include_elf=False):

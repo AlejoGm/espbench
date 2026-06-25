@@ -11,7 +11,7 @@ tools/deploy.py — Único comando: build + flash (local o remoto)
 
 import argparse, json, os, pathlib, shlex, socket, struct, subprocess, sys, tempfile, zipfile, hashlib, time, shutil, platform, threading
 import sys as _sys
-_sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
+_sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
 
 try:

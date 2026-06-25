@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 from server.log_streamer import LogStreamer
 
