@@ -10,7 +10,7 @@ Importado por remote_esp32.py como thin entrypoint.
 import datetime as dt, json, logging, os, pathlib, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zipfile
 from urllib.request import urlopen, Request
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
 from flash import find_esptool_cmd, build_esptool_cmd, run_cmd
 from monitor import _ignore_signals_flag, nprint, EspMonitor
