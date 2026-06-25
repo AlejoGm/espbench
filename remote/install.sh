@@ -32,7 +32,8 @@ info "Dependencias OK (tmux, python3, pip3)."
 # Script location — all source paths are relative to the repo root,
 # which is the directory that contains this script.
 # ---------------------------------------------------------------------------
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REMOTE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$REMOTE_DIR")"
 
 # ---------------------------------------------------------------------------
 # 3. Create directory structure
@@ -104,13 +105,13 @@ install_xtensa_toolchain
 info "Creando venv en /opt/esp/venv..."
 python3 -m venv /opt/esp/venv
 info "Instalando dependencias Python..."
-/opt/esp/venv/bin/pip install --quiet -r "$REPO_DIR/requirements.txt"
+/opt/esp/venv/bin/pip install --quiet -r "$REMOTE_DIR/requirements.txt"
 
 # ---------------------------------------------------------------------------
 # 5. Copy server files
 # ---------------------------------------------------------------------------
 info "Copiando server/ -> /opt/esp/server/..."
-cp -r "$REPO_DIR/server/"* /opt/esp/server/
+cp -r "$REMOTE_DIR/server/"* /opt/esp/server/
 
 # ---------------------------------------------------------------------------
 # 6. Copy common.py
@@ -122,36 +123,36 @@ cp "$REPO_DIR/common.py" /opt/esp/common.py
 # 6b. Copy dashboard static files
 # ---------------------------------------------------------------------------
 info "Copiando dashboard/ -> /opt/esp/dashboard/..."
-cp -r "$REPO_DIR/dashboard/"* /opt/esp/dashboard/
+cp -r "$REMOTE_DIR/dashboard/"* /opt/esp/dashboard/
 
 # ---------------------------------------------------------------------------
 # 6. Install devremote CLI
 # ---------------------------------------------------------------------------
 info "Instalando devremote en /usr/local/bin/..."
-cp "$REPO_DIR/infra/devremote" /usr/local/bin/devremote
+cp "$REMOTE_DIR/infra/devremote" /usr/local/bin/devremote
 chmod +x /usr/local/bin/devremote
 
 # ---------------------------------------------------------------------------
 # 7. Install esp32_tmux.sh
 # ---------------------------------------------------------------------------
 info "Instalando esp32_tmux.sh en /usr/local/bin/..."
-cp "$REPO_DIR/infra/esp32_tmux.sh" /usr/local/bin/esp32_tmux.sh
+cp "$REMOTE_DIR/infra/esp32_tmux.sh" /usr/local/bin/esp32_tmux.sh
 chmod +x /usr/local/bin/esp32_tmux.sh
 
 # ---------------------------------------------------------------------------
 # 8. Install udev rules
 # ---------------------------------------------------------------------------
 info "Instalando reglas udev..."
-cp "$REPO_DIR/infra/99-esp32.rules" /etc/udev/rules.d/99-esp32.rules
+cp "$REMOTE_DIR/infra/99-esp32.rules" /etc/udev/rules.d/99-esp32.rules
 
 # ---------------------------------------------------------------------------
 # 9. Install systemd services
 # ---------------------------------------------------------------------------
 info "Instalando servicio systemd devremote..."
-cp "$REPO_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
+cp "$REMOTE_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
 
 info "Instalando servicio systemd dashboard..."
-cp "$REPO_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
+cp "$REMOTE_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
 
 # ---------------------------------------------------------------------------
 # 10. Reload udev
