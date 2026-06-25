@@ -9,10 +9,22 @@ tools/deploy.py — Único comando: build + flash (local o remoto)
 - Remoto: arma artifact.zip, lo envía y recibe JSON
 """
 
-import argparse, json, os, pathlib, shlex, socket, struct, subprocess, sys, tempfile, zipfile, hashlib, time, shutil, platform
+import argparse, json, os, pathlib, shlex, socket, struct, subprocess, sys, tempfile, zipfile, hashlib, time, shutil, platform, threading
 import sys as _sys
 _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
+
+try:
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.table import Table
+    from rich import box as rich_box
+    _console = Console()
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+    _console = None
+    print("[WARN] 'rich' no instalado — output simplificado. Instalá con: cd client && ./install.sh")
 
 # ---------------- utils ----------------
 
@@ -471,13 +483,180 @@ def collect_artifact(build_dir: pathlib.Path, custom_flasher_args_path: str = No
     print(f"[ARTIFACT] ✓ Artifact creado: {out.name} ({size_mb:.2f} MB)")
     return out
 
+# ------------- multi-remote helpers -------------
+
+_TEMPLATE_CFG = {
+    "mode": "auto",
+    "chip": "auto",
+    "flash_baud": 921600,
+    "encrypt": False,
+    "erase": False,
+    "paths": {
+        "project_root": ".",
+        "idf_py": "idf.py"
+    },
+    "remote": [
+        {
+            "name": "usb0",
+            "host": "192.168.x.x",
+            "port": 9300,
+            "token": "",
+            "lock_user": "tu-nombre",
+            "lock_token": "token-secreto"
+        }
+    ]
+}
+
+def _generate_template(path: pathlib.Path):
+    path.write_text(json.dumps(_TEMPLATE_CFG, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[CONFIG] Template generado en {path}")
+    print("[CONFIG] Editá los valores y volvé a ejecutar.")
+    sys.exit(0)
+
+def _normalize_remotes(cfg) -> list:
+    r = cfg.get("remote")
+    if r is None:
+        return []
+    if isinstance(r, dict):
+        return [r]
+    if isinstance(r, list):
+        return r
+    return []
+
+def _remote_name(r: dict) -> str:
+    return r.get("name") or r.get("host", "?")
+
+def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
+              job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
+              on_status=None, verbose: bool = False) -> dict:
+    name = _remote_name(remote_cfg)
+    logs = []
+
+    def log(msg):
+        logs.append(msg)
+        if verbose:
+            print(msg)
+
+    def status(phase):
+        if on_status:
+            on_status(phase)
+        log(f"  {phase}")
+
+    lock_user  = str(remote_cfg.get("lock_user",  "")).strip()
+    lock_token = str(remote_cfg.get("lock_token", "")).strip()
+    if not lock_user or not lock_token:
+        return {"ok": False, "name": name, "error": "falta lock_user/lock_token en config", "logs": logs}
+
+    token = str(remote_cfg.get("token", ""))
+    host  = remote_cfg["host"]
+    port  = int(remote_cfg["port"])
+    header = {
+        "token": token, "action": "upload_and_flash",
+        "job_id": f"{job_id}_{name}", "chip": chip, "baud": flash_baud,
+        "encrypt": bool(encrypt), "erase": bool(erase),
+        "artifact_size": size, "artifact_sha256": digest, "artifact_name": artifact.name,
+        "lock_user": lock_user, "lock_token": lock_token,
+    }
+    try:
+        status("conectando...")
+        s = socket.create_connection((host, port), timeout=30)
+        try:
+            send_msg(s, header)
+            status("esperando ACK...")
+            ack = recv_msg(s)
+            if not ack.get("ok") or ack.get("phase") != "ready":
+                err = ack.get("message") or ack.get("error") or "ACK fallido"
+                return {"ok": False, "name": name, "error": err, "logs": logs}
+            status(f"enviando artifact ({size / (1024*1024):.1f} MB)...")
+            with artifact.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    s.sendall(chunk)
+            status("flasheando (esperando resultado)...")
+            s.settimeout(300)
+            resp = recv_msg(s)
+            resp.setdefault("name", name)
+            resp["logs"] = logs
+            return resp
+        finally:
+            s.close()
+    except Exception as e:
+        return {"ok": False, "name": name, "error": str(e), "logs": logs}
+
+def _flash_parallel(remotes: list, artifact: pathlib.Path, digest: str, size: int,
+                    job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
+                    results_out: dict):
+    results_lock = threading.Lock()
+
+    if HAS_RICH:
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=_console) as progress:
+            task_ids = {_remote_name(r): progress.add_task(f"[cyan]{_remote_name(r)}[/cyan]  conectando...", total=None)
+                        for r in remotes}
+
+            def worker(r):
+                n = _remote_name(r)
+                def on_status(phase):
+                    progress.update(task_ids[n], description=f"[cyan]{n}[/cyan]  {phase}")
+                result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase,
+                                   on_status=on_status)
+                if result.get("ok"):
+                    progress.update(task_ids[n], description=f"[green]✓ {n}[/green]")
+                else:
+                    err = result.get("error", "error")
+                    progress.update(task_ids[n], description=f"[red]✗ {n}[/red]  {err}")
+                with results_lock:
+                    results_out[n] = result
+
+            threads = [threading.Thread(target=worker, args=(r,)) for r in remotes]
+            for t in threads: t.start()
+            for t in threads: t.join()
+    else:
+        def worker(r):
+            n = _remote_name(r)
+            print(f"[{n}] iniciando...")
+            result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase)
+            with results_lock:
+                results_out[n] = result
+            print(f"[{n}] {'✓ OK' if result.get('ok') else '✗ ' + result.get('error','error')}")
+
+        threads = [threading.Thread(target=worker, args=(r,)) for r in remotes]
+        for t in threads: t.start()
+        for t in threads: t.join()
+
+def _print_summary(results: dict):
+    if HAS_RICH:
+        table = Table(title="Resultado Flash", box=rich_box.ROUNDED, show_lines=False)
+        table.add_column("Dispositivo", style="cyan", no_wrap=True)
+        table.add_column("Estado", no_wrap=True)
+        table.add_column("Detalle")
+        for name, r in results.items():
+            if r.get("ok"):
+                detail = r.get("status", "exitoso")
+                table.add_row(name, "[green]✓ OK[/green]", detail)
+            else:
+                err = r.get("error") or r.get("error_hint") or "error desconocido"
+                table.add_row(name, "[red]✗ FAIL[/red]", err)
+        _console.print(table)
+        # Logs de los fallidos
+        for name, r in results.items():
+            if not r.get("ok") and r.get("logs"):
+                _console.print(f"\n[yellow]── Log {name} ──[/yellow]")
+                for line in r["logs"]:
+                    _console.print(f"  {line}")
+    else:
+        print("\n=== RESUMEN ===")
+        for name, r in results.items():
+            mark = "✓" if r.get("ok") else "✗"
+            detail = "" if r.get("ok") else f" — {r.get('error','')}"
+            print(f"  {mark} {name}{detail}")
+
 # ------------- flows -------------
 
 def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool, custom_flasher_args_path: str = None, is_custom_mode: bool = False):
-    print("\n=== FLASH REMOTO ===")
-    
+    remotes = _normalize_remotes(cfg)
+    if not remotes:
+        raise SystemExit("[REMOTE] ✗ No hay 'remote' en .flashcfg.json")
+
     build_dir = project_root / "build"
-    
     if is_custom_mode:
         print("[CUSTOM] Modo custom: saltando build")
     elif do_build:
@@ -486,106 +665,87 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
     else:
         print("[BUILD] Saltando compilación (usando binarios existentes)")
 
-    artifact = collect_artifact(build_dir, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode, is_remote=True)
+    artifact = collect_artifact(build_dir, custom_flasher_args_path=custom_flasher_args_path,
+                                is_custom_mode=is_custom_mode, is_remote=True)
     digest = sha256_file(artifact)
-    size = artifact.stat().st_size
+    size   = artifact.stat().st_size
     job_id = time.strftime("job_%Y%m%d_%H%M%S")
 
-    token = str(cfg["remote"].get("token",""))
-    lock_user = str(cfg["remote"].get("lock_user","")).strip()
-    lock_token = str(cfg["remote"].get("lock_token","")).strip()
-    if not lock_user or not lock_token:
-        raise SystemExit(
-            "[REMOTE] ✗ Falta 'lock_user' y/o 'lock_token' en .flashcfg.json > remote.\n"
-            "  Agregá: \"lock_user\": \"alejo\", \"lock_token\": \"token-secreto\""
-        )
-    header = {
-        "token": token,
-        "action": "upload_and_flash",
-        "job_id": job_id,
-        "chip": chip,
-        "baud": flash_baud,
-        "encrypt": bool(encrypt),
-        "erase": bool(erase),
-        "artifact_size": size,
-        "artifact_sha256": digest,
-        "artifact_name": artifact.name,
-        "lock_user": lock_user,
-        "lock_token": lock_token,
-    }
+    results = {}
 
-    host = cfg["remote"]["host"]; port = int(cfg["remote"]["port"])
-    token = str(cfg["remote"].get("token",""))
+    if len(remotes) == 1:
+        r    = remotes[0]
+        name = _remote_name(r)
+        print(f"\n=== FLASH REMOTO → {name} ===")
+        print(f"[REMOTE] Chip: {chip}, Baud: {flash_baud}, Encrypt: {encrypt}, Erase: {erase}")
+        result = flash_one(r, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase, verbose=True)
+        results[name] = result
+    else:
+        print(f"\n=== FLASH REMOTO ({len(remotes)} dispositivos en paralelo) ===")
+        _flash_parallel(remotes, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase, results)
 
-    print(f"[REMOTE] Conectando a {host}:{port}...")
-    print(f"[REMOTE] Job ID: {job_id}")
-    print(f"[REMOTE] Chip: {chip}, Baud: {flash_baud}, Encrypt: {encrypt}, Erase: {erase}")
-    s = socket.create_connection((host, port), timeout=30)
-    print("[REMOTE] ✓ Conexión establecida")
-    try:
-        # 1) header
-        print("[REMOTE] Enviando header...")
-        send_msg(s, header)
+    _print_summary(results)
 
-        # 2) ACK
-        print("[REMOTE] Esperando ACK del servidor...")
-        ack = recv_msg(s)
-        if not ack.get("ok") or ack.get("phase") != "ready":
-            print("[REMOTE] ✗ ERROR (ACK):", json.dumps(ack, indent=2, ensure_ascii=False))
-            return 1
-        print("[REMOTE] ✓ Servidor listo para recibir artifact")
+    failed_remotes = [r for r in remotes if not results.get(_remote_name(r), {}).get("ok")]
+    if failed_remotes and sys.stdin.isatty():
+        names = ", ".join(_remote_name(r) for r in failed_remotes)
+        retry = input(f"\n¿Reintentar {len(failed_remotes)} dispositivo(s) fallido(s) sin build? [{names}] [s/N] > ").strip().lower()
+        if retry in ["s", "si", "y", "yes"]:
+            print("\n[RETRY] Reintentando...")
+            retry_results = {}
+            if len(failed_remotes) == 1:
+                r    = failed_remotes[0]
+                name = _remote_name(r)
+                retry_results[name] = flash_one(r, artifact, digest, size, job_id + "_retry",
+                                                chip, flash_baud, encrypt, erase, verbose=True)
+            else:
+                _flash_parallel(failed_remotes, artifact, digest, size, job_id + "_retry",
+                                chip, flash_baud, encrypt, erase, retry_results)
+            results.update(retry_results)
+            _print_summary(results)
 
-        # 3) enviar ZIP
-        print(f"[REMOTE] Enviando artifact ({size / (1024*1024):.2f} MB)...")
-        sent_bytes = 0
-        chunk_size = 1024*1024
-        with artifact.open("rb") as f:
-            for chunk in iter(lambda:f.read(chunk_size), b""):
-                s.sendall(chunk)
-                sent_bytes += len(chunk)
-                progress = (sent_bytes / size) * 100
-                print(f"[REMOTE] Progreso: {progress:.1f}% ({sent_bytes / (1024*1024):.2f} MB)")
-        print("[REMOTE] ✓ Artifact enviado completamente")
-
-        # 4) respuesta final (puede tardar varios minutos)
-        print("[REMOTE] Esperando resultado del flasheo (esto puede tardar varios minutos)...")
-        s.settimeout(300)  # 5 minutos para el flasheo
-        resp = recv_msg(s)
-
-        print("\n=== RESULTADO FLASH REMOTO ===")
-        print(json.dumps(resp, indent=2, ensure_ascii=False))
-        if resp.get("ok"):
-            print("[REMOTE] ✓ Flash completado exitosamente")
-        else:
-            hint = resp.get("error_hint", "")
-            write_rc = resp.get("write_rc")
-            print(f"[REMOTE] ✗ Flash falló (write_rc={write_rc}){': ' + hint if hint else ''}")
-        return 0 if resp.get("ok") else 1
-    finally:
-        s.close()
-        print("[REMOTE] Conexión cerrada")
+    return 0 if all(r.get("ok") for r in results.values()) else 1
 
 def unlock_remote(cfg):
     print("\n=== UNLOCK REMOTO ===")
-    lock_user = str(cfg["remote"].get("lock_user","")).strip()
-    lock_token = str(cfg["remote"].get("lock_token","")).strip()
-    if not lock_user or not lock_token:
-        raise SystemExit("[UNLOCK] ✗ Falta 'lock_user' y/o 'lock_token' en .flashcfg.json > remote.")
-    token = str(cfg["remote"].get("token",""))
-    host = cfg["remote"]["host"]
-    port = int(cfg["remote"]["port"])
-    print(f"[UNLOCK] Conectando a {host}:{port} como '{lock_user}'...")
-    s = socket.create_connection((host, port), timeout=30)
-    try:
-        send_msg(s, {"token": token, "action": "unlock", "lock_user": lock_user, "lock_token": lock_token})
-        resp = recv_msg(s)
-        if resp.get("ok"):
-            print(f"[UNLOCK] ✓ {resp.get('message', 'desbloqueado')}")
-        else:
-            print(f"[UNLOCK] ✗ {resp.get('error')}: {resp.get('message','')}")
-        return 0 if resp.get("ok") else 1
-    finally:
-        s.close()
+    remotes = _normalize_remotes(cfg)
+    if not remotes:
+        raise SystemExit("[UNLOCK] ✗ No hay 'remote' en .flashcfg.json")
+
+    results_lock = threading.Lock()
+    results = {}
+
+    def unlock_one(r):
+        name       = _remote_name(r)
+        lock_user  = str(r.get("lock_user",  "")).strip()
+        lock_token = str(r.get("lock_token", "")).strip()
+        if not lock_user or not lock_token:
+            with results_lock:
+                results[name] = {"ok": False, "name": name, "error": "falta lock_user/lock_token"}
+            return
+        token = str(r.get("token", ""))
+        host  = r["host"]
+        port  = int(r["port"])
+        try:
+            s = socket.create_connection((host, port), timeout=30)
+            try:
+                send_msg(s, {"token": token, "action": "unlock",
+                             "lock_user": lock_user, "lock_token": lock_token})
+                resp = recv_msg(s)
+                resp.setdefault("name", name)
+            finally:
+                s.close()
+        except Exception as e:
+            resp = {"ok": False, "name": name, "error": str(e)}
+        with results_lock:
+            results[name] = resp
+
+    threads = [threading.Thread(target=unlock_one, args=(r,)) for r in remotes]
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    _print_summary(results)
+    return 0 if all(r.get("ok") for r in results.values()) else 1
 
 
 def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool):
@@ -644,9 +804,8 @@ def main():
     cfg_path = pathlib.Path(args.cfg)
     print(f"[CONFIG] Cargando configuración desde {cfg_path}")
     if not cfg_path.exists():
-        example = cfg_path.resolve().parent / ".flashcfg.json.example"
-        hint = f" Copiá {example.name} a {cfg_path.name} y editá los valores." if example.exists() else ""
-        raise SystemExit(f"No existe {cfg_path}. Creá .flashcfg.json (gitignored).{hint}")
+        print(f"[CONFIG] No existe {cfg_path} — generando template...")
+        _generate_template(cfg_path)
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     print(f"[CONFIG] ✓ Configuración cargada")
 
