@@ -124,7 +124,11 @@ class DeviceRegistry:
     def _get_last_flash_ts(self, tty_name: str) -> Optional[str]:
         if not self._jobs_dir.exists():
             return None
-        job_dirs = sorted(self._jobs_dir.glob("job_*"), reverse=True)
+        # Job dirs with device suffix: job_YYYYMMDD_HHMMSS_ttyUSBX
+        job_dirs = sorted(self._jobs_dir.glob(f"job_*_{tty_name}"), reverse=True)
+        if not job_dirs:
+            # Fallback: old format without device suffix
+            job_dirs = sorted(self._jobs_dir.glob("job_*"), reverse=True)
         for job_dir in job_dirs:
             ts = self._parse_job_timestamp(job_dir.name)
             if ts is not None:
