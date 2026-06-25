@@ -9,6 +9,9 @@ PORT=$((5000 + NUM))
 
 tmux has-session -t "$SESSION" 2>/dev/null && exit 0
 
+# Liberar lock al iniciar nueva sesión (dispositivo reconectado)
+rm -f "/opt/esp/locks/$BASENAME"
+
 LOG_DIR="/opt/esp/logs/$BASENAME"
 mkdir -p "$LOG_DIR"
 # Rotar log anterior si existe

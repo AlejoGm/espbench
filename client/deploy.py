@@ -492,6 +492,13 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
     job_id = time.strftime("job_%Y%m%d_%H%M%S")
 
     token = str(cfg["remote"].get("token",""))
+    lock_user = str(cfg["remote"].get("lock_user","")).strip()
+    lock_token = str(cfg["remote"].get("lock_token","")).strip()
+    if not lock_user or not lock_token:
+        raise SystemExit(
+            "[REMOTE] ✗ Falta 'lock_user' y/o 'lock_token' en .flashcfg.json > remote.\n"
+            "  Agregá: \"lock_user\": \"alejo\", \"lock_token\": \"token-secreto\""
+        )
     header = {
         "token": token,
         "action": "upload_and_flash",
@@ -502,7 +509,9 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
         "erase": bool(erase),
         "artifact_size": size,
         "artifact_sha256": digest,
-        "artifact_name": artifact.name
+        "artifact_name": artifact.name,
+        "lock_user": lock_user,
+        "lock_token": lock_token,
     }
 
     host = cfg["remote"]["host"]; port = int(cfg["remote"]["port"])
@@ -556,6 +565,29 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
         s.close()
         print("[REMOTE] Conexión cerrada")
 
+def unlock_remote(cfg):
+    print("\n=== UNLOCK REMOTO ===")
+    lock_user = str(cfg["remote"].get("lock_user","")).strip()
+    lock_token = str(cfg["remote"].get("lock_token","")).strip()
+    if not lock_user or not lock_token:
+        raise SystemExit("[UNLOCK] ✗ Falta 'lock_user' y/o 'lock_token' en .flashcfg.json > remote.")
+    token = str(cfg["remote"].get("token",""))
+    host = cfg["remote"]["host"]
+    port = int(cfg["remote"]["port"])
+    print(f"[UNLOCK] Conectando a {host}:{port} como '{lock_user}'...")
+    s = socket.create_connection((host, port), timeout=30)
+    try:
+        send_msg(s, {"token": token, "action": "unlock", "lock_user": lock_user, "lock_token": lock_token})
+        resp = recv_msg(s)
+        if resp.get("ok"):
+            print(f"[UNLOCK] ✓ {resp.get('message', 'desbloqueado')}")
+        else:
+            print(f"[UNLOCK] ✗ {resp.get('error')}: {resp.get('message','')}")
+        return 0 if resp.get("ok") else 1
+    finally:
+        s.close()
+
+
 def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool):
     print("\n=== FLASH LOCAL ===")
     port = cfg["local"]["port"]
@@ -599,6 +631,7 @@ def main():
     print("=== DEPLOY TOOL ===\n")
     ap = argparse.ArgumentParser(description="Build + flash (local o remoto) con config gitignored")
     ap.add_argument("--cfg", default=".flashcfg.json")
+    ap.add_argument("--unlock", action="store_true", help="liberar lock del dispositivo remoto")
     ap.add_argument("--mode", choices=["auto","local","remote"], default=None)
     ap.add_argument("--no-version", action="store_true")
     ap.add_argument("--no-build", action="store_true", help="no hacer build (equivalente a elegir 'solo flash')")
@@ -616,6 +649,9 @@ def main():
         raise SystemExit(f"No existe {cfg_path}. Creá .flashcfg.json (gitignored).{hint}")
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     print(f"[CONFIG] ✓ Configuración cargada")
+
+    if args.unlock:
+        sys.exit(unlock_remote(cfg))
 
     mode = args.mode or cfg.get("mode","auto")
     paths = cfg.get("paths", {})

@@ -280,6 +280,27 @@ body.device-page {
 }
 .badge-down::before { background: #f85149; }
 
+.badge-locked {
+    background: #2a1f00;
+    color: #d29922;
+}
+.badge-locked::before { background: #d29922; }
+
+.card-header-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.dev-badge.badge-locked .dev-badge-label,
+.dev-badge.badge-locked .dev-badge-value {
+    color: #d29922;
+}
+.dev-badge.badge-locked {
+    border-color: #3a2f00;
+}
+
 /* ── Button ── */
 
 .btn-monitor {

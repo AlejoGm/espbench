@@ -38,8 +38,8 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 3. Create directory structure
 # ---------------------------------------------------------------------------
 info "Creando directorios..."
-mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp/toolchain
-chmod 777 /opt/esp/logs
+mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp/toolchain /opt/esp/locks
+chmod 777 /opt/esp/logs /opt/esp/locks
 
 # ---------------------------------------------------------------------------
 # 4. Toolchain xtensa-esp32-elf (addr2line para backtrace decoding)

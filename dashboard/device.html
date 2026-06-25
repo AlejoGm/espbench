@@ -15,6 +15,7 @@
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
+            <button class="action-btn" id="btn-unlock" title="Desbloquear dispositivo" style="display:none">🔓 Unlock</button>
             <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)">↺ Reset</button>
             <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
         </div>
@@ -32,6 +33,7 @@
         var ws = null;
         var reconnectTimer = null;
         var rawContent = '';
+        var currentLockUser = '';
 
         // ── ANSI → HTML ───────────────────────────────────────────────────────
         var ANSI_COLORS = {
@@ -94,10 +96,10 @@
         }
 
         // ── Device info badges ────────────────────────────────────────────────
-        function makeBadge(label, value) {
-            return '<span class="dev-badge"><span class="dev-badge-label">' +
-                   escHtml(label) + '</span><span class="dev-badge-value">' +
-                   escHtml(value) + '</span></span>';
+        function makeBadge(label, value, extraClass) {
+            return '<span class="dev-badge' + (extraClass ? ' ' + extraClass : '') + '">' +
+                   '<span class="dev-badge-label">' + escHtml(label) + '</span>' +
+                   '<span class="dev-badge-value">' + escHtml(value) + '</span></span>';
         }
 
         function loadDeviceInfo() {
@@ -110,11 +112,23 @@
                         if (d.fw_project) badges.push(makeBadge('project', d.fw_project));
                         if (d.fw_version) badges.push(makeBadge('version', 'v' + d.fw_version));
                         if (d.fw_idf)     badges.push(makeBadge('idf',     d.fw_idf));
+                        if (d.lock_user) {
+                            currentLockUser = d.lock_user;
+                            badges.push(makeBadge('🔒', d.lock_user, 'badge-locked'));
+                        } else {
+                            currentLockUser = '';
+                        }
                         if (d.fw_project) {
                             document.title = 'espbench — ' + tty + ' (' + d.fw_project + ')';
                         }
                     }
                     deviceBadges.innerHTML = badges.join('');
+                    var btnUnlock = document.getElementById('btn-unlock');
+                    if (d && d.lock_user) {
+                        btnUnlock.style.display = '';
+                    } else {
+                        btnUnlock.style.display = 'none';
+                    }
                 })
                 .catch(function() {
                     deviceBadges.innerHTML = makeBadge('tty', tty);
@@ -142,6 +156,24 @@
             setInterval(loadDeviceInfo, 10000);
             document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
             document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
+            document.getElementById('btn-unlock').onclick = function() {
+                if (!currentLockUser) { alert('No hay lock activo'); return; }
+                var token = window.prompt('Token para ' + currentLockUser + ':');
+                if (!token) return;
+                var btn = document.getElementById('btn-unlock');
+                btn.disabled = true;
+                fetch('/api/device/' + tty + '/unlock', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({lock_user: currentLockUser, lock_token: token})
+                }).then(function(r) { return r.json(); })
+                  .then(function(d) {
+                      if (d.ok) { loadDeviceInfo(); }
+                      else { alert('Error: ' + (d.detail || d.error || 'token incorrecto')); }
+                  })
+                  .catch(function() { alert('Error de conexión'); })
+                  .finally(function() { btn.disabled = false; });
+            };
         }
 
         function setStatus(state) {

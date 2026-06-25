@@ -94,11 +94,32 @@ attach_one() {
   exec tmux attach-session -t "$sess"
 }
 
+unlock_one() {
+  local dev="/dev/ttyUSB${1}"
+  local name
+  name="$(basename "$dev")"
+  local lock_file="/opt/esp/locks/$name"
+  if [ -f "$lock_file" ]; then
+    local user
+    user="$(cat "$lock_file")"
+    rm -f "$lock_file"
+    echo "Lock liberado (era de: $user) → $name"
+  else
+    echo "No había lock en $name"
+  fi
+}
+
 if [ "${1:-}" = "--reset" ]; then
   reset_all
   exit 0
 elif [ "${1:-}" = "--status" ]; then
   status
+  exit 0
+elif [ "${1:-}" = "--unlock" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Uso: devremote --unlock <número>" >&2; exit 1
+  fi
+  unlock_one "$2"
   exit 0
 elif [ -z "${1:-}" ]; then
   scan_start_missing

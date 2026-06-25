@@ -4,6 +4,8 @@ import subprocess
 import threading
 from typing import Optional
 
+_LOCKS_DIR = pathlib.Path("/opt/esp/locks")
+
 
 @dataclasses.dataclass
 class DeviceInfo:
@@ -16,6 +18,7 @@ class DeviceInfo:
     fw_project: Optional[str]
     fw_version: Optional[str]
     fw_idf: Optional[str]
+    lock_user: Optional[str]
 
 
 class DeviceRegistry:
@@ -59,6 +62,7 @@ class DeviceRegistry:
         with self._lock:
             chip_id = self._chip_ids.get(tty_name)
             fw = self._fw_info.get(tty_name, {})
+        lock_user = self._get_lock_user(tty_name)
         return DeviceInfo(
             tty=tty,
             tty_name=tty_name,
@@ -69,7 +73,19 @@ class DeviceRegistry:
             fw_project=fw.get('fw_project'),
             fw_version=fw.get('fw_version'),
             fw_idf=fw.get('fw_idf'),
+            lock_user=lock_user,
         )
+
+    @staticmethod
+    def _get_lock_user(tty_name: str) -> Optional[str]:
+        try:
+            f = _LOCKS_DIR / tty_name
+            if f.exists():
+                content = f.read_text().strip()
+                return content.split(':', 1)[0] or None
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _parse_tty_number(tty_name: str) -> int:

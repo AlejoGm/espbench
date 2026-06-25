@@ -2,8 +2,9 @@ import asyncio
 import dataclasses
 import pathlib
 import subprocess
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import Body, FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
 
 from server.device_registry import DeviceRegistry
@@ -28,6 +29,26 @@ async def get_device(tty: str):
     if device is None:
         raise HTTPException(status_code=404, detail=f"Device '{tty}' not found")
     return dataclasses.asdict(device)
+
+
+_LOCKS_DIR = pathlib.Path("/opt/esp/locks")
+
+@app.post("/api/device/{tty}/unlock")
+async def device_unlock(tty: str, body: dict = Body(...)):
+    lock_user = body.get("lock_user", "").strip()
+    lock_token = body.get("lock_token", "").strip()
+    if not lock_user or not lock_token:
+        raise HTTPException(status_code=400, detail="lock_user y lock_token requeridos")
+    lock_file = _LOCKS_DIR / tty
+    if not lock_file.exists():
+        return {"ok": True, "message": "no estaba bloqueado"}
+    parts = lock_file.read_text().strip().split(':', 1)
+    stored_user = parts[0]
+    stored_token = parts[1] if len(parts) > 1 else ''
+    if stored_user != lock_user or stored_token != lock_token:
+        raise HTTPException(status_code=403, detail="par user/token incorrecto")
+    lock_file.unlink()
+    return {"ok": True, "message": "desbloqueado"}
 
 
 _COMMANDS = {

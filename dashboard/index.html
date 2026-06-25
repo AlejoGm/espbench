@@ -33,7 +33,10 @@
             card.innerHTML = `
                 <div class="card-header">
                     <span class="card-title">${escapeHtml(title)}</span>
-                    <span class="badge ${statusClass}">${escapeHtml(device.status)}</span>
+                    <div class="card-header-badges">
+                        ${device.lock_user ? `<span class="badge badge-locked">&#128274; ${escapeHtml(device.lock_user)}</span>` : ''}
+                        <span class="badge ${statusClass}">${escapeHtml(device.status)}</span>
+                    </div>
                 </div>
                 <div class="card-body">
                     ${device.fw_project ? `<div class="card-row">

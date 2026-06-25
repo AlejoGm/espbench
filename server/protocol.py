@@ -43,10 +43,63 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
 
     action = header.get("action")
     svc_log.info(f"[control] acción solicitada: {action}\r\n")
-    if action not in ("upload_and_flash", "pull_and_flash"):
+    if action not in ("upload_and_flash", "pull_and_flash", "unlock"):
         svc_log.error(f"[control] acción inválida: {action}")
         send_msg(sock, {"ok": False, "error": "bad_action"})
         return
+
+    # Lock check
+    lock_user = header.get("lock_user", "").strip()
+    lock_token = header.get("lock_token", "").strip()
+    tty_name = os.path.basename(cfg["tty"])
+    locks_dir = pathlib.Path(cfg.get("base", "/opt/esp")) / "locks"
+    lock_file = locks_dir / tty_name
+
+    def _read_lock():
+        parts = lock_file.read_text().strip().split(':', 1)
+        return parts[0], parts[1] if len(parts) > 1 else ''
+
+    if action == "unlock":
+        if not lock_user or not lock_token:
+            send_msg(sock, {"ok": False, "error": "lock_credentials_required"})
+            return
+        if lock_file.exists():
+            stored_user, stored_token = _read_lock()
+            if stored_user != lock_user or stored_token != lock_token:
+                send_msg(sock, {"ok": False, "error": "token_mismatch",
+                                "message": "Par user/token incorrecto"})
+                return
+            lock_file.unlink()
+        send_msg(sock, {"ok": True, "message": "desbloqueado"})
+        return
+
+    if not lock_user or not lock_token:
+        svc_log.warning("[control] lock_user/lock_token ausente, rechazando\r\n")
+        send_msg(sock, {"ok": False, "error": "lock_credentials_required",
+                        "message": "Configurá 'lock_user' y 'lock_token' en .flashcfg.json > remote"})
+        return
+
+    if lock_file.exists():
+        stored_user, stored_token = _read_lock()
+        if stored_user != lock_user:
+            svc_log.warning(f"[control] dispositivo bloqueado por '{stored_user}', rechazando '{lock_user}'\r\n")
+            send_msg(sock, {"ok": False, "error": "device_locked",
+                            "message": f"Dispositivo bloqueado por '{stored_user}'"})
+            return
+        if stored_token != lock_token:
+            svc_log.warning(f"[control] token incorrecto para '{lock_user}'\r\n")
+            send_msg(sock, {"ok": False, "error": "token_mismatch",
+                            "message": "Token incorrecto"})
+            return
+
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text(f"{lock_user}:{lock_token}")
+    try:
+        lock_file.chmod(0o666)
+    except Exception:
+        pass
+    svc_log.info(f"[control] lock adquirido por '{lock_user}'\r\n")
+    nprint(f"[control] lock adquirido por '{lock_user}'")
 
     # 2) preparar job + ACK
     job_id = header.get("job_id") or time.strftime("job_%Y%m%d_%H%M%S")
