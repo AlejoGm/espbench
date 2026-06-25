@@ -1,5 +1,5 @@
 import pytest, pathlib, tempfile, json, sys
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 from server.flash import build_esptool_cmd
 
 FAKE_ESPTOOL = ["python", "-m", "esptool"]

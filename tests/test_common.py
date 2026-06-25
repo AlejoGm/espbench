@@ -1,5 +1,5 @@
 import pytest, pathlib, socket, tempfile, sys
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 from common import sha256_file, send_msg, recv_msg
 
 def test_sha256_file():
