@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SfyBench — Configurar WiFi</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            line-height: 1.6;
+        }
+
+        .card {
+            background: #212121;
+            border: 1px solid #2e2e2e;
+            border-radius: 10px;
+            padding: 28px 24px;
+            width: 100%;
+            max-width: 380px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card-header h1 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #e0e0e0;
+            letter-spacing: 0.02em;
+        }
+
+        .card-header p {
+            font-size: 0.82rem;
+            color: #555;
+            margin-top: 4px;
+        }
+
+        .network-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .network-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border: 1px solid #2e2e2e;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            gap: 8px;
+        }
+
+        .network-item:hover {
+            background: #2a2a2a;
+            border-color: #444;
+        }
+
+        .network-item.selected {
+            border-color: #4a9eff;
+            background: #0d1f33;
+        }
+
+        .network-name {
+            font-family: ui-monospace, Menlo, Consolas, monospace;
+            font-size: 0.85rem;
+            color: #c8c8c8;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .network-signal {
+            font-size: 0.72rem;
+            color: #444;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .signal-high  { color: #3fb950; }
+        .signal-mid   { color: #d29922; }
+        .signal-low   { color: #f85149; }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label {
+            font-size: 0.8rem;
+            color: #555;
+        }
+
+        input[type="password"], input[type="text"] {
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            padding: 8px 12px;
+            border-radius: 6px;
+            width: 100%;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        input:focus {
+            border-color: #555;
+        }
+
+        .btn-connect {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 9px 14px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .btn-connect:hover:not(:disabled) {
+            background: #30363d;
+            border-color: #8b949e;
+            color: #e0e0e0;
+        }
+
+        .btn-connect:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+
+        .status {
+            font-size: 0.8rem;
+            text-align: center;
+            padding: 8px;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .status.error {
+            display: block;
+            background: #2a0f0f;
+            color: #f85149;
+            border: 1px solid #3a1a1a;
+        }
+
+        .status.success {
+            display: block;
+            background: #0f2a0f;
+            color: #3fb950;
+            border: 1px solid #1a3a1a;
+        }
+
+        .status.connecting {
+            display: block;
+            background: #2a1f00;
+            color: #d29922;
+            border: 1px solid #3a2f00;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #444;
+            padding: 16px 0;
+            font-size: 0.85rem;
+        }
+
+        .hidden { display: none; }
+
+        .passphrase-wrap {
+            position: relative;
+        }
+
+        .show-pass {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #555;
+            cursor: pointer;
+            font-size: 0.75rem;
+            padding: 2px 4px;
+            transition: color 0.15s;
+        }
+
+        .show-pass:hover { color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="card-header">
+            <h1>SfyBench</h1>
+            <p>Seleccioná la red WiFi a conectar.</p>
+        </div>
+
+        <div class="network-list" id="network-list">
+            <div class="empty-state">Buscando redes…</div>
+        </div>
+
+        <div class="form-group hidden" id="passphrase-group">
+            <label for="passphrase">Contraseña</label>
+            <div class="passphrase-wrap">
+                <input type="password" id="passphrase" placeholder="••••••••" autocomplete="off" />
+                <button class="show-pass" id="show-pass" type="button">mostrar</button>
+            </div>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <button class="btn-connect" id="btn-connect" disabled>Conectar</button>
+    </div>
+
+    <script>
+        var selected = null;
+
+        function signalClass(strength) {
+            if (strength >= 70) return 'signal-high';
+            if (strength >= 40) return 'signal-mid';
+            return 'signal-low';
+        }
+
+        function signalBars(strength) {
+            if (strength >= 70) return '▂▄█';
+            if (strength >= 40) return '▂▄░';
+            return '▂░░';
+        }
+
+        function fetchNetworks() {
+            fetch('/networks')
+                .then(function(r) { return r.json(); })
+                .then(function(networks) {
+                    var list = document.getElementById('network-list');
+                    if (!networks || networks.length === 0) {
+                        list.innerHTML = '<div class="empty-state">No se encontraron redes.</div>';
+                        return;
+                    }
+                    list.innerHTML = '';
+                    networks.forEach(function(net) {
+                        var item = document.createElement('div');
+                        item.className = 'network-item';
+                        item.dataset.ssid = net.ssid;
+
+                        var sc = signalClass(net.strength);
+                        item.innerHTML =
+                            '<span class="network-name">' + escapeHtml(net.ssid) + '</span>' +
+                            '<span class="network-signal ' + sc + '">' + signalBars(net.strength) + '</span>';
+
+                        item.addEventListener('click', function() {
+                            document.querySelectorAll('.network-item').forEach(function(el) {
+                                el.classList.remove('selected');
+                            });
+                            item.classList.add('selected');
+                            selected = net.ssid;
+                            document.getElementById('passphrase-group').classList.remove('hidden');
+                            document.getElementById('passphrase').focus();
+                            document.getElementById('btn-connect').disabled = false;
+                            setStatus('', '');
+                        });
+
+                        list.appendChild(item);
+                    });
+                })
+                .catch(function() {
+                    document.getElementById('network-list').innerHTML =
+                        '<div class="empty-state">Error al obtener redes.</div>';
+                });
+        }
+
+        document.getElementById('show-pass').addEventListener('click', function() {
+            var inp = document.getElementById('passphrase');
+            var showing = inp.type === 'text';
+            inp.type = showing ? 'password' : 'text';
+            this.textContent = showing ? 'mostrar' : 'ocultar';
+        });
+
+        document.getElementById('passphrase').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('btn-connect').click();
+        });
+
+        function setStatus(type, msg) {
+            var el = document.getElementById('status');
+            el.className = 'status' + (type ? ' ' + type : '');
+            el.textContent = msg;
+            if (!type) el.style.display = 'none';
+        }
+
+        document.getElementById('btn-connect').addEventListener('click', function() {
+            if (!selected) return;
+            var pass = document.getElementById('passphrase').value;
+            var btn = this;
+            btn.disabled = true;
+            setStatus('connecting', 'Conectando a "' + selected + '"…');
+
+            fetch('/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ssid: selected, passphrase: pass })
+            })
+            .then(function(r) {
+                if (r.ok) {
+                    setStatus('success', 'Conectado. El dispositivo va a reiniciar la conexión.');
+                } else {
+                    setStatus('error', 'No se pudo conectar. Verificá la contraseña.');
+                    btn.disabled = false;
+                }
+            })
+            .catch(function() {
+                setStatus('error', 'Error de red.');
+                btn.disabled = false;
+            });
+        });
+
+        function escapeHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        fetchNetworks();
+    </script>
+</body>
+</html>

@@ -19,8 +19,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 # WiFi provisioning: SSID y contraseña del AP de configuración
-AP_SSID="espbench-config"
-AP_PASS="sensify2024"
+AP_SSID="SfyBench"
+AP_PASS="1234567890"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,13 +111,17 @@ ok "NetworkManager activo"
 info "Instalando wifi-connect..."
 
 if ! command -v wifi-connect &>/dev/null; then
-    WC_URL=$(curl -fsSL https://api.github.com/repos/balena-os/wifi-connect/releases/latest \
-        | grep "browser_download_url.*aarch64" \
-        | cut -d '"' -f 4)
-    [[ -z "$WC_URL" ]] && die "No se pudo obtener URL de wifi-connect desde GitHub API"
-    info "Descargando: $WC_URL"
-    curl -fsSL "$WC_URL" | tar xz -C /usr/local/bin/
-    chmod +x /usr/local/bin/wifi-connect
+    WC_RELEASE=$(curl -fsSL https://api.github.com/repos/balena-os/wifi-connect/releases/latest)
+    WC_BIN_URL=$(echo "$WC_RELEASE" | grep "browser_download_url.*aarch64-unknown" | cut -d '"' -f 4)
+    WC_UI_URL=$(echo "$WC_RELEASE"  | grep "browser_download_url.*wifi-connect-ui" | cut -d '"' -f 4)
+    [[ -z "$WC_BIN_URL" ]] && die "No se pudo obtener URL de wifi-connect desde GitHub API"
+    info "Descargando wifi-connect binary..."
+    mkdir -p /opt/wifi-connect
+    curl -fsSL "$WC_BIN_URL" | tar xz -C /opt/wifi-connect/
+    info "Descargando wifi-connect UI..."
+    curl -fsSL "$WC_UI_URL" | tar xz -C /opt/wifi-connect/
+    chmod +x /opt/wifi-connect/wifi-connect
+    ln -sf /opt/wifi-connect/wifi-connect /usr/local/bin/wifi-connect
 fi
 ok "wifi-connect instalado: $(wifi-connect --version 2>/dev/null || echo 'ok')"
 
@@ -131,7 +135,8 @@ fi
 
 exec wifi-connect \
     --portal-ssid "${AP_SSID}" \
-    --portal-passphrase "${AP_PASS}"
+    --portal-passphrase "${AP_PASS}" \
+    --ui-directory /opt/wifi-connect
 EOSCRIPT
 chmod +x /usr/local/bin/wifi-provision.sh
 
@@ -153,6 +158,17 @@ EOF
 
 systemctl daemon-reload
 systemctl enable wifi-provision.service
+
+# Portal UI custom (sobreescribe el UI de Balena)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/portal/index.html" ]]; then
+    info "Instalando portal UI custom..."
+    cp "$SCRIPT_DIR/portal/index.html" /opt/wifi-connect/index.html
+    ok "Portal custom instalado"
+else
+    warn "portal/index.html no encontrado — usando UI de Balena por defecto"
+fi
+
 ok "WiFi provisioning habilitado (AP: '$AP_SSID')"
 
 # ---------------------------------------------------------------------------
