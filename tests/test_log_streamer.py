@@ -115,8 +115,8 @@ def test_subscribe_no_file_sends_nothing(tmp_path):
     assert ws.sent == []
 
 
-def test_chipid_parsed_and_set(tmp_path):
-    """CHIPID en el log inicial llama a registry.set_chip_id con el valor correcto."""
+def test_chipid_not_parsed_from_historical_log(tmp_path):
+    """CHIPID en log histórico NO dispara set_chip_id — evita hw_model falso de logs viejos."""
     log_path = make_log_path(tmp_path)
     log_path.write_text("I (123) boot: starting\nCHIPID = 99887766\nI (124) app: ready\n")
 
@@ -126,7 +126,7 @@ def test_chipid_parsed_and_set(tmp_path):
 
     asyncio.run(subscribe_and_cancel(streamer, "ttyUSB0", ws, cancel_after=0.05))
 
-    assert ("ttyUSB0", "99887766") in registry.calls
+    assert registry.calls == []
 
 
 def test_new_lines_streamed(tmp_path):
