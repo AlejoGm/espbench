@@ -497,9 +497,9 @@ _TEMPLATE_CFG = {
     },
     "remote": [
         {
-            "name": "usb0",
-            "host": "192.168.x.x",
-            "port": 9300,
+            "name": "mi-board",
+            "host": "sensipi01",
+            "device_key": "SN-o-nombre-del-device",
             "token": "",
             "lock_user": "tu-nombre",
             "lock_token": "token-secreto"
