@@ -53,3 +53,7 @@ sudo ./remote/install.sh
 ## Versioning
 
 `VERSION` at repo root. Current: `0.4.4`.
+
+## Git
+
+Never add `Co-Authored-By: Claude` to commit messages in this repo.
