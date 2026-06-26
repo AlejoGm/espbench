@@ -283,7 +283,7 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     setStatus('success', 'Conectado. El dispositivo va a reiniciar la conexión.');
                 } else {
-                    setStatus('error', 'No se pudo conectar. Verificá la contraseña.');
+                    setStatus('error', 'Error ' + xhr.status + ': ' + (xhr.responseText || 'sin detalle'));
                 }
             };
             xhr.onerror = function() {
