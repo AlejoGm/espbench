@@ -499,7 +499,6 @@ _TEMPLATE_CFG = {
         {
             "name": "mi-board",
             "host": "sensipi01",
-            "device_key": "SN-o-nombre-del-device",
             "token": "",
             "lock_user": "tu-nombre",
             "lock_token": "token-secreto"
@@ -533,7 +532,7 @@ def _resolve_device_port(r: dict) -> tuple:
     """Return (port_int, device_info_dict_or_None). Uses dashboard API if device_key present."""
     if "port" in r:
         return int(r["port"]), None
-    device_key = r.get("device_key")
+    device_key = r.get("device_key") or r.get("name")
     if not device_key:
         raise ValueError(f"Remote sin 'port' ni 'device_key'")
     host = r["host"]
