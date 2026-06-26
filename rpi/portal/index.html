@@ -83,6 +83,11 @@
             white-space: nowrap;
         }
 
+        .network-lock {
+            font-size: 0.7rem;
+            flex-shrink: 0;
+        }
+
         .form-group {
             display: flex;
             flex-direction: column;
@@ -231,18 +236,28 @@
                         return;
                     }
                     list.innerHTML = '';
-                    networks.forEach(function(ssid) {
+                    networks.forEach(function(net) {
+                        var ssid = net.ssid;
+                        var secured = net.security !== 'none';
                         var item = document.createElement('div');
                         item.className = 'network-item';
-                        item.innerHTML = '<span class="network-name">' + escapeHtml(ssid) + '</span>';
+                        item.innerHTML =
+                            '<span class="network-name">' + escapeHtml(ssid) + '</span>' +
+                            (secured ? '<span class="network-lock">🔒</span>' : '');
                         item.addEventListener('click', function() {
                             document.querySelectorAll('.network-item').forEach(function(el) {
                                 el.classList.remove('selected');
                             });
                             item.classList.add('selected');
                             selected = ssid;
-                            document.getElementById('passphrase-group').classList.remove('hidden');
-                            document.getElementById('passphrase').focus();
+                            var pg = document.getElementById('passphrase-group');
+                            if (secured) {
+                                pg.classList.remove('hidden');
+                                document.getElementById('passphrase').focus();
+                            } else {
+                                pg.classList.add('hidden');
+                                document.getElementById('passphrase').value = '';
+                            }
                             document.getElementById('btn-connect').disabled = false;
                             setStatus('', '');
                         });
