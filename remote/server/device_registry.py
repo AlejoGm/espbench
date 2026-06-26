@@ -58,9 +58,11 @@ class DevicesFile:
 
     def update_device_key(self, mac: str, device_key: str):
         def _do(data):
-            entry = data.get(mac.upper())
-            if entry is not None:
-                entry["device_key"] = device_key
+            mac_up = mac.upper()
+            if mac_up not in data:
+                data[mac_up] = {"device_key": device_key, "hw_model": None}
+            else:
+                data[mac_up]["device_key"] = device_key
         self._update(_do)
 
     def get_all(self) -> dict:

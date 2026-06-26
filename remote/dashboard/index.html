@@ -36,6 +36,7 @@
             var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
             var lastFlash = formatTimestamp(device.last_flash_ts);
             var title = device.device_key || device.tty_name;
+            var tty = escapeHtml(device.tty_name);
 
             var card = document.createElement('div');
             card.className = 'device-card' + (device.lock_user ? ' locked' : '') + (isUnknown ? ' card-unknown' : '');
@@ -57,18 +58,24 @@
                 : '';
             var ttyRow = '<div class="card-row"><span class="card-label">TTY:</span><span class="card-value">' + escapeHtml(device.tty_name) + '</span></div>';
 
+            var renameHtml = device.mac
+                ? '<button class="rename-btn" id="rename-btn-' + tty + '" title="Renombrar">✎</button>' +
+                  '<input class="rename-input hidden" id="rename-input-' + tty + '" value="' + escapeHtml(title) + '" />' +
+                  '<button class="rename-ok hidden" id="rename-ok-' + tty + '" title="Confirmar">✓</button>' +
+                  '<button class="rename-cancel hidden" id="rename-cancel-' + tty + '" title="Cancelar">✗</button>'
+                : '';
+
             card.innerHTML =
                 '<div class="card-header">' +
                     '<div class="card-title-wrap">' +
-                        '<span class="card-title" id="key-label-' + escapeHtml(device.tty_name) + '">' + escapeHtml(title) + '</span>' +
-                        (device.mac ? '<button class="rename-btn" title="Renombrar" onclick="startRename(\'' + escapeHtml(device.tty_name) + '\',\'' + escapeHtml(device.mac) + '\',\'' + escapeHtml(title) + '\')">✎</button>' : '') +
+                        '<span class="card-title" id="key-label-' + tty + '">' + escapeHtml(title) + '</span>' +
+                        renameHtml +
                     '</div>' +
                     '<div class="card-header-badges">' +
                         (device.lock_user ? '<span class="badge badge-locked">&#128274; ' + escapeHtml(device.lock_user) + '</span>' : '') +
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
                 '</div>' +
-                '<div id="rename-form-' + escapeHtml(device.tty_name) + '" class="rename-form hidden"></div>' +
                 '<div class="card-body">' +
                     hwModelRow + versionRow + idfRow + deployerRow + snRow + ttyRow +
                     '<div class="card-row"><span class="card-label">Último flash:</span><span class="card-value">' + escapeHtml(lastFlash) + '</span></div>' +
@@ -77,24 +84,60 @@
                 '<div class="card-footer">' +
                     '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
                 '</div>';
+
+            if (device.mac) {
+                var ttyName = device.tty_name;
+                var mac = device.mac;
+                card.querySelector('.rename-btn').addEventListener('click', function() {
+                    startRename(ttyName, mac, title);
+                });
+                card.querySelector('.rename-ok').addEventListener('click', function() {
+                    submitRename(ttyName, mac);
+                });
+                card.querySelector('.rename-cancel').addEventListener('click', function() {
+                    cancelRename(ttyName);
+                });
+            }
+
             return card;
         }
 
         function startRename(ttyName, mac, currentKey) {
-            var form = document.getElementById('rename-form-' + ttyName);
-            if (!form) return;
-            form.className = 'rename-form';
-            form.innerHTML =
-                '<input class="rename-input" id="rename-input-' + escapeHtml(ttyName) + '" value="' + escapeHtml(currentKey) + '" />' +
-                '<button class="rename-ok" onclick="submitRename(\'' + escapeHtml(ttyName) + '\',\'' + escapeHtml(mac) + '\')">✓</button>' +
-                '<button class="rename-cancel" onclick="cancelRename(\'' + escapeHtml(ttyName) + '\')">✗</button>';
-            var inp = document.getElementById('rename-input-' + ttyName);
-            if (inp) { inp.focus(); inp.select(); }
+            var label  = document.getElementById('key-label-'    + ttyName);
+            var btn    = document.getElementById('rename-btn-'   + ttyName);
+            var inp    = document.getElementById('rename-input-' + ttyName);
+            var ok     = document.getElementById('rename-ok-'    + ttyName);
+            var cancel = document.getElementById('rename-cancel-' + ttyName);
+            if (!inp) return;
+
+            label.classList.add('hidden');
+            btn.classList.add('hidden');
+            inp.classList.remove('hidden');
+            ok.classList.remove('hidden');
+            cancel.classList.remove('hidden');
+
+            inp.value = currentKey;
+            inp.focus();
+            inp.select();
+            inp.onkeydown = function(e) {
+                if (e.key === 'Enter')  submitRename(ttyName, mac);
+                if (e.key === 'Escape') cancelRename(ttyName);
+            };
         }
 
         function cancelRename(ttyName) {
-            var form = document.getElementById('rename-form-' + ttyName);
-            if (form) form.className = 'rename-form hidden';
+            var label  = document.getElementById('key-label-'     + ttyName);
+            var btn    = document.getElementById('rename-btn-'    + ttyName);
+            var inp    = document.getElementById('rename-input-'  + ttyName);
+            var ok     = document.getElementById('rename-ok-'     + ttyName);
+            var cancel = document.getElementById('rename-cancel-' + ttyName);
+            if (!inp) return;
+
+            inp.classList.add('hidden');
+            ok.classList.add('hidden');
+            cancel.classList.add('hidden');
+            label.classList.remove('hidden');
+            btn.classList.remove('hidden');
         }
 
         function submitRename(ttyName, mac) {
@@ -102,6 +145,7 @@
             if (!inp) return;
             var newKey = inp.value.trim();
             if (!newKey) return;
+
             fetch('/api/devices/' + encodeURIComponent(mac), {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
@@ -109,9 +153,7 @@
             }).then(function(r) { return r.json(); })
               .then(function(d) {
                   if (d.ok) {
-                      var label = document.getElementById('key-label-' + ttyName);
-                      if (label) label.textContent = newKey;
-                      cancelRename(ttyName);
+                      fetchDevices();
                   } else {
                       alert('Error al renombrar');
                   }
@@ -120,8 +162,8 @@
         }
 
         function renderDevices(devices) {
-            var known   = document.getElementById('cards-known');
-            var unknown = document.getElementById('cards-unknown');
+            var known       = document.getElementById('cards-known');
+            var unknown     = document.getElementById('cards-unknown');
             var unknownWrap = document.getElementById('cards-unknown-wrap');
             var emptyState  = document.getElementById('empty-state');
 
