@@ -126,7 +126,8 @@ cat > /usr/local/bin/wifi-provision.sh << EOSCRIPT
 #!/bin/bash
 sleep 15
 
-if ping -c 2 -W 5 8.8.8.8 &>/dev/null; then
+# Verificar si wlan0 tiene conectividad (ignorar ethernet)
+if ping -c 2 -W 5 -I wlan0 8.8.8.8 &>/dev/null; then
     exit 0
 fi
 
