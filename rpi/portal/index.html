@@ -277,7 +277,7 @@
             setStatus('connecting', 'Conectando a "' + selected + '"…');
 
             var xhr = new XMLHttpRequest();
-            xhr.open('POST', 'http://192.168.42.1/connect');
+            xhr.open('POST', '/connect');
             xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.onload = function() {
                 if (xhr.status >= 200 && xhr.status < 300) {
@@ -294,7 +294,7 @@
 
         function fetchNetworks() {
             var xhr = new XMLHttpRequest();
-            xhr.open('GET', 'http://192.168.42.1/networks');
+            xhr.open('GET', '/networks');
             xhr.onload = function() {
                 var list = document.getElementById('network-list');
                 try {

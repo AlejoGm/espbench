@@ -106,37 +106,33 @@ systemctl start NetworkManager
 ok "NetworkManager activo"
 
 # ---------------------------------------------------------------------------
-# 5. WiFi provisioning — wifi-connect (Balena)
+# 5. WiFi provisioning — provision.py (Python propio, sin wifi-connect)
 # ---------------------------------------------------------------------------
-info "Instalando wifi-connect..."
+info "Instalando WiFi provisioning..."
 
-if ! command -v wifi-connect &>/dev/null; then
-    WC_RELEASE=$(curl -fsSL https://api.github.com/repos/balena-os/wifi-connect/releases/latest)
-    WC_BIN_URL=$(echo "$WC_RELEASE" | grep "browser_download_url.*aarch64-unknown" | cut -d '"' -f 4)
-    WC_UI_URL=$(echo "$WC_RELEASE"  | grep "browser_download_url.*wifi-connect-ui" | cut -d '"' -f 4)
-    [[ -z "$WC_BIN_URL" ]] && die "No se pudo obtener URL de wifi-connect desde GitHub API"
-    info "Descargando wifi-connect binary..."
-    mkdir -p /opt/wifi-connect
-    curl -fsSL "$WC_BIN_URL" | tar xz -C /opt/wifi-connect/
-    info "Descargando wifi-connect UI..."
-    curl -fsSL "$WC_UI_URL" | tar xz -C /opt/wifi-connect/
-    chmod +x /opt/wifi-connect/wifi-connect
-    ln -sf /opt/wifi-connect/wifi-connect /usr/local/bin/wifi-connect
-fi
-ok "wifi-connect instalado: $(wifi-connect --version 2>/dev/null || echo 'ok')"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+[[ -f "$SCRIPT_DIR/provision.py" ]]    || die "provision.py no encontrado en $SCRIPT_DIR"
+[[ -f "$SCRIPT_DIR/portal/index.html" ]] || die "portal/index.html no encontrado en $SCRIPT_DIR"
+
+mkdir -p /opt/esp/provision
+cp "$SCRIPT_DIR/provision.py"        /opt/esp/provision/provision.py
+cp "$SCRIPT_DIR/portal/index.html"   /opt/esp/provision/index.html
+# portal/ dir necesario para que provision.py encuentre el HTML
+mkdir -p /opt/esp/provision/portal
+cp "$SCRIPT_DIR/portal/index.html"   /opt/esp/provision/portal/index.html
 
 cat > /usr/local/bin/wifi-provision.sh << EOSCRIPT
 #!/bin/bash
-sleep 20
+sleep 15
 
 if ping -c 2 -W 5 8.8.8.8 &>/dev/null; then
     exit 0
 fi
 
-exec wifi-connect \
-    --portal-ssid "${AP_SSID}" \
-    --portal-passphrase "${AP_PASS}" \
-    --ui-directory /opt/wifi-connect
+exec python3 /opt/esp/provision/provision.py \
+    --ssid "${AP_SSID}" \
+    --pass "${AP_PASS}"
 EOSCRIPT
 chmod +x /usr/local/bin/wifi-provision.sh
 
@@ -158,17 +154,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable wifi-provision.service
-
-# Portal UI custom (sobreescribe el UI de Balena)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/portal/index.html" ]]; then
-    info "Instalando portal UI custom..."
-    cp "$SCRIPT_DIR/portal/index.html" /opt/wifi-connect/index.html
-    ok "Portal custom instalado"
-else
-    warn "portal/index.html no encontrado — usando UI de Balena por defecto"
-fi
-
 ok "WiFi provisioning habilitado (AP: '$AP_SSID')"
 
 # ---------------------------------------------------------------------------
