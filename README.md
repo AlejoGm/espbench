@@ -27,19 +27,92 @@ One tmux session per device (`esp32_ttyUSBN`). TCP port = `5000 + N`. udev auto-
 
 ---
 
-## Quick Start
+## Fresh Pi Setup
 
-### Server (Raspberry Pi)
+Complete steps for a new Raspberry Pi.
+
+### 1. Flash OS
+
+Raspberry Pi OS Lite 64-bit (Bookworm). Enable SSH and set hostname via Raspberry Pi Imager advanced settings.
+
+### 2. First SSH — install base packages
 
 ```bash
-# Full setup on fresh Pi
-sudo bash rpi/pi-setup.sh
+sudo apt update && sudo apt install -y git tmux python3 python3-pip python3-venv
+```
 
-# Or just deploy server files
+### 3. Create service user
+
+The dashboard runs as `sfypi`. Create it once:
+
+```bash
+sudo useradd -m -s /bin/bash sfypi
+sudo usermod -aG dialout sfypi   # serial port access
+```
+
+### 4. Clone repo
+
+```bash
+git clone https://github.com/AlejoGm/espbench.git
+cd espbench
+```
+
+### 5. System hardening (optional but recommended)
+
+Disables desktop, serial TTL, HID, installs WiFi provisioning AP fallback and Tailscale:
+
+```bash
+sudo bash rpi/pi-setup.sh
+```
+
+After it finishes, authenticate Tailscale (one time):
+
+```bash
+sudo tailscale up    # open the printed URL in a browser
+```
+
+Then reboot to apply all changes:
+
+```bash
+sudo reboot
+```
+
+### 6. Install server
+
+```bash
 sudo bash remote/install.sh
 ```
 
-Services start automatically via udev + systemd on USB plug-in.
+Installs server files to `/opt/esp/`, creates Python venv, registers udev rules and systemd services.
+
+### 7. Start services
+
+```bash
+sudo systemctl start devremote dashboard
+```
+
+`devremote` manages tmux sessions per device. `dashboard` exposes the web UI on port 8080.
+Plug in an ESP32 via USB — udev auto-creates a session for it.
+
+### 8. Verify
+
+```bash
+devremote --status
+```
+
+Dashboard: `http://<pi-hostname>:8080`
+
+---
+
+## Update (existing Pi)
+
+```bash
+sudo git pull && sudo bash remote/install.sh && sudo systemctl restart dashboard devremote
+```
+
+---
+
+## Quick Start
 
 ### Client (Dev machine)
 
@@ -47,19 +120,21 @@ Services start automatically via udev + systemd on USB plug-in.
 cd client && ./install.sh
 ```
 
-Create `.flashcfg.json` in your ESP-IDF project root:
+Create `.flashcfg.json` in your ESP-IDF project root. The easiest way: open the dashboard, click **⎘ Config** on a device card, and paste the copied snippet into your config file, then add the missing fields:
 
 ```json
 {
-  "mode": "remote",
+  "mode": "auto",
   "paths": { "project_root": ".", "idf_py": "idf.py" },
-  "remote": {
-    "host": "192.168.1.x",
-    "port": 5000,
-    "token": "your_token",
-    "lock_user": "yourname",
-    "lock_token": "your_lock_token"
-  },
+  "remote": [
+    {
+      "name": "mi-board",
+      "host": "sensipi03",
+      "token": "",
+      "lock_user": "yourname",
+      "lock_token": "your_lock_token"
+    }
+  ],
   "chip": "esp32",
   "flash_baud": 921600
 }
