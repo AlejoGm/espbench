@@ -57,3 +57,5 @@ sudo ./remote/install.sh
 ## Git
 
 Never add `Co-Authored-By: Claude` to commit messages in this repo.
+
+On every commit, bump the version in `VERSION` (semver: patch for fixes, minor for features, major for breaking changes). Update the version reference in `README.md` to match.
