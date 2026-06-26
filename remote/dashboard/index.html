@@ -210,7 +210,7 @@
 
             var hasUnknown = false;
             devices.forEach(function(device) {
-                if (device.hw_model) {
+                if (device.mac) {
                     known.appendChild(buildCard(device));
                 } else {
                     unknown.appendChild(buildUnknownCard(device));
