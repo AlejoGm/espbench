@@ -262,6 +262,32 @@ body.device-page {
 
 .card-footer {
     margin-top: 4px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.btn-copy {
+    background: none;
+    border: 1px solid #2e2e2e;
+    color: #555;
+    font-size: 0.82rem;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.btn-copy:hover {
+    background: #2a2a2a;
+    color: #aaa;
+    border-color: #444;
+}
+
+.btn-copy-done {
+    color: #3fb950 !important;
+    border-color: #3fb950 !important;
 }
 
 /* ── Status badges ── */

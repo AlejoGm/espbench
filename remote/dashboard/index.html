@@ -85,7 +85,12 @@
                 '</div>' +
                 '<div class="card-footer">' +
                     '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
+                    '<button class="btn-copy" id="copy-btn-' + tty + '">⎘ Config</button>' +
                 '</div>';
+
+            card.querySelector('.btn-copy').addEventListener('click', function() {
+                copyConfig(device);
+            });
 
             if (device.mac) {
                 var ttyName = device.tty_name;
@@ -164,6 +169,47 @@
                   }
               })
               .catch(function() { _renamingTty = null; alert('Error de conexión'); });
+        }
+
+        function copyConfig(device) {
+            var snippet = {
+                name: device.device_key || device.tty_name,
+                host: window.location.hostname,
+                device_key: device.device_key || device.tty_name,
+                token: "",
+                lock_user: "",
+                lock_token: ""
+            };
+            var text = JSON.stringify(snippet, null, 2);
+            var btn = document.getElementById('copy-btn-' + device.tty_name);
+            function feedback() {
+                if (!btn) return;
+                var orig = btn.textContent;
+                btn.textContent = '✓ Copiado';
+                btn.classList.add('btn-copy-done');
+                setTimeout(function() {
+                    btn.textContent = orig;
+                    btn.classList.remove('btn-copy-done');
+                }, 1800);
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(feedback).catch(function() {
+                    fallbackCopy(text); feedback();
+                });
+            } else {
+                fallbackCopy(text); feedback();
+            }
+        }
+
+        function fallbackCopy(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus(); ta.select();
+            try { document.execCommand('copy'); } catch(e) {}
+            document.body.removeChild(ta);
         }
 
         function buildUnknownCard(device) {
