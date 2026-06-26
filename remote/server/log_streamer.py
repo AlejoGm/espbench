@@ -159,16 +159,17 @@ class LogStreamer:
     def _check_chipid(self, tty_name: str, text: str) -> None:
         if self._registry is None:
             return
-        m = CHIPID_RE.search(text)
+        clean = _strip_ansi(text)
+        m = CHIPID_RE.search(clean)
         if m:
             self._registry.set_chip_id(tty_name, m.group(1))
-        m_proj = FW_PROJECT_RE.search(text)
-        m_ver  = FW_VERSION_RE.search(text)
-        m_idf  = FW_IDF_RE.search(text)
+        m_proj = FW_PROJECT_RE.search(clean)
+        m_ver  = FW_VERSION_RE.search(clean)
+        m_idf  = FW_IDF_RE.search(clean)
         if m_proj or m_ver or m_idf:
             self._registry.set_firmware_info(
                 tty_name,
-                project=_strip_ansi(m_proj.group(1)) if m_proj else None,
-                version=_strip_ansi(m_ver.group(1))  if m_ver  else None,
-                idf=_strip_ansi(m_idf.group(1))      if m_idf  else None,
+                project=m_proj.group(1) if m_proj else None,
+                version=m_ver.group(1)  if m_ver  else None,
+                idf=m_idf.group(1)      if m_idf  else None,
             )
