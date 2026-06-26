@@ -19,6 +19,11 @@ registry = DeviceRegistry()
 streamer = LogStreamer(registry=registry)
 
 
+@app.on_event("startup")
+async def _startup():
+    streamer.scan_all()
+
+
 @app.get("/api/version")
 async def get_version():
     try:

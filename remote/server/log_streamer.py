@@ -64,9 +64,9 @@ class LogStreamer:
             with open(log_path, "r", errors="replace", newline='') as f:
                 content = f.read()
             if content:
+                self._check_chipid(tty_name, content)
                 try:
                     await websocket.send_text(content)
-                    self._check_chipid(tty_name, content)
                 except Exception:
                     pass
 
@@ -155,6 +155,16 @@ class LogStreamer:
             async with lock:
                 existing = self._subscribers.get(tty_name, set())
                 existing -= dead
+
+    def scan_all(self, dev_dir: str = "/dev") -> None:
+        """Parse fw info from existing output.log for every ttyUSBX. Call at startup."""
+        for entry in sorted(pathlib.Path(dev_dir).glob("ttyUSB*")):
+            log_path = self._log_path(entry.name)
+            if log_path.exists():
+                try:
+                    self._check_chipid(entry.name, log_path.read_text(errors="replace"))
+                except Exception:
+                    pass
 
     def _check_chipid(self, tty_name: str, text: str) -> None:
         if self._registry is None:
