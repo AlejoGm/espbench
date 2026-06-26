@@ -218,11 +218,79 @@
 
         <div class="status" id="status"></div>
 
-        <button class="btn-connect" id="btn-connect" disabled>Conectar</button>
+        <button class="btn-connect" id="btn-connect">Conectar</button>
     </div>
 
     <script>
         var selected = null;
+        var networksData = {};
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function setStatus(type, msg) {
+            var el = document.getElementById('status');
+            el.className = 'status' + (type ? ' ' + type : '');
+            el.textContent = msg;
+            el.style.display = type ? 'block' : 'none';
+        }
+
+        function selectNetwork(ssid) {
+            selected = ssid;
+            var secured = networksData[ssid];
+            document.querySelectorAll('.network-item').forEach(function(el) {
+                el.classList.toggle('selected', el.dataset.ssid === ssid);
+            });
+            var pg = document.getElementById('passphrase-group');
+            if (secured) {
+                pg.classList.remove('hidden');
+            } else {
+                pg.classList.add('hidden');
+                document.getElementById('passphrase').value = '';
+            }
+            setStatus('', '');
+        }
+
+        document.getElementById('network-list').onclick = function(e) {
+            var item = e.target.closest('.network-item');
+            if (!item) return;
+            selectNetwork(item.dataset.ssid);
+        };
+
+        document.getElementById('show-pass').onclick = function() {
+            var inp = document.getElementById('passphrase');
+            var showing = inp.type === 'text';
+            inp.type = showing ? 'password' : 'text';
+            this.textContent = showing ? 'mostrar' : 'ocultar';
+        };
+
+        document.getElementById('passphrase').onkeydown = function(e) {
+            if (e.key === 'Enter') doConnect();
+        };
+
+        document.getElementById('btn-connect').onclick = doConnect;
+
+        function doConnect() {
+            if (!selected) { setStatus('error', 'Seleccioná una red primero.'); return; }
+            var pass = document.getElementById('passphrase').value;
+            setStatus('connecting', 'Conectando a "' + selected + '"…');
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', 'http://192.168.42.1/connect');
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    setStatus('success', 'Conectado. El dispositivo va a reiniciar la conexión.');
+                } else {
+                    setStatus('error', 'No se pudo conectar. Verificá la contraseña.');
+                }
+            };
+            xhr.onerror = function() {
+                setStatus('success', 'Solicitud enviada. El dispositivo se está conectando.');
+            };
+            xhr.send(JSON.stringify({ ssid: selected, passphrase: pass }));
+        }
 
         function fetchNetworks() {
             var xhr = new XMLHttpRequest();
@@ -239,28 +307,13 @@
                     networks.forEach(function(net) {
                         var ssid = net.ssid;
                         var secured = net.security !== 'none';
+                        networksData[ssid] = secured;
                         var item = document.createElement('div');
                         item.className = 'network-item';
+                        item.dataset.ssid = ssid;
                         item.innerHTML =
                             '<span class="network-name">' + escapeHtml(ssid) + '</span>' +
                             (secured ? '<span class="network-lock">🔒</span>' : '');
-                        item.addEventListener('click', function() {
-                            document.querySelectorAll('.network-item').forEach(function(el) {
-                                el.classList.remove('selected');
-                            });
-                            item.classList.add('selected');
-                            selected = ssid;
-                            var pg = document.getElementById('passphrase-group');
-                            if (secured) {
-                                pg.classList.remove('hidden');
-                                document.getElementById('passphrase').focus();
-                            } else {
-                                pg.classList.add('hidden');
-                                document.getElementById('passphrase').value = '';
-                            }
-                            document.getElementById('btn-connect').disabled = false;
-                            setStatus('', '');
-                        });
                         list.appendChild(item);
                     });
                 } catch(e) {
@@ -272,53 +325,6 @@
                     '<div class="empty-state">Error al obtener redes.</div>';
             };
             xhr.send();
-        }
-
-        document.getElementById('show-pass').addEventListener('click', function() {
-            var inp = document.getElementById('passphrase');
-            var showing = inp.type === 'text';
-            inp.type = showing ? 'password' : 'text';
-            this.textContent = showing ? 'mostrar' : 'ocultar';
-        });
-
-        document.getElementById('passphrase').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') document.getElementById('btn-connect').click();
-        });
-
-        function setStatus(type, msg) {
-            var el = document.getElementById('status');
-            el.className = 'status' + (type ? ' ' + type : '');
-            el.textContent = msg;
-            if (!type) el.style.display = 'none';
-        }
-
-        document.getElementById('btn-connect').addEventListener('click', function() {
-            if (!selected) return;
-            var pass = document.getElementById('passphrase').value;
-            var btn = this;
-            btn.disabled = true;
-            setStatus('connecting', 'Conectando a "' + selected + '"…');
-
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', 'http://192.168.42.1/connect');
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.onload = function() {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    setStatus('success', 'Conectado. El dispositivo va a reiniciar la conexión.');
-                } else {
-                    setStatus('error', 'No se pudo conectar. Verificá la contraseña.');
-                    btn.disabled = false;
-                }
-            };
-            xhr.onerror = function() {
-                setStatus('error', 'Error de red.');
-                btn.disabled = false;
-            };
-            xhr.send(JSON.stringify({ ssid: selected, passphrase: pass }));
-        });
-
-        function escapeHtml(s) {
-            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
         fetchNetworks();
