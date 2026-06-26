@@ -122,12 +122,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! command -v wifi-connect &>/dev/null || [[ ! -d /opt/wifi-connect ]]; then
     WC_RELEASE=$(curl -fsSL https://api.github.com/repos/balena-os/wifi-connect/releases/latest)
     WC_BIN_URL=$(echo "$WC_RELEASE" | grep "browser_download_url.*aarch64-unknown" | cut -d '"' -f 4)
-    WC_UI_URL=$(echo "$WC_RELEASE"  | grep "browser_download_url.*wifi-connect-ui"  | cut -d '"' -f 4)
     [[ -z "$WC_BIN_URL" ]] && die "No se pudo obtener URL de wifi-connect desde GitHub API"
     info "Descargando wifi-connect..."
     mkdir -p /opt/wifi-connect
     curl -fsSL "$WC_BIN_URL" | tar xz -C /opt/wifi-connect/
-    curl -fsSL "$WC_UI_URL"  | tar xz -C /opt/wifi-connect/
     chmod +x /opt/wifi-connect/wifi-connect
     ln -sf /opt/wifi-connect/wifi-connect /usr/local/bin/wifi-connect
 fi
