@@ -220,10 +220,12 @@
         var selected = null;
 
         function fetchNetworks() {
-            fetch('/networks')
-                .then(function(r) { return r.json(); })
-                .then(function(networks) {
-                    var list = document.getElementById('network-list');
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', 'http://192.168.42.1/networks');
+            xhr.onload = function() {
+                var list = document.getElementById('network-list');
+                try {
+                    var networks = JSON.parse(xhr.responseText);
                     if (!networks || networks.length === 0) {
                         list.innerHTML = '<div class="empty-state">No se encontraron redes.</div>';
                         return;
@@ -233,7 +235,6 @@
                         var item = document.createElement('div');
                         item.className = 'network-item';
                         item.innerHTML = '<span class="network-name">' + escapeHtml(ssid) + '</span>';
-
                         item.addEventListener('click', function() {
                             document.querySelectorAll('.network-item').forEach(function(el) {
                                 el.classList.remove('selected');
@@ -245,14 +246,17 @@
                             document.getElementById('btn-connect').disabled = false;
                             setStatus('', '');
                         });
-
                         list.appendChild(item);
                     });
-                })
-                .catch(function() {
-                    document.getElementById('network-list').innerHTML =
-                        '<div class="empty-state">Error al obtener redes.</div>';
-                });
+                } catch(e) {
+                    list.innerHTML = '<div class="empty-state">Error al parsear redes.</div>';
+                }
+            };
+            xhr.onerror = function() {
+                document.getElementById('network-list').innerHTML =
+                    '<div class="empty-state">Error al obtener redes.</div>';
+            };
+            xhr.send();
         }
 
         document.getElementById('show-pass').addEventListener('click', function() {
@@ -280,23 +284,22 @@
             btn.disabled = true;
             setStatus('connecting', 'Conectando a "' + selected + '"…');
 
-            fetch('/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ssid: selected, passphrase: pass })
-            })
-            .then(function(r) {
-                if (r.ok) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', 'http://192.168.42.1/connect');
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
                     setStatus('success', 'Conectado. El dispositivo va a reiniciar la conexión.');
                 } else {
                     setStatus('error', 'No se pudo conectar. Verificá la contraseña.');
                     btn.disabled = false;
                 }
-            })
-            .catch(function() {
+            };
+            xhr.onerror = function() {
                 setStatus('error', 'Error de red.');
                 btn.disabled = false;
-            });
+            };
+            xhr.send(JSON.stringify({ ssid: selected, passphrase: pass }));
         });
 
         function escapeHtml(s) {
