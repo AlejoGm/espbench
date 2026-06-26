@@ -119,7 +119,7 @@ info "Instalando wifi-connect..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! command -v wifi-connect &>/dev/null; then
+if ! command -v wifi-connect &>/dev/null || [[ ! -d /opt/wifi-connect ]]; then
     WC_RELEASE=$(curl -fsSL https://api.github.com/repos/balena-os/wifi-connect/releases/latest)
     WC_BIN_URL=$(echo "$WC_RELEASE" | grep "browser_download_url.*aarch64-unknown" | cut -d '"' -f 4)
     WC_UI_URL=$(echo "$WC_RELEASE"  | grep "browser_download_url.*wifi-connect-ui"  | cut -d '"' -f 4)
@@ -134,6 +134,7 @@ fi
 
 # Portal UI custom
 if [[ -f "$SCRIPT_DIR/portal/index.html" ]]; then
+    mkdir -p /opt/wifi-connect
     cp "$SCRIPT_DIR/portal/index.html" /opt/wifi-connect/index.html
     ok "Portal custom instalado"
 else
