@@ -15,7 +15,7 @@
         <div id="cards-known" class="cards-grid"></div>
         <div id="cards-unknown-wrap" class="hidden">
             <div class="section-label">Sin identificar</div>
-            <div id="cards-unknown" class="cards-grid cards-grid-unknown"></div>
+            <div id="cards-unknown" class="cards-grid"></div>
         </div>
         <div id="empty-state" class="empty-state hidden">No hay dispositivos conectados</div>
     </main>
@@ -32,14 +32,14 @@
             return d.innerHTML;
         }
 
-        function buildCard(device, isUnknown) {
+        function buildCard(device) {
             var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
             var lastFlash = formatTimestamp(device.last_flash_ts);
             var title = device.device_key || device.tty_name;
             var tty = escapeHtml(device.tty_name);
 
             var card = document.createElement('div');
-            card.className = 'device-card' + (device.lock_user ? ' locked' : '') + (isUnknown ? ' card-unknown' : '');
+            card.className = 'device-card' + (device.lock_user ? ' locked' : '');
 
             var hwModelRow = device.hw_model
                 ? '<div class="card-row"><span class="card-label">HW Model:</span><span class="card-value">' + escapeHtml(device.hw_model) + '</span></div>'
@@ -161,6 +161,37 @@
               .catch(function() { alert('Error de conexión'); });
         }
 
+        function buildUnknownCard(device) {
+            var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
+            var tty = escapeHtml(device.tty_name);
+
+            var card = document.createElement('div');
+            card.className = 'device-card card-unknown';
+
+            var snRow = device.sn
+                ? '<div class="card-row"><span class="card-label">SN:</span><span class="card-value">' + escapeHtml(device.sn) + '</span></div>'
+                : '';
+
+            card.innerHTML =
+                '<div class="card-header">' +
+                    '<div class="card-title-wrap">' +
+                        '<span class="card-title card-title-dim">' + escapeHtml(device.tty_name) + '</span>' +
+                    '</div>' +
+                    '<div class="card-header-badges">' +
+                        '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="card-body">' +
+                    snRow +
+                    '<div class="card-row"><span class="card-label">Puerto TCP:</span><span class="card-value">' + escapeHtml(String(device.port_tcp)) + '</span></div>' +
+                '</div>' +
+                '<div class="card-footer">' +
+                    '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
+                '</div>';
+
+            return card;
+        }
+
         function renderDevices(devices) {
             var known       = document.getElementById('cards-known');
             var unknown     = document.getElementById('cards-unknown');
@@ -180,9 +211,9 @@
             var hasUnknown = false;
             devices.forEach(function(device) {
                 if (device.hw_model) {
-                    known.appendChild(buildCard(device, false));
+                    known.appendChild(buildCard(device));
                 } else {
-                    unknown.appendChild(buildCard(device, true));
+                    unknown.appendChild(buildUnknownCard(device));
                     hasUnknown = true;
                 }
             });

@@ -213,6 +213,14 @@ done
 ok "Servicios innecesarios deshabilitados"
 
 # ---------------------------------------------------------------------------
+# 8. Tailscale
+# ---------------------------------------------------------------------------
+info "Instalando Tailscale..."
+curl -fsSL https://tailscale.com/install.sh | sh
+systemctl enable tailscaled
+ok "Tailscale instalado"
+
+# ---------------------------------------------------------------------------
 # Resumen
 # ---------------------------------------------------------------------------
 echo ""

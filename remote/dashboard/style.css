@@ -199,7 +199,7 @@ body.device-page {
     border: 1px solid #2e2e2e;
     border-radius: 10px;
     padding: 18px;
-    width: 300px;
+    width: 340px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -324,23 +324,33 @@ body.device-page {
     border-color: #3a2f00;
 }
 
-/* ── Section label (unknown devices) ── */
+/* ── Unknown devices section ── */
+
+#cards-unknown-wrap {
+    border-top: 1px solid #2a2a2a;
+    margin-top: 28px;
+    padding-top: 20px;
+}
 
 .section-label {
-    font-size: 0.72rem;
-    color: #444;
-    letter-spacing: 0.06em;
+    font-size: 0.7rem;
+    color: #3a3a3a;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin: 20px 0 10px;
+    margin-bottom: 12px;
 }
 
-.cards-grid-unknown .device-card {
-    opacity: 0.6;
+.card-unknown {
     width: 220px;
+    opacity: 0.65;
 }
 
-.cards-grid-unknown .device-card:hover {
-    opacity: 0.85;
+.card-unknown:hover {
+    opacity: 0.9;
+}
+
+.card-title-dim {
+    color: #666;
 }
 
 /* ── Card title row (with rename button) ── */
