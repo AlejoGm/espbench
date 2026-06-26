@@ -26,3 +26,22 @@ def _recv_exact(sock, n: int) -> bytes:
             raise ConnectionError("socket closed prematurely")
         buf += chunk
     return buf
+
+def mac_to_sn_sfy(mac_str: str) -> str:
+    """MAC address → Sensify SN (reversed bytes as decimal integer string)."""
+    mac_str = mac_str.replace(":", "").replace("-", "").upper()
+    if len(mac_str) != 12:
+        raise ValueError("MAC debe tener 12 caracteres hex.")
+    bytes_reversed = [mac_str[i:i+2] for i in range(0, 12, 2)][::-1]
+    return str(int("".join(bytes_reversed), 16))
+
+def sn_sfy_to_mac(sn_str: str, with_colons: bool = True) -> str:
+    """Sensify SN → MAC address."""
+    hex_str = f"{int(sn_str):012X}"
+    bytes_original = [hex_str[i:i+2] for i in range(0, 12, 2)][::-1]
+    return ":".join(bytes_original) if with_colons else "".join(bytes_original)
+
+def hw_model_from_project_name(project_name: str) -> str:
+    """'NVC3-55_0' → 'NVC3'  (split on last '-', take model part)."""
+    idx = project_name.rfind("-")
+    return project_name[:idx] if idx >= 0 else project_name

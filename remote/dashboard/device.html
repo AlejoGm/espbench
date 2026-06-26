@@ -108,9 +108,11 @@
                 .then(function(d) {
                     var badges = [makeBadge('tty', tty)];
                     if (d) {
-                        if (d.port_tcp)   badges.push(makeBadge('tcp',     ':' + d.port_tcp));
-                        if (d.fw_project) badges.push(makeBadge('project', d.fw_project));
-                        if (d.fw_version) badges.push(makeBadge('version', 'v' + d.fw_version));
+                        if (d.port_tcp)        badges.push(makeBadge('tcp',      ':' + d.port_tcp));
+                        if (d.hw_model)        badges.push(makeBadge('hw',       d.hw_model));
+                        if (d.device_key)      badges.push(makeBadge('key',      d.device_key));
+                        if (d.sn)              badges.push(makeBadge('sn',       d.sn));
+                        if (d.fw_version)      badges.push(makeBadge('version',  'v' + d.fw_version));
                         if (d.fw_idf)          badges.push(makeBadge('idf',      d.fw_idf));
                         if (d.last_flash_user) badges.push(makeBadge('deployer', d.last_flash_user));
                         if (d.lock_user) {
@@ -119,9 +121,8 @@
                         } else {
                             currentLockUser = '';
                         }
-                        if (d.fw_project) {
-                            document.title = 'espbench — ' + tty + ' (' + d.fw_project + ')';
-                        }
+                        var titleLabel = d.device_key || d.hw_model || tty;
+                        document.title = 'espbench — ' + titleLabel;
                     }
                     deviceBadges.innerHTML = badges.join('');
                     var btnUnlock = document.getElementById('btn-unlock');

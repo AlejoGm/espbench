@@ -324,6 +324,97 @@ body.device-page {
     border-color: #3a2f00;
 }
 
+/* ── Section label (unknown devices) ── */
+
+.section-label {
+    font-size: 0.72rem;
+    color: #444;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 20px 0 10px;
+}
+
+.cards-grid-unknown .device-card {
+    opacity: 0.6;
+    width: 220px;
+}
+
+.cards-grid-unknown .device-card:hover {
+    opacity: 0.85;
+}
+
+/* ── Card title row (with rename button) ── */
+
+.card-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.rename-btn {
+    background: none;
+    border: none;
+    color: #444;
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.rename-btn:hover {
+    color: #aaa;
+    background: #2a2a2a;
+}
+
+/* ── Rename form ── */
+
+.rename-form {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.rename-form.hidden {
+    display: none;
+}
+
+.rename-input {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    color: #e0e0e0;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    padding: 3px 7px;
+    border-radius: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.rename-input:focus {
+    outline: none;
+    border-color: #555;
+}
+
+.rename-ok, .rename-cancel {
+    background: none;
+    border: 1px solid #333;
+    color: #888;
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.rename-ok:hover { color: #3fb950; border-color: #3fb950; }
+.rename-cancel:hover { color: #f85149; border-color: #f85149; }
+
 /* ── Button ── */
 
 .btn-monitor {

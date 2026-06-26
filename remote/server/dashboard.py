@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Body, FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
 
-from server.device_registry import DeviceRegistry
+from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
 BASE_DIR = pathlib.Path(__file__).parent.parent
@@ -33,6 +33,14 @@ async def get_devices():
     return [dataclasses.asdict(d) for d in registry.list_devices()]
 
 
+@app.get("/api/device/by-key/{device_key:path}")
+async def get_device_by_key(device_key: str):
+    device = registry.get_device_by_key(device_key)
+    if device is None:
+        raise HTTPException(status_code=404, detail=f"Device con key '{device_key}' no encontrado")
+    return dataclasses.asdict(device)
+
+
 @app.get("/api/device/{tty:path}")
 async def get_device(tty: str):
     device = registry.get_device(tty)
@@ -42,6 +50,18 @@ async def get_device(tty: str):
 
 
 _LOCKS_DIR = pathlib.Path("/opt/esp/locks")
+_devices_file = DevicesFile()
+
+
+@app.patch("/api/devices/{mac:path}")
+async def patch_device(mac: str, body: dict = Body(...)):
+    device_key = body.get("device_key", "").strip()
+    if not device_key:
+        raise HTTPException(status_code=400, detail="device_key requerido")
+    mac_norm = mac.upper().replace("-", ":")
+    _devices_file.update_device_key(mac_norm, device_key)
+    return {"ok": True}
+
 
 @app.post("/api/device/{tty}/unlock")
 async def device_unlock(tty: str, body: dict = Body(...)):

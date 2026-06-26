@@ -4,7 +4,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+_repo_root = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(_repo_root))
+sys.path.insert(0, str(_repo_root / "remote"))
 from server.device_registry import DeviceRegistry, DeviceInfo
 
 
@@ -96,31 +98,43 @@ class TestStatus:
         assert devices[0].status == "DOWN"
 
 
-class TestChipId:
-    def test_chip_id_none_by_default(self, tmp_path):
+class TestSn:
+    def test_sn_none_without_mac_file(self, tmp_path):
         registry, dev_dir, _ = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
         with patch("subprocess.run", side_effect=mock_tmux_down):
             devices = registry.list_devices()
-        assert devices[0].chip_id is None
+        assert devices[0].sn is None
+        assert devices[0].mac is None
+        assert devices[0].device_key is None
 
-    def test_set_and_get_chip_id(self, tmp_path):
+    def test_sn_derived_from_mac_file(self, tmp_path, monkeypatch):
+        import server.device_registry as dr
+        monkeypatch.setattr(dr, "_LOGS_DIR", tmp_path / "logs")
         registry, dev_dir, _ = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
-        registry.set_chip_id("ttyUSB0", "123456")
+        mac_dir = tmp_path / "logs" / "ttyUSB0"
+        mac_dir.mkdir(parents=True)
+        (mac_dir / "mac").write_text("AA:BB:CC:DD:EE:FF")
         with patch("subprocess.run", side_effect=mock_tmux_down):
             device = registry.get_device("ttyUSB0")
-        assert device is not None
-        assert device.chip_id == "123456"
+        assert device.mac == "AA:BB:CC:DD:EE:FF"
+        assert device.sn is not None
+        assert device.sn.isdigit()
 
-    def test_set_chip_id_does_not_affect_other_device(self, tmp_path):
+    def test_mac_isolation_across_devices(self, tmp_path, monkeypatch):
+        import server.device_registry as dr
+        monkeypatch.setattr(dr, "_LOGS_DIR", tmp_path / "logs")
         registry, dev_dir, _ = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
         (dev_dir / "ttyUSB1").touch()
-        registry.set_chip_id("ttyUSB0", "AABBCC")
+        mac_dir = tmp_path / "logs" / "ttyUSB0"
+        mac_dir.mkdir(parents=True)
+        (mac_dir / "mac").write_text("11:22:33:44:55:66")
         with patch("subprocess.run", side_effect=mock_tmux_down):
             d1 = registry.get_device("ttyUSB1")
-        assert d1.chip_id is None
+        assert d1.mac is None
+        assert d1.sn is None
 
 
 class TestLastFlashTs:

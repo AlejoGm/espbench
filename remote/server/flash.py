@@ -4,7 +4,8 @@
 flash.py — Funciones de flasheo con esptool para ESP32
 """
 
-import json, logging, pathlib, shlex, shutil, subprocess, sys
+import json, logging, pathlib, re, shlex, shutil, subprocess, sys
+from typing import Optional
 
 DEFAULT_FLASH_FILES = [
     ("0x1000", "bootloader.bin"),
@@ -157,6 +158,26 @@ def build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir: pat
     for off, p in pairs:
         write_cmd += [off, p]
     return erase_cmd, write_cmd, pairs
+
+
+_MAC_RE = re.compile(r"MAC:\s*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
+
+
+def read_mac(port: str) -> Optional[str]:
+    """Run esptool read_mac on port. Returns MAC string (uppercase, colons) or None."""
+    try:
+        esptool = find_esptool_cmd()
+        result = subprocess.run(
+            esptool + ["--port", port, "read_mac"],
+            capture_output=True, text=True, timeout=15,
+        )
+        for line in (result.stdout + result.stderr).splitlines():
+            m = _MAC_RE.search(line)
+            if m:
+                return m.group(1).upper()
+    except Exception:
+        pass
+    return None
 
 
 def run_cmd(cmd, log: logging.Logger, on_line=None):

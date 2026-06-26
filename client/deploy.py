@@ -513,6 +513,9 @@ def _generate_template(path: pathlib.Path):
     print("[CONFIG] Editá los valores y volvé a ejecutar.")
     sys.exit(0)
 
+DASHBOARD_PORT = 8080
+
+
 def _normalize_remotes(cfg) -> list:
     r = cfg.get("remote")
     if r is None:
@@ -524,7 +527,39 @@ def _normalize_remotes(cfg) -> list:
     return []
 
 def _remote_name(r: dict) -> str:
-    return r.get("name") or r.get("host", "?")
+    return r.get("name") or r.get("device_key") or r.get("host", "?")
+
+def _resolve_device_port(r: dict) -> tuple:
+    """Return (port_int, device_info_dict_or_None). Uses dashboard API if device_key present."""
+    if "port" in r:
+        return int(r["port"]), None
+    device_key = r.get("device_key")
+    if not device_key:
+        raise ValueError(f"Remote sin 'port' ni 'device_key'")
+    host = r["host"]
+    import urllib.request as _urllib
+    url = f"http://{host}:{DASHBOARD_PORT}/api/device/by-key/{device_key}"
+    try:
+        with _urllib.urlopen(url, timeout=10) as resp:
+            info = json.loads(resp.read())
+        return int(info["port_tcp"]), info
+    except Exception as e:
+        raise RuntimeError(f"No se pudo resolver device '{device_key}' en {host}: {e}")
+
+def _hw_model_from_build(build_dir: pathlib.Path) -> str:
+    """Read hw_model from build/project_description.json (split on last '-')."""
+    desc = build_dir / "project_description.json"
+    if not desc.exists():
+        return None
+    try:
+        data = json.loads(desc.read_text())
+        pname = data.get("project_name", "")
+        if not pname:
+            return None
+        idx = pname.rfind("-")
+        return pname[:idx] if idx >= 0 else pname
+    except Exception:
+        return None
 
 def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
               job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
@@ -696,6 +731,35 @@ def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, er
     size   = artifact.stat().st_size
     job_id = time.strftime("job_%Y%m%d_%H%M%S")
 
+    # Resolver device_key → port y cross-check hw_model
+    artifact_hw_model = _hw_model_from_build(build_dir)
+    resolved = []
+    for r in remotes:
+        r = dict(r)
+        if "port" not in r:
+            try:
+                port, device_info = _resolve_device_port(r)
+                r["port"] = port
+            except Exception as e:
+                print(f"[ERROR] {_remote_name(r)}: {e}")
+                continue
+            if device_info and artifact_hw_model:
+                dev_hw = device_info.get("hw_model")
+                if dev_hw and dev_hw != artifact_hw_model:
+                    name = _remote_name(r)
+                    print(f"\n[WARN] HW model mismatch en '{name}':")
+                    print(f"  artifact  = '{artifact_hw_model}'")
+                    print(f"  device    = '{dev_hw}'")
+                    if sys.stdin.isatty():
+                        ans = input("¿Continuar de todas formas? [s/N] > ").strip().lower()
+                        if ans not in ["s", "si", "y", "yes"]:
+                            print(f"[SKIP] Saltando {name}")
+                            continue
+        resolved.append(r)
+    remotes = resolved
+    if not remotes:
+        raise SystemExit("[REMOTE] ✗ No quedaron remotes válidos tras resolución")
+
     results = {}
 
     if len(remotes) == 1:
@@ -741,6 +805,7 @@ def unlock_remote(cfg):
     results = {}
 
     def unlock_one(r):
+        r = dict(r)
         name       = _remote_name(r)
         lock_user  = str(r.get("lock_user",  "")).strip()
         lock_token = str(r.get("lock_token", "")).strip()
@@ -748,6 +813,14 @@ def unlock_remote(cfg):
             with results_lock:
                 results[name] = {"ok": False, "name": name, "error": "falta lock_user/lock_token"}
             return
+        if "port" not in r:
+            try:
+                port_resolved, _ = _resolve_device_port(r)
+                r["port"] = port_resolved
+            except Exception as e:
+                with results_lock:
+                    results[name] = {"ok": False, "name": name, "error": str(e)}
+                return
         token = str(r.get("token", ""))
         host  = r["host"]
         port  = int(r["port"])

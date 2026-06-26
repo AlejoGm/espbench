@@ -12,7 +12,7 @@ from urllib.request import urlopen, Request
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
-from flash import find_esptool_cmd, build_esptool_cmd, run_cmd
+from flash import find_esptool_cmd, build_esptool_cmd, run_cmd, read_mac
 from monitor import _ignore_signals_flag, nprint, EspMonitor
 
 # ========== Constantes ==========
@@ -229,19 +229,23 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
             svc_log.info(f"[flash] comando esptool: {' '.join(esptool)}\r\n")
             nprint(f"[flash] esptool encontrado: {' '.join(esptool)}")
 
-            nprint("[flash] verificando estado de flash encryption...")
-            check_cmd = esptool + ["--chip", chip, "--port", cfg["tty"], "flash_id"]
-            try:
-                result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    nprint("[flash] ESP32 accesible para verificación")
-                    if encrypt:
-                        nprint("[flash] WARNING: Flash encryption habilitado en header pero puede causar errores")
-                        nprint("[flash] Si falla, intentar sin --encrypt")
-                else:
-                    nprint(f"[flash] WARNING: No se pudo verificar ESP32: {result.stderr}")
-            except Exception as check_e:
-                nprint(f"[flash] WARNING: Error verificando ESP32: {check_e}")
+            # Verificar identidad del dispositivo (MAC) antes de flashear
+            nprint("[flash] leyendo MAC del dispositivo...")
+            mac_now = read_mac(cfg["tty"])
+            if mac_now:
+                mac_file = pathlib.Path(cfg["logs_dir"]) / tty_name / "mac"
+                if mac_file.exists():
+                    registered = mac_file.read_text().strip().upper()
+                    if mac_now.upper() != registered:
+                        svc_log.error(f"[flash] MAC cambió: registrada={registered}, actual={mac_now}\r\n")
+                        send_msg(sock, {"ok": False, "error": "device_changed",
+                                        "message": f"Dispositivo cambiado (MAC esperada: {registered}). Reiniciar sesión."})
+                        return
+                nprint(f"[flash] MAC verificada: {mac_now}")
+            else:
+                nprint("[flash] WARNING: no se pudo leer MAC (continuando)")
+            if encrypt:
+                nprint("[flash] WARNING: Flash encryption habilitado — si falla, intentar sin --encrypt")
 
         except Exception as e:
             svc_log.error(f"[flash] esptool no encontrado: {e}\r\n")

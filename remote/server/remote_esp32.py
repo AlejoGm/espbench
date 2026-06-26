@@ -10,6 +10,9 @@ servidor TCP de control (implementado en protocol.py).
 import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+from common import mac_to_sn_sfy
+from device_registry import DevicesFile
+from flash import read_mac
 from monitor import EspMonitor, _ignore_signals_flag
 from protocol import control_server, ensure_dir
 
@@ -92,8 +95,11 @@ def main():
     nprint(f"[main] logs: {logs_dir}")
     nprint(f"[main] jobs: {jobs_dir}")
 
+    tty_name = os.path.basename(args.port_tty)
+    tty_log_dir = logs_dir / tty_name
     ensure_dir(logs_dir)
     ensure_dir(jobs_dir)
+    ensure_dir(tty_log_dir)
 
     svc_log = setup_logging(logs_dir)
     svc_log.info("========== INICIO DEL SERVICIO ==========")
@@ -103,6 +109,31 @@ def main():
     svc_log.info(f"Chip: {args.chip}")
     svc_log.info(f"Baud flash: {args.flash_baud}")
     svc_log.info(f"Token: {'configurado' if args.token else 'sin token'}")
+
+    # Leer MAC del dispositivo antes de arrancar el monitor (puerto libre)
+    svc_log.info("[mac] leyendo MAC del dispositivo...")
+    mac_addr = read_mac(args.port_tty)
+    mac_file = tty_log_dir / "mac"
+    if mac_addr:
+        svc_log.info(f"[mac] MAC: {mac_addr}")
+        mac_file.write_text(mac_addr)
+        try:
+            mac_file.chmod(0o666)
+        except Exception:
+            pass
+        try:
+            sn = mac_to_sn_sfy(mac_addr)
+            DevicesFile().register_mac(mac_addr, sn)
+            svc_log.info(f"[mac] SN: {sn} — registrado en devices.json")
+        except Exception as e:
+            svc_log.warning(f"[mac] error en devices.json: {e}")
+    else:
+        svc_log.warning("[mac] no se pudo leer MAC (dispositivo no responde o no conectado)")
+        if mac_file.exists():
+            try:
+                mac_file.unlink()
+            except Exception:
+                pass
 
     cfg = {
         "port": args.control_port,

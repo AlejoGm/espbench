@@ -12,100 +12,146 @@
     </header>
 
     <main>
-        <div id="cards-container" class="cards-grid"></div>
+        <div id="cards-known" class="cards-grid"></div>
+        <div id="cards-unknown-wrap" class="hidden">
+            <div class="section-label">Sin identificar</div>
+            <div id="cards-unknown" class="cards-grid cards-grid-unknown"></div>
+        </div>
         <div id="empty-state" class="empty-state hidden">No hay dispositivos conectados</div>
     </main>
 
     <script>
         function formatTimestamp(iso) {
             if (!iso) return 'Nunca';
-            // "2026-06-23T17:22:52" → "2026-06-23 17:22:52"
             return iso.replace('T', ' ');
         }
 
-        function buildCard(device) {
-            const title = device.tty_name;
-            const statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
-            const lastFlash = formatTimestamp(device.last_flash_ts);
+        function escapeHtml(str) {
+            var d = document.createElement('div');
+            d.appendChild(document.createTextNode(str));
+            return d.innerHTML;
+        }
 
-            const card = document.createElement('div');
-            card.className = 'device-card' + (device.lock_user ? ' locked' : '');
-            card.innerHTML = `
-                <div class="card-header">
-                    <span class="card-title">${escapeHtml(title)}</span>
-                    <div class="card-header-badges">
-                        ${device.lock_user ? `<span class="badge badge-locked">&#128274; ${escapeHtml(device.lock_user)}</span>` : ''}
-                        <span class="badge ${statusClass}">${escapeHtml(device.status)}</span>
-                    </div>
-                </div>
-                <div class="card-body">
-                    ${device.fw_project ? `<div class="card-row">
-                        <span class="card-label">Proyecto:</span>
-                        <span class="card-value">${escapeHtml(device.fw_project)}</span>
-                    </div>` : ''}
-                    ${device.fw_version ? `<div class="card-row">
-                        <span class="card-label">App version:</span>
-                        <span class="card-value">${escapeHtml(device.fw_version)}</span>
-                    </div>` : ''}
-                    ${device.fw_idf ? `<div class="card-row">
-                        <span class="card-label">ESP-IDF:</span>
-                        <span class="card-value">${escapeHtml(device.fw_idf)}</span>
-                    </div>` : ''}
-                    ${device.last_flash_user ? `<div class="card-row">
-                        <span class="card-label">Deployer:</span>
-                        <span class="card-value">${escapeHtml(device.last_flash_user)}</span>
-                    </div>` : ''}
-                    <div class="card-row">
-                        <span class="card-label">Último flash:</span>
-                        <span class="card-value">${escapeHtml(lastFlash)}</span>
-                    </div>
-                    <div class="card-row">
-                        <span class="card-label">Puerto TCP:</span>
-                        <span class="card-value">${escapeHtml(String(device.port_tcp))}</span>
-                    </div>
-                </div>
-                <div class="card-footer">
-                    <a class="btn-monitor" href="/device.html?tty=${encodeURIComponent(device.tty_name)}">Ver monitor</a>
-                </div>
-            `;
+        function buildCard(device, isUnknown) {
+            var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
+            var lastFlash = formatTimestamp(device.last_flash_ts);
+            var title = device.device_key || device.tty_name;
+
+            var card = document.createElement('div');
+            card.className = 'device-card' + (device.lock_user ? ' locked' : '') + (isUnknown ? ' card-unknown' : '');
+
+            var hwModelRow = device.hw_model
+                ? '<div class="card-row"><span class="card-label">HW Model:</span><span class="card-value">' + escapeHtml(device.hw_model) + '</span></div>'
+                : '';
+            var versionRow = device.fw_version
+                ? '<div class="card-row"><span class="card-label">App version:</span><span class="card-value">' + escapeHtml(device.fw_version) + '</span></div>'
+                : '';
+            var idfRow = device.fw_idf
+                ? '<div class="card-row"><span class="card-label">ESP-IDF:</span><span class="card-value">' + escapeHtml(device.fw_idf) + '</span></div>'
+                : '';
+            var deployerRow = device.last_flash_user
+                ? '<div class="card-row"><span class="card-label">Deployer:</span><span class="card-value">' + escapeHtml(device.last_flash_user) + '</span></div>'
+                : '';
+            var snRow = device.sn
+                ? '<div class="card-row"><span class="card-label">SN:</span><span class="card-value">' + escapeHtml(device.sn) + '</span></div>'
+                : '';
+            var ttyRow = '<div class="card-row"><span class="card-label">TTY:</span><span class="card-value">' + escapeHtml(device.tty_name) + '</span></div>';
+
+            card.innerHTML =
+                '<div class="card-header">' +
+                    '<div class="card-title-wrap">' +
+                        '<span class="card-title" id="key-label-' + escapeHtml(device.tty_name) + '">' + escapeHtml(title) + '</span>' +
+                        (device.mac ? '<button class="rename-btn" title="Renombrar" onclick="startRename(\'' + escapeHtml(device.tty_name) + '\',\'' + escapeHtml(device.mac) + '\',\'' + escapeHtml(title) + '\')">✎</button>' : '') +
+                    '</div>' +
+                    '<div class="card-header-badges">' +
+                        (device.lock_user ? '<span class="badge badge-locked">&#128274; ' + escapeHtml(device.lock_user) + '</span>' : '') +
+                        '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div id="rename-form-' + escapeHtml(device.tty_name) + '" class="rename-form hidden"></div>' +
+                '<div class="card-body">' +
+                    hwModelRow + versionRow + idfRow + deployerRow + snRow + ttyRow +
+                    '<div class="card-row"><span class="card-label">Último flash:</span><span class="card-value">' + escapeHtml(lastFlash) + '</span></div>' +
+                    '<div class="card-row"><span class="card-label">Puerto TCP:</span><span class="card-value">' + escapeHtml(String(device.port_tcp)) + '</span></div>' +
+                '</div>' +
+                '<div class="card-footer">' +
+                    '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
+                '</div>';
             return card;
         }
 
-        function escapeHtml(str) {
-            const div = document.createElement('div');
-            div.appendChild(document.createTextNode(str));
-            return div.innerHTML;
+        function startRename(ttyName, mac, currentKey) {
+            var form = document.getElementById('rename-form-' + ttyName);
+            if (!form) return;
+            form.className = 'rename-form';
+            form.innerHTML =
+                '<input class="rename-input" id="rename-input-' + escapeHtml(ttyName) + '" value="' + escapeHtml(currentKey) + '" />' +
+                '<button class="rename-ok" onclick="submitRename(\'' + escapeHtml(ttyName) + '\',\'' + escapeHtml(mac) + '\')">✓</button>' +
+                '<button class="rename-cancel" onclick="cancelRename(\'' + escapeHtml(ttyName) + '\')">✗</button>';
+            var inp = document.getElementById('rename-input-' + ttyName);
+            if (inp) { inp.focus(); inp.select(); }
+        }
+
+        function cancelRename(ttyName) {
+            var form = document.getElementById('rename-form-' + ttyName);
+            if (form) form.className = 'rename-form hidden';
+        }
+
+        function submitRename(ttyName, mac) {
+            var inp = document.getElementById('rename-input-' + ttyName);
+            if (!inp) return;
+            var newKey = inp.value.trim();
+            if (!newKey) return;
+            fetch('/api/devices/' + encodeURIComponent(mac), {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({device_key: newKey})
+            }).then(function(r) { return r.json(); })
+              .then(function(d) {
+                  if (d.ok) {
+                      var label = document.getElementById('key-label-' + ttyName);
+                      if (label) label.textContent = newKey;
+                      cancelRename(ttyName);
+                  } else {
+                      alert('Error al renombrar');
+                  }
+              })
+              .catch(function() { alert('Error de conexión'); });
         }
 
         function renderDevices(devices) {
-            const container = document.getElementById('cards-container');
-            const emptyState = document.getElementById('empty-state');
+            var known   = document.getElementById('cards-known');
+            var unknown = document.getElementById('cards-unknown');
+            var unknownWrap = document.getElementById('cards-unknown-wrap');
+            var emptyState  = document.getElementById('empty-state');
 
-            container.innerHTML = '';
+            known.innerHTML   = '';
+            unknown.innerHTML = '';
 
             if (!devices || devices.length === 0) {
                 emptyState.classList.remove('hidden');
+                unknownWrap.classList.add('hidden');
                 return;
             }
-
             emptyState.classList.add('hidden');
+
+            var hasUnknown = false;
             devices.forEach(function(device) {
-                container.appendChild(buildCard(device));
+                if (device.hw_model) {
+                    known.appendChild(buildCard(device, false));
+                } else {
+                    unknown.appendChild(buildCard(device, true));
+                    hasUnknown = true;
+                }
             });
+            unknownWrap.classList.toggle('hidden', !hasUnknown);
         }
 
         function fetchDevices() {
             fetch('/api/devices')
-                .then(function(r) {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    return r.json();
-                })
-                .then(function(data) {
-                    renderDevices(data);
-                })
-                .catch(function(err) {
-                    console.error('Error al obtener dispositivos:', err);
-                });
+                .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(renderDevices)
+                .catch(function(err) { console.error('Error:', err); });
         }
 
         fetch('/api/version')
