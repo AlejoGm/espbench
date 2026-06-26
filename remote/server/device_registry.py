@@ -22,7 +22,7 @@ class DevicesFile:
         self._path = path
         self._lock = threading.Lock()
 
-    def _update(self, updater):
+    def _update(self, updater, silent: bool = True):
         with self._lock:
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,7 +39,8 @@ class DevicesFile:
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
             except Exception:
-                pass
+                if not silent:
+                    raise
 
     def register_mac(self, mac: str, sn: str):
         """Create entry for MAC if not present. device_key defaults to SN."""
@@ -63,7 +64,7 @@ class DevicesFile:
                 data[mac_up] = {"device_key": device_key, "hw_model": None}
             else:
                 data[mac_up]["device_key"] = device_key
-        self._update(_do)
+        self._update(_do, silent=False)
 
     def get_all(self) -> dict:
         with self._lock:

@@ -65,7 +65,10 @@ async def patch_device(mac: str, body: dict = Body(...)):
     if not device_key:
         raise HTTPException(status_code=400, detail="device_key requerido")
     mac_norm = unquote(mac).upper().replace("-", ":")
-    _devices_file.update_device_key(mac_norm, device_key)
+    try:
+        _devices_file.update_device_key(mac_norm, device_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True}
 
 

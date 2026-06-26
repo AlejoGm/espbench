@@ -32,6 +32,8 @@
             return d.innerHTML;
         }
 
+        var _renamingTty = null;
+
         function buildCard(device) {
             var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
             var lastFlash = formatTimestamp(device.last_flash_ts);
@@ -103,6 +105,7 @@
         }
 
         function startRename(ttyName, mac, currentKey) {
+            _renamingTty = ttyName;
             var label  = document.getElementById('key-label-'    + ttyName);
             var btn    = document.getElementById('rename-btn-'   + ttyName);
             var inp    = document.getElementById('rename-input-' + ttyName);
@@ -126,6 +129,7 @@
         }
 
         function cancelRename(ttyName) {
+            _renamingTty = null;
             var label  = document.getElementById('key-label-'     + ttyName);
             var btn    = document.getElementById('rename-btn-'    + ttyName);
             var inp    = document.getElementById('rename-input-'  + ttyName);
@@ -152,13 +156,14 @@
                 body: JSON.stringify({device_key: newKey})
             }).then(function(r) { return r.json(); })
               .then(function(d) {
+                  _renamingTty = null;
                   if (d.ok) {
                       fetchDevices();
                   } else {
-                      alert('Error al renombrar');
+                      alert('Error al renombrar: ' + (d.detail || JSON.stringify(d)));
                   }
               })
-              .catch(function() { alert('Error de conexión'); });
+              .catch(function() { _renamingTty = null; alert('Error de conexión'); });
         }
 
         function buildUnknownCard(device) {
@@ -193,6 +198,7 @@
         }
 
         function renderDevices(devices) {
+            if (_renamingTty !== null) return;
             var known       = document.getElementById('cards-known');
             var unknown     = document.getElementById('cards-unknown');
             var unknownWrap = document.getElementById('cards-unknown-wrap');
