@@ -41,23 +41,14 @@ Raspberry Pi OS Lite 64-bit (Bookworm). Enable SSH and set hostname via Raspberr
 sudo apt update && sudo apt install -y git tmux python3 python3-pip python3-venv
 ```
 
-### 3. Create service user
-
-The dashboard runs as `sfypi`. Create it once:
-
-```bash
-sudo useradd -m -s /bin/bash sfypi
-sudo usermod -aG dialout sfypi   # serial port access
-```
-
-### 4. Clone repo
+### 3. Clone repo
 
 ```bash
 git clone https://github.com/AlejoGm/espbench.git
 cd espbench
 ```
 
-### 5. System hardening (optional but recommended)
+### 4. System hardening (optional but recommended)
 
 Disables desktop, serial TTL, HID, installs WiFi provisioning AP fallback and Tailscale:
 
@@ -77,7 +68,7 @@ Then reboot to apply all changes:
 sudo reboot
 ```
 
-### 6. Install server
+### 5. Install server
 
 ```bash
 sudo bash remote/install.sh
@@ -85,7 +76,7 @@ sudo bash remote/install.sh
 
 Installs server files to `/opt/esp/`, creates Python venv, registers udev rules and systemd services.
 
-### 7. Start services
+### 6. Start services
 
 ```bash
 sudo systemctl start devremote dashboard
@@ -94,7 +85,7 @@ sudo systemctl start devremote dashboard
 `devremote` manages tmux sessions per device. `dashboard` exposes the web UI on port 8080.
 Plug in an ESP32 via USB — udev auto-creates a session for it.
 
-### 8. Verify
+### 7. Verify
 
 ```bash
 devremote --status

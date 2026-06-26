@@ -154,7 +154,19 @@ info "Instalando reglas udev..."
 cp "$REMOTE_DIR/infra/99-esp32.rules" /etc/udev/rules.d/99-esp32.rules
 
 # ---------------------------------------------------------------------------
-# 9. Install systemd services
+# 9. sfypi user + sudo
+# ---------------------------------------------------------------------------
+if ! id sfypi &>/dev/null; then
+    info "Creando usuario sfypi..."
+    useradd -m -s /bin/bash sfypi
+    usermod -aG dialout sfypi
+fi
+echo "sfypi ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/sfypi
+chmod 440 /etc/sudoers.d/sfypi
+info "sfypi: sudo sin password configurado"
+
+# ---------------------------------------------------------------------------
+# 10. Install systemd services
 # ---------------------------------------------------------------------------
 info "Instalando servicio systemd devremote..."
 cp "$REMOTE_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
