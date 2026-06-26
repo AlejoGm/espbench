@@ -3,6 +3,7 @@ import dataclasses
 import pathlib
 import subprocess
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import Body, FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
@@ -63,7 +64,7 @@ async def patch_device(mac: str, body: dict = Body(...)):
     device_key = body.get("device_key", "").strip()
     if not device_key:
         raise HTTPException(status_code=400, detail="device_key requerido")
-    mac_norm = mac.upper().replace("-", ":")
+    mac_norm = unquote(mac).upper().replace("-", ":")
     _devices_file.update_device_key(mac_norm, device_key)
     return {"ok": True}
 

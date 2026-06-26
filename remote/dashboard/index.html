@@ -146,7 +146,7 @@
             var newKey = inp.value.trim();
             if (!newKey) return;
 
-            fetch('/api/devices/' + encodeURIComponent(mac), {
+            fetch('/api/devices/' + mac, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({device_key: newKey})

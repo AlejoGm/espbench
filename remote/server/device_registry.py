@@ -178,6 +178,9 @@ class DeviceRegistry:
             entry = self._devices_file.get_all().get(mac.upper(), {})
             device_key = entry.get("device_key")
             hw_model   = entry.get("hw_model")
+            if hw_model is None and fw.get("fw_project"):
+                hw_model = hw_model_from_project_name(fw["fw_project"])
+                self._devices_file.update_hw_model(mac, hw_model)
         return DeviceInfo(
             tty=str(self._dev_dir / tty_name),
             tty_name=tty_name,
