@@ -289,7 +289,7 @@
             xhr.onerror = function() {
                 setStatus('success', 'Solicitud enviada. El dispositivo se está conectando.');
             };
-            xhr.send(JSON.stringify({ ssid: selected, passphrase: pass }));
+            xhr.send(JSON.stringify({ ssid: selected, passphrase: pass, identity: '' }));
         }
 
         function fetchNetworks() {
