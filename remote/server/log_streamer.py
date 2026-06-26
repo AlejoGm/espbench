@@ -66,6 +66,7 @@ class LogStreamer:
             if content:
                 try:
                     await websocket.send_text(content)
+                    self._check_chipid(tty_name, content)
                 except Exception:
                     pass
 
