@@ -230,18 +230,6 @@
     <script>
         var selected = null;
 
-        function signalClass(strength) {
-            if (strength >= 70) return 'signal-high';
-            if (strength >= 40) return 'signal-mid';
-            return 'signal-low';
-        }
-
-        function signalBars(strength) {
-            if (strength >= 70) return '▂▄█';
-            if (strength >= 40) return '▂▄░';
-            return '▂░░';
-        }
-
         function fetchNetworks() {
             fetch('/networks')
                 .then(function(r) { return r.json(); })
@@ -252,22 +240,17 @@
                         return;
                     }
                     list.innerHTML = '';
-                    networks.forEach(function(net) {
+                    networks.forEach(function(ssid) {
                         var item = document.createElement('div');
                         item.className = 'network-item';
-                        item.dataset.ssid = net.ssid;
-
-                        var sc = signalClass(net.strength);
-                        item.innerHTML =
-                            '<span class="network-name">' + escapeHtml(net.ssid) + '</span>' +
-                            '<span class="network-signal ' + sc + '">' + signalBars(net.strength) + '</span>';
+                        item.innerHTML = '<span class="network-name">' + escapeHtml(ssid) + '</span>';
 
                         item.addEventListener('click', function() {
                             document.querySelectorAll('.network-item').forEach(function(el) {
                                 el.classList.remove('selected');
                             });
                             item.classList.add('selected');
-                            selected = net.ssid;
+                            selected = ssid;
                             document.getElementById('passphrase-group').classList.remove('hidden');
                             document.getElementById('passphrase').focus();
                             document.getElementById('btn-connect').disabled = false;
