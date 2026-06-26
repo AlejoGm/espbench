@@ -997,7 +997,7 @@ def main():
         print(f"[CONFIG] ✓ Usando modo REMOTO")
         exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
     else:  # auto
-        if "remote" in cfg and cfg["remote"].get("host") and cfg["remote"].get("port"):
+        if _normalize_remotes(cfg):
             print(f"[CONFIG] ✓ Modo AUTO detectó configuración remota")
             exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
         else:
@@ -1019,7 +1019,7 @@ def main():
                     elif mode == "remote":
                         exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
                     else:  # auto
-                        if "remote" in cfg and cfg["remote"].get("host") and cfg["remote"].get("port"):
+                        if _normalize_remotes(cfg):
                             exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
                         else:
                             exitc = flash_local(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False)
