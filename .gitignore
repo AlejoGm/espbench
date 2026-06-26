@@ -17,3 +17,6 @@ jobs/
 
 # ELF generados
 *.elf
+
+# Claude Code worktrees (repos embebidos efímeros)
+.claude/worktrees/
