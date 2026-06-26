@@ -41,6 +41,8 @@ REPO_DIR="$(dirname "$REMOTE_DIR")"
 info "Creando directorios..."
 mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp/toolchain /opt/esp/locks
 chmod 777 /opt/esp/logs /opt/esp/locks
+touch /opt/esp/devices.json
+chmod 666 /opt/esp/devices.json
 
 # ---------------------------------------------------------------------------
 # 4. Toolchain xtensa-esp32-elf (addr2line para backtrace decoding)

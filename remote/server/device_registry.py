@@ -38,6 +38,10 @@ class DevicesFile:
                         f.write(json.dumps(data, indent=2))
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
+                try:
+                    self._path.chmod(0o666)
+                except Exception:
+                    pass
             except Exception:
                 if not silent:
                     raise
