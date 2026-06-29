@@ -161,6 +161,7 @@ def build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir: pat
 
 
 _MAC_RE = re.compile(r"MAC:\s*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
+_MAC_SERIAL_RE = re.compile(r'\bmac\s*=\s*([0-9A-Fa-f]{12})\b')
 
 
 def read_mac(port: str) -> Optional[str]:
@@ -178,6 +179,15 @@ def read_mac(port: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def parse_mac_from_serial(text: str) -> Optional[str]:
+    """Parse MAC from firmware serial output (e.g. 'mac = F8B3B7D848A8'). Returns XX:XX:XX:XX:XX:XX or None."""
+    m = _MAC_SERIAL_RE.search(text)
+    if not m:
+        return None
+    raw = m.group(1).upper()
+    return ':'.join(raw[i:i+2] for i in range(0, 12, 2))
 
 
 def run_cmd(cmd, log: logging.Logger, on_line=None):

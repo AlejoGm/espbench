@@ -12,7 +12,7 @@ import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading, t
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
 from device_registry import DevicesFile
-from flash import read_mac
+from flash import read_mac, parse_mac_from_serial
 from monitor import EspMonitor, _ignore_signals_flag
 from protocol import control_server, ensure_dir
 
@@ -110,7 +110,21 @@ def main():
     svc_log.info(f"Baud flash: {args.flash_baud}")
     svc_log.info(f"Token: {'configurado' if args.token else 'sin token'}")
 
-    # Leer MAC del dispositivo antes de arrancar el monitor (puerto libre).
+    def _register_mac(mac: str):
+        mac_file = tty_log_dir / "mac"
+        mac_file.write_text(mac)
+        try:
+            mac_file.chmod(0o666)
+        except Exception:
+            pass
+        try:
+            sn = mac_to_sn_sfy(mac)
+            DevicesFile().register_mac(mac, sn)
+            svc_log.info(f"[mac] SN: {sn} — registrado en devices.json")
+        except Exception as e:
+            svc_log.warning(f"[mac] error en devices.json: {e}")
+
+    # Leer MAC con esptool antes de arrancar el monitor (puerto libre).
     # Reintenta hasta 3 veces con 3s de espera: el chip puede no estar listo
     # inmediatamente después de que udev crea /dev/ttyUSBN.
     svc_log.info("[mac] leyendo MAC del dispositivo...")
@@ -125,19 +139,9 @@ def main():
     mac_file = tty_log_dir / "mac"
     if mac_addr:
         svc_log.info(f"[mac] MAC: {mac_addr}")
-        mac_file.write_text(mac_addr)
-        try:
-            mac_file.chmod(0o666)
-        except Exception:
-            pass
-        try:
-            sn = mac_to_sn_sfy(mac_addr)
-            DevicesFile().register_mac(mac_addr, sn)
-            svc_log.info(f"[mac] SN: {sn} — registrado en devices.json")
-        except Exception as e:
-            svc_log.warning(f"[mac] error en devices.json: {e}")
+        _register_mac(mac_addr)
     else:
-        svc_log.warning("[mac] no se pudo leer MAC (dispositivo no responde o no conectado)")
+        svc_log.warning("[mac] esptool no pudo leer MAC — se intentará desde serial output al bootear")
         if mac_file.exists():
             try:
                 mac_file.unlink()
@@ -159,6 +163,19 @@ def main():
     mon = EspMonitor(args.port_tty, args.serial_baud, logs_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log)
     svc_log.info("Iniciando monitor serial...\r\n")
     mon.start()
+
+    if not mac_addr:
+        def _mac_from_serial():
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                found = parse_mac_from_serial(mon.get_recent_output())
+                if found:
+                    svc_log.info(f"[mac] MAC leída desde serial: {found}")
+                    _register_mac(found)
+                    return
+                time.sleep(0.5)
+            svc_log.warning("[mac] no se pudo leer MAC desde serial output")
+        threading.Thread(target=_mac_from_serial, daemon=True).start()
 
     svc_log.info("Iniciando servidor de control TCP...\r\n")
     th = threading.Thread(target=control_server, args=(cfg, mon, svc_log), daemon=True)
