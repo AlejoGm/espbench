@@ -7,7 +7,7 @@ Entrypoint delgado: gestión de señales, logging, arranque del monitor y del
 servidor TCP de control (implementado en protocol.py).
 """
 
-import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading
+import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
@@ -110,9 +110,18 @@ def main():
     svc_log.info(f"Baud flash: {args.flash_baud}")
     svc_log.info(f"Token: {'configurado' if args.token else 'sin token'}")
 
-    # Leer MAC del dispositivo antes de arrancar el monitor (puerto libre)
+    # Leer MAC del dispositivo antes de arrancar el monitor (puerto libre).
+    # Reintenta hasta 3 veces con 3s de espera: el chip puede no estar listo
+    # inmediatamente después de que udev crea /dev/ttyUSBN.
     svc_log.info("[mac] leyendo MAC del dispositivo...")
-    mac_addr = read_mac(args.port_tty)
+    mac_addr = None
+    for _attempt in range(3):
+        mac_addr = read_mac(args.port_tty)
+        if mac_addr:
+            break
+        if _attempt < 2:
+            svc_log.info("[mac] reintentando en 3s...")
+            time.sleep(3)
     mac_file = tty_log_dir / "mac"
     if mac_addr:
         svc_log.info(f"[mac] MAC: {mac_addr}")
