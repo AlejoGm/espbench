@@ -144,15 +144,24 @@ cat > /usr/local/bin/wifi-provision.sh << EOSCRIPT
 #!/bin/bash
 sleep 15
 
-# Verificar si wlan0 tiene conectividad (ignorar ethernet)
-if ping -c 2 -W 5 -I wlan0 8.8.8.8 &>/dev/null; then
-    exit 0
-fi
+while true; do
+    # Verificar si wlan0 tiene conectividad (ignorar ethernet)
+    if ping -c 2 -W 5 -I wlan0 8.8.8.8 &>/dev/null; then
+        sleep 60  # conectado — recheck en 60s
+        continue
+    fi
 
-exec wifi-connect \
-    --portal-ssid "${AP_SSID}" \
-    --portal-passphrase "${AP_PASS}" \
-    --ui-directory /opt/wifi-connect
+    # Sin internet en wlan0 — levantar AP portal
+    wifi-connect \
+        --portal-ssid "${AP_SSID}" \
+        --portal-passphrase "${AP_PASS}" \
+        --ui-directory /opt/wifi-connect \
+        --activity-timeout 300
+
+    # wifi-connect salió — intentar reconectar a redes conocidas
+    nmcli device connect wlan0 2>/dev/null || true
+    sleep 20  # dar tiempo a NM para conectar antes del próximo chequeo
+done
 EOSCRIPT
 chmod +x /usr/local/bin/wifi-provision.sh
 
