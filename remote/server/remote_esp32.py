@@ -174,7 +174,9 @@ def main():
                     _register_mac(found)
                     return
                 time.sleep(0.5)
+            buf = mon.get_recent_output()
             svc_log.warning("[mac] no se pudo leer MAC desde serial output")
+            svc_log.warning(f"[mac] últimos 300 chars del buffer: {repr(buf[-300:])}")
         threading.Thread(target=_mac_from_serial, daemon=True).start()
 
     svc_log.info("Iniciando servidor de control TCP...\r\n")

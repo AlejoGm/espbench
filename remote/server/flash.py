@@ -161,7 +161,7 @@ def build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir: pat
 
 
 _MAC_RE = re.compile(r"MAC:\s*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
-_MAC_SERIAL_RE = re.compile(r'\bmac\s*=\s*([0-9A-Fa-f]{12})\b')
+_MAC_SERIAL_RE = re.compile(r'mac\s*=\s*([0-9A-Fa-f]{12})', re.IGNORECASE)
 
 
 def read_mac(port: str) -> Optional[str]:
