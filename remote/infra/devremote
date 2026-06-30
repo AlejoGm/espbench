@@ -47,6 +47,11 @@ scan_start_missing() {
 }
 
 reset_all() {
+  # Matar procesos huérfanos — sudo desacopla remote_esp32.py de tmux
+  # y sobreviven al kill-session
+  pkill -9 -f remote_esp32.py 2>/dev/null || true
+  sleep 1
+
   tmux ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do
     tmux kill-session -t "$s" || true
   done
