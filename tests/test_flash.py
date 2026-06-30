@@ -57,8 +57,14 @@ def test_parse_mac_uppercase():
 def test_parse_mac_lowercase():
     assert parse_mac_from_serial("mac = aabbccddeeff") == "AA:BB:CC:DD:EE:FF"
 
-def test_parse_mac_with_ansi():
+def test_parse_mac_with_ansi_wrapped_line():
+    # ANSI codes wrapping the whole line (not the MAC value)
     line = "\x1b[0;32mI (10) DeviceIdentity init(): serial = 123 mac = F8B3B7D848A8\x1b[0m\r\n"
+    assert parse_mac_from_serial(line) == "F8:B3:B7:D8:48:A8"
+
+def test_parse_mac_with_ansi_embedded_in_value():
+    # esp_idf_monitor colorizes the MAC value itself — ANSI code between '= ' and hex
+    line = "I (10) DeviceIdentity init(): serial = \x1b[96m185030827029496\x1b[0m mac = \x1b[96mF8B3B7D848A8\x1b[0m"
     assert parse_mac_from_serial(line) == "F8:B3:B7:D8:48:A8"
 
 def test_parse_mac_crlf():
