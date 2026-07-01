@@ -1,9 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+# Siempre correr como sfypi — es el usuario dueño del tmux server y los procesos.
+# Así devremote funciona igual desde systemd, SSH como sensipi, o cualquier usuario.
+if [ "$(whoami)" != "sfypi" ]; then
+  exec sudo -u sfypi "$0" "$@"
+fi
+
 BASE_PORT=5000
 PREFIX="esp32_"
-TMUX_SOCK="/tmp/esp_tmux.sock"
 
 usage() {
   echo "Usage: devremote [--reset|--status]"
@@ -32,7 +37,7 @@ start_one() {
   local sess
   sess="$(session_name_for_dev "$dev")"
 
-  if tmux -S "$TMUX_SOCK" has-session -t "$sess" 2>/dev/null; then
+  if tmux has-session -t "$sess" 2>/dev/null; then
     return 0
   fi
 
@@ -48,15 +53,13 @@ scan_start_missing() {
 }
 
 reset_all() {
-  # remote_esp32.py corre como root (vía sudo en tmux), pkill sin sudo
-  # no puede matarlos — usar sudo para asegurar que mueran todos.
   # Patrón "python3.*remote_esp32[.]py" evita matar el tmux server (cuyo cmdline
   # también contiene "remote_esp32.py") y evita que pkill se mate a sí mismo.
   sudo pkill -9 -f "python3.*remote_esp32[.]py" 2>/dev/null || true
   sleep 1
 
-  tmux -S "$TMUX_SOCK" ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do
-    tmux -S "$TMUX_SOCK" kill-session -t "$s" || true
+  tmux ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do
+    tmux kill-session -t "$s" || true
   done
 
   scan_start_missing
@@ -70,8 +73,8 @@ status() {
     sess="$(session_name_for_dev "$dev")"
     port="$(port_for_dev "$dev")"
 
-    if tmux -S "$TMUX_SOCK" has-session -t "$sess" 2>/dev/null; then
-      pid="$(tmux -S "$TMUX_SOCK" list-panes -t "$sess" -F "#{pane_pid}" 2>/dev/null | head -n1 || true)"
+    if tmux has-session -t "$sess" 2>/dev/null; then
+      pid="$(tmux list-panes -t "$sess" -F "#{pane_pid}" 2>/dev/null | head -n1 || true)"
       state="RUNNING"
     else
       pid="-"
@@ -94,12 +97,12 @@ attach_one() {
 
   sess="$(session_name_for_dev "$dev")"
 
-  if ! tmux -S "$TMUX_SOCK" has-session -t "$sess" 2>/dev/null; then
+  if ! tmux has-session -t "$sess" 2>/dev/null; then
     echo "Error: sesión tmux '$sess' no existe" >&2
     exit 1
   fi
 
-  exec tmux -S "$TMUX_SOCK" attach-session -t "$sess"
+  exec tmux attach-session -t "$sess"
 }
 
 unlock_one() {
