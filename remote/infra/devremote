@@ -49,7 +49,9 @@ scan_start_missing() {
 reset_all() {
   # remote_esp32.py corre como root (vía sudo en tmux), pkill sin sudo
   # no puede matarlos — usar sudo para asegurar que mueran todos.
-  sudo pkill -9 -f remote_esp32.py 2>/dev/null || true
+  # Patrón "python3.*remote_esp32[.]py" evita matar el tmux server (cuyo cmdline
+  # también contiene "remote_esp32.py") y evita que pkill se mate a sí mismo.
+  sudo pkill -9 -f "python3.*remote_esp32[.]py" 2>/dev/null || true
   sleep 1
 
   tmux ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do

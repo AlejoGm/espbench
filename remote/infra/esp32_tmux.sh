@@ -16,7 +16,7 @@ LOG_DIR="/opt/esp/logs/$BASENAME"
 mkdir -p "$LOG_DIR"
 # Rotar log anterior si existe
 if [ -s "$LOG_DIR/output.log" ]; then
-    mv "$LOG_DIR/output.log" "$LOG_DIR/output_$(date +%Y%m%d_%H%M%S).log"
+    sudo mv "$LOG_DIR/output.log" "$LOG_DIR/output_$(date +%Y%m%d_%H%M%S).log"
 fi
 
 tmux new-session -d -s "$SESSION" \
