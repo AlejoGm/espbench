@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TMUX_SOCK="/opt/esp/tmux.sock"
+TMUX_SOCK="/tmp/esp_tmux.sock"
 
 DEV="$1"                       # /dev/ttyUSBX
 BASENAME=$(basename "$DEV")    # ttyUSBX

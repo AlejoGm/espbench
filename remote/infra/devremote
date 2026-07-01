@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_PORT=5000
 PREFIX="esp32_"
-TMUX_SOCK="/opt/esp/tmux.sock"
+TMUX_SOCK="/tmp/esp_tmux.sock"
 
 usage() {
   echo "Usage: devremote [--reset|--status]"
