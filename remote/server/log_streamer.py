@@ -77,11 +77,16 @@ class LogStreamer:
             )
             self._tasks[tty_name] = task
 
-        # Esperar hasta que el websocket se desconecte
+        # Esperar hasta que el websocket se desconecte.
+        # Usar receive() con timeout para detectar cierres silenciosos (zombie WS).
         try:
             while True:
-                await asyncio.sleep(1)
-                # Mantener conexión activa; la tarea de tail hace el broadcast
+                try:
+                    msg = await asyncio.wait_for(websocket.receive(), timeout=30.0)
+                    if msg.get("type") == "websocket.disconnect":
+                        break
+                except asyncio.TimeoutError:
+                    pass  # sigue vivo — continuar
         except (asyncio.CancelledError, Exception):
             pass
         finally:
@@ -118,7 +123,11 @@ class LogStreamer:
                     continue
 
                 current_size = log_path.stat().st_size
-                if current_size <= position:
+                if current_size < position:
+                    # Log rotado o truncado — arrancar desde el final del nuevo archivo
+                    position = current_size
+                    continue
+                if current_size == position:
                     continue
 
                 with open(log_path, "r", errors="replace", newline='') as f:
