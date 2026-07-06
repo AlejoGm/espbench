@@ -46,6 +46,20 @@ body.device-page {
     letter-spacing: 0;
 }
 
+.author-tag {
+    font-size: 0.65rem;
+    font-weight: 500;
+    font-style: italic;
+    background: linear-gradient(90deg, #6366f1, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-left: 8px;
+    vertical-align: middle;
+    letter-spacing: 0.01em;
+    opacity: 0.85;
+}
+
 /* ── Device page header bar ── */
 
 .device-header {
