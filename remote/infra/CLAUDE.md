@@ -33,6 +33,7 @@ RUN+="/usr/bin/tmux new-session -d -s esp32_%k '/usr/local/bin/esp32_tmux.sh /de
 |-------|----------|
 | `devremote` | Scan devices, start missing sessions |
 | `devremote --reset` | Kill and restart all sessions |
+| `devremote --reset <N>` | Kill and restart session for ttyUSBN only |
 | `devremote --status` | Table: device / port / status / PID |
 | `devremote <N>` | Attach to session for ttyUSBN |
 | `devremote --unlock <N>` | Interactive unlock for ttyUSBN |

@@ -11,7 +11,7 @@ BASE_PORT=5000
 PREFIX="esp32_"
 
 usage() {
-  echo "Usage: devremote [--reset|--status]"
+  echo "Usage: devremote [--reset [N]|--status|--unlock <N>|<N>]"
   exit 1
 }
 
@@ -63,6 +63,25 @@ reset_all() {
   done
 
   scan_start_missing
+}
+
+reset_one() {
+  local num="$1"
+  local dev="/dev/ttyUSB${num}"
+  local sess
+  sess="$(session_name_for_dev "$dev")"
+
+  sudo pkill -9 -f "python3.*remote_esp32[.]py.*ttyUSB${num}" 2>/dev/null || true
+  sleep 1
+
+  tmux kill-session -t "$sess" 2>/dev/null || true
+
+  if [ ! -e "$dev" ]; then
+    echo "Advertencia: $dev no existe, sesión no reiniciada" >&2
+    return
+  fi
+
+  start_one "$dev"
 }
 
 status() {
@@ -121,7 +140,11 @@ unlock_one() {
 }
 
 if [ "${1:-}" = "--reset" ]; then
-  reset_all
+  if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+    reset_one "$2"
+  else
+    reset_all
+  fi
   exit 0
 elif [ "${1:-}" = "--status" ]; then
   status
