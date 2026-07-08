@@ -18,6 +18,7 @@
             <button class="action-btn" id="btn-unlock" title="Desbloquear dispositivo" style="display:none">🔓 Unlock</button>
             <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)">↺ Reset</button>
             <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
+            <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)">⟳ Sesión</button>
         </div>
     </div>
 
@@ -158,6 +159,14 @@
             setInterval(loadDeviceInfo, 10000);
             document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
             document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
+            document.getElementById('btn-devremote-reset').onclick = function() {
+                var btn = document.getElementById('btn-devremote-reset');
+                btn.disabled = true;
+                fetch('/api/device/' + tty + '/devremote-reset', {method: 'POST'})
+                    .then(function(r) { return r.json(); })
+                    .catch(function() {})
+                    .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
+            };
             document.getElementById('btn-unlock').onclick = function() {
                 if (!currentLockUser) { alert('No hay lock activo'); return; }
                 var token = window.prompt('Token para ' + currentLockUser + ':');

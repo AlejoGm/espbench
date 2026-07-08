@@ -208,6 +208,17 @@ body.device-page {
     cursor: default;
 }
 
+.action-btn--danger {
+    border-color: #5a2020;
+    color: #c0706070;
+}
+
+.action-btn--danger:hover {
+    background: #2a1515;
+    border-color: #8b3333;
+    color: #e07070;
+}
+
 /* ── Terminal (device.html) ── */
 
 .terminal {

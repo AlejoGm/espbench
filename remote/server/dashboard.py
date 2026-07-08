@@ -106,6 +106,18 @@ async def device_command(tty: str, command: str):
     return {"ok": True, "command": command, "session": session}
 
 
+@app.post("/api/device/{tty}/devremote-reset")
+async def devremote_reset(tty: str):
+    num = tty.replace("ttyUSB", "")
+    if not num.isdigit():
+        raise HTTPException(status_code=400, detail=f"tty no válido: {tty}")
+    result = subprocess.run(
+        ["/usr/local/bin/devremote", "--reset", num],
+        capture_output=True, text=True
+    )
+    return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
+
+
 @app.websocket("/ws/device/{tty:path}")
 async def ws_device(websocket: WebSocket, tty: str):
     await streamer.subscribe(tty, websocket)
