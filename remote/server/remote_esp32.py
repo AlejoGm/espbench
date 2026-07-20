@@ -160,7 +160,7 @@ def main():
     }
 
     elf_path = base / f"current_{os.path.basename(args.port_tty)}.elf"
-    mon = EspMonitor(args.port_tty, args.serial_baud, logs_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log)
+    mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log)
     svc_log.info("Iniciando monitor serial...\r\n")
     mon.start()
 

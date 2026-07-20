@@ -36,7 +36,8 @@ class LogStreamer:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _log_path(self, tty_name: str) -> pathlib.Path:
-        return self._logs_base / tty_name / "output.log"
+        today = datetime.now().strftime("%Y%m%d")
+        return self._logs_base / tty_name / today / "serial.log"
 
     def _ensure_lock(self, tty_name: str) -> asyncio.Lock:
         if tty_name not in self._locks:
