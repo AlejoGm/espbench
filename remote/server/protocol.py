@@ -182,7 +182,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
     elf_src = jobdir / "firmware.elf"
     if elf_src.exists():
         base_dir = pathlib.Path(cfg.get("base", "/opt/esp"))
-        elf_dst = base_dir / "current.elf"
+        elf_dst = base_dir / f"current_{tty_name}.elf"
         shutil.copy2(elf_src, elf_dst)
         svc_log.info(f"[control] firmware.elf → {elf_dst}\r\n")
 
