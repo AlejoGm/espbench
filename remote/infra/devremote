@@ -11,7 +11,7 @@ BASE_PORT=5000
 PREFIX="esp32_"
 
 usage() {
-  echo "Usage: devremote [--reset [N]|--status|--unlock <N>|<N>]"
+  echo "Usage: devremote [--reset [N]|--status|--unlock <N>|--cleanup [--dry-run] [--jobs-days N] [--logs-days N]|<N>]"
   exit 1
 }
 
@@ -139,6 +139,65 @@ unlock_one() {
   fi
 }
 
+cleanup() {
+  local dry_run=0
+  local jobs_days=7
+  local logs_days=30
+  local base="/opt/esp"
+
+  shift  # consumir "--cleanup"
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+      --dry-run)    dry_run=1 ;;
+      --jobs-days)  jobs_days="${2:?--jobs-days requiere valor}"; shift ;;
+      --logs-days)  logs_days="${2:?--logs-days requiere valor}"; shift ;;
+      *) echo "Opción desconocida: $1" >&2; exit 1 ;;
+    esac
+    shift
+  done
+
+  local removed_jobs=0 removed_days=0 freed=0
+
+  echo "=== devremote cleanup ==="
+  [ "$dry_run" = "1" ] && echo "(dry-run: no se borra nada)"
+  echo "  jobs > ${jobs_days}d  →  ${base}/jobs/"
+  echo "  logs > ${logs_days}d  →  ${base}/logs/YYYYMMDD/"
+  echo ""
+
+  # Jobs dirs
+  if [ -d "${base}/jobs" ]; then
+    while IFS= read -r -d '' jobdir; do
+      local size
+      size=$(du -sh "$jobdir" 2>/dev/null | cut -f1)
+      echo "  [job] $jobdir  ($size)"
+      if [ "$dry_run" = "0" ]; then
+        rm -rf "$jobdir"
+      fi
+      removed_jobs=$((removed_jobs + 1))
+    done < <(find "${base}/jobs" -mindepth 1 -maxdepth 1 -type d -mtime "+${jobs_days}" -print0)
+  fi
+
+  # Log day dirs
+  if [ -d "${base}/logs" ]; then
+    while IFS= read -r -d '' daydir; do
+      local size
+      size=$(du -sh "$daydir" 2>/dev/null | cut -f1)
+      echo "  [log] $daydir  ($size)"
+      if [ "$dry_run" = "0" ]; then
+        rm -rf "$daydir"
+      fi
+      removed_days=$((removed_days + 1))
+    done < <(find "${base}/logs" -mindepth 2 -maxdepth 2 -type d -mtime "+${logs_days}" -print0)
+  fi
+
+  echo ""
+  if [ "$dry_run" = "1" ]; then
+    echo "Encontrados: ${removed_jobs} job dir(s), ${removed_days} log day dir(s) para borrar"
+  else
+    echo "Borrados: ${removed_jobs} job dir(s), ${removed_days} log day dir(s)"
+  fi
+}
+
 if [ "${1:-}" = "--reset" ]; then
   if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
     reset_one "$2"
@@ -154,6 +213,9 @@ elif [ "${1:-}" = "--unlock" ]; then
     echo "Uso: devremote --unlock <número>" >&2; exit 1
   fi
   unlock_one "$2"
+  exit 0
+elif [ "${1:-}" = "--cleanup" ]; then
+  cleanup "$@"
   exit 0
 elif [ -z "${1:-}" ]; then
   scan_start_missing
