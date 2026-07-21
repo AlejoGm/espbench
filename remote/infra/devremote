@@ -171,7 +171,7 @@ cleanup() {
       size=$(du -sh "$jobdir" 2>/dev/null | cut -f1)
       echo "  [job] $jobdir  ($size)"
       if [ "$dry_run" = "0" ]; then
-        rm -rf "$jobdir"
+        sudo rm -rf "$jobdir"
       fi
       removed_jobs=$((removed_jobs + 1))
     done < <(find "${base}/jobs" -mindepth 1 -maxdepth 1 -type d -mtime "+${jobs_days}" -print0)
@@ -184,7 +184,7 @@ cleanup() {
       size=$(du -sh "$daydir" 2>/dev/null | cut -f1)
       echo "  [log] $daydir  ($size)"
       if [ "$dry_run" = "0" ]; then
-        rm -rf "$daydir"
+        sudo rm -rf "$daydir"
       fi
       removed_days=$((removed_days + 1))
     done < <(find "${base}/logs" -mindepth 2 -maxdepth 2 -type d -mtime "+${logs_days}" -print0)
