@@ -179,13 +179,6 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
         z.extractall(jobdir)
     svc_log.info(f"[control] descompresión completada\r\n")
 
-    elf_src = jobdir / "firmware.elf"
-    if elf_src.exists():
-        base_dir = pathlib.Path(cfg.get("base", "/opt/esp"))
-        elf_dst = base_dir / f"current_{tty_name}.elf"
-        shutil.copy2(elf_src, elf_dst)
-        svc_log.info(f"[control] firmware.elf → {elf_dst}\r\n")
-
     if not (jobdir / "flasher_args.json").exists():
         svc_log.error(f"[control] flasher_args.json no encontrado en {jobdir}\r\n")
         raise FileNotFoundError("flasher_args.json no encontrado")
@@ -353,6 +346,12 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
         svc_log.info(f"[flash] resultado: {status_msg} (erase={rc_erase}, write={rc_write})\r\n")
         nprint(f"[flash] resultado: {status_msg} (erase={rc_erase}, write={rc_write})")
         if ok:
+            elf_src = jobdir / "firmware.elf"
+            if elf_src.exists():
+                base_dir = pathlib.Path(cfg.get("base", "/opt/esp"))
+                elf_dst = base_dir / f"current_{tty_name}.elf"
+                shutil.copy2(elf_src, elf_dst)
+                svc_log.info(f"[control] firmware.elf → {elf_dst}\r\n")
             try:
                 last_user_file = pathlib.Path(cfg["logs_dir"]) / tty_name / "last_user"
                 last_user_file.parent.mkdir(parents=True, exist_ok=True)
