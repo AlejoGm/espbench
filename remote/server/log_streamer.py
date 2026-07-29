@@ -6,7 +6,6 @@ Parsea CHIPID en el stream y notifica al DeviceRegistry.
 import asyncio
 import pathlib
 import re
-from datetime import datetime
 from typing import Optional
 
 CHIPID_RE     = re.compile(r"CHIPID\s*=\s*(\d+)")
@@ -36,8 +35,7 @@ class LogStreamer:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _log_path(self, tty_name: str) -> pathlib.Path:
-        today = datetime.now().strftime("%Y%m%d")
-        return self._logs_base / tty_name / today / "serial.log"
+        return self._logs_base / tty_name / "output.log"
 
     def _ensure_lock(self, tty_name: str) -> asyncio.Lock:
         if tty_name not in self._locks:
