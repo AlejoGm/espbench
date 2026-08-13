@@ -128,7 +128,7 @@ unlock_one() {
   local dev="/dev/ttyUSB${1}"
   local name
   name="$(basename "$dev")"
-  local lock_file="/opt/esp/locks/$name"
+  local lock_file="${ESP_BASE:-/opt/esp}/locks/$name"
   if [ -f "$lock_file" ]; then
     local user
     user="$(cat "$lock_file")"
@@ -143,7 +143,7 @@ cleanup() {
   local dry_run=0
   local jobs_days=7
   local logs_days=30
-  local base="/opt/esp"
+  local base="${ESP_BASE:-/opt/esp}"
 
   shift  # consumir "--cleanup"
   while [[ "${1:-}" == --* ]]; do

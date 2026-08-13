@@ -14,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
 from flash import find_esptool_cmd, build_esptool_cmd, run_cmd, read_mac
 from monitor import _ignore_signals_flag, nprint, EspMonitor
+from server import paths
 
 # ========== Constantes ==========
 CHUNK_SIZE = 1024 * 1024          # 1 MB
@@ -61,8 +62,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
     lock_user = header.get("lock_user", "").strip()
     lock_token = header.get("lock_token", "").strip()
     tty_name = os.path.basename(cfg["tty"])
-    locks_dir = pathlib.Path(cfg.get("base", "/opt/esp")) / "locks"
-    lock_file = locks_dir / tty_name
+    lock_file = paths.lock_file(tty_name)
 
     def _read_lock():
         parts = lock_file.read_text().strip().split(':', 1)
@@ -101,7 +101,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
                             "message": "Token incorrecto"})
             return
 
-    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
     lock_file.write_text(f"{lock_user}:{lock_token}")
     try:
         lock_file.chmod(0o666)
@@ -113,8 +113,8 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
     # 2) preparar job + ACK
     job_id = header.get("job_id") or time.strftime("job_%Y%m%d_%H%M%S")
     svc_log.info(f"[control] job_id: {job_id}\r\n")
-    jobs_dir: pathlib.Path = cfg["jobs_dir"]
-    logs_dir: pathlib.Path = cfg["logs_dir"]
+    jobs_dir: pathlib.Path = paths.jobs_dir()
+    logs_dir: pathlib.Path = paths.logs_dir()
     jobdir = jobs_dir / job_id; ensure_dir(jobdir)
     svc_log.info(f"[control] directorio de trabajo: {jobdir}\r\n")
     artifact = jobdir / "artifact.zip"
@@ -226,7 +226,7 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
             nprint("[flash] leyendo MAC del dispositivo...")
             mac_now = read_mac(cfg["tty"])
             if mac_now:
-                mac_file = pathlib.Path(cfg["logs_dir"]) / tty_name / "mac"
+                mac_file = paths.mac_file(tty_name)
                 if mac_file.exists():
                     registered = mac_file.read_text().strip().upper()
                     if mac_now.upper() != registered:
@@ -348,12 +348,11 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
         if ok:
             elf_src = jobdir / "firmware.elf"
             if elf_src.exists():
-                base_dir = pathlib.Path(cfg.get("base", "/opt/esp"))
-                elf_dst = base_dir / f"current_{tty_name}.elf"
+                elf_dst = paths.current_elf_file(tty_name)
                 shutil.copy2(elf_src, elf_dst)
                 svc_log.info(f"[control] firmware.elf → {elf_dst}\r\n")
             try:
-                last_user_file = pathlib.Path(cfg["logs_dir"]) / tty_name / "last_user"
+                last_user_file = paths.last_user_file(tty_name)
                 last_user_file.parent.mkdir(parents=True, exist_ok=True)
                 last_user_file.write_text(lock_user)
                 last_user_file.chmod(0o666)

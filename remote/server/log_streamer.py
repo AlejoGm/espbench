@@ -6,7 +6,11 @@ Parsea CHIPID en el stream y notifica al DeviceRegistry.
 import asyncio
 import pathlib
 import re
+import sys
 from typing import Optional
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+from server import paths
 
 CHIPID_RE     = re.compile(r"CHIPID\s*=\s*(\d+)")
 FW_PROJECT_RE = re.compile(r"app_init: Project name:\s+(\S+)")
@@ -24,8 +28,8 @@ class LogStreamer:
     WebSocket suscritos a ese tty.
     """
 
-    def __init__(self, logs_base: str = "/opt/esp/logs", registry=None):
-        self._logs_base = pathlib.Path(logs_base)
+    def __init__(self, logs_base: Optional[str] = None, registry=None):
+        self._logs_base = pathlib.Path(logs_base) if logs_base else paths.logs_dir()
         self._registry = registry
         # tty_name → set of websockets
         self._subscribers: dict[str, set] = {}

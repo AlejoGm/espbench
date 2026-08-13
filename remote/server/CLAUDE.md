@@ -12,6 +12,14 @@ Core server logic running on Raspberry Pi. One instance per device (ttyUSBN).
 | `monitor.py` | `esp_idf_monitor` PTY wrapper: circular buffer, log rotation |
 | `device_registry.py` | Device metadata: MAC, SN, fw info, status, locking |
 | `dashboard.py` | FastAPI app: REST + WebSocket APIs + static file serving |
+| `paths.py` | Fuente única de rutas bajo `ESP_BASE` (env var, default `/opt/esp`) — nadie más debe hardcodear `/opt/esp` |
+| `device_log.py` | `DeviceLog`: bufferea el log de un device hasta conocer su MAC, después escribe a `paths.device_output_log(mac)`. Todavía no conectado a `EspMonitor`/`protocol.py` |
+
+## Rutas (`paths.py`)
+
+Todo path generado en runtime (`logs/`, `jobs/`, `locks/`, `devices.json`, `current_<tty>.elf`, etc.) sale de `paths.py`, nunca de un literal `"/opt/esp"` repetido. Base configurable con la env var `ESP_BASE` (`remote_esp32.py --base` la setea al arrancar).
+
+`paths.py` también expone el esquema nuevo por-device (`device_home(mac)`, `device_output_log(mac)`, ...), keyed por MAC en vez de tty — todavía sin usar, es el target de la próxima fase del refactor (ver conversación de arquitectura / `DeviceLog`).
 
 ## Entrypoint (`remote_esp32.py`)
 

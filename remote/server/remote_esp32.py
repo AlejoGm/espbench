@@ -15,6 +15,7 @@ from device_registry import DevicesFile
 from flash import read_mac, parse_mac_from_serial
 from monitor import EspMonitor, _ignore_signals_flag
 from protocol import control_server, ensure_dir
+from server import paths
 
 # ========== Bandera global de terminación ==========
 _shutdown_flag = threading.Event()
@@ -87,16 +88,18 @@ def main():
     nprint("remote_esp32.py - Monitor + Flasheo Remoto")
     nprint("=" * 60)
 
-    base = pathlib.Path(args.base)
-    logs_dir = base / "logs"
-    jobs_dir = base / "jobs"
+    # --base setea ESP_BASE para todo lo que lea paths.py en este proceso.
+    os.environ["ESP_BASE"] = args.base
+    base = paths.esp_base()
+    logs_dir = paths.logs_dir()
+    jobs_dir = paths.jobs_dir()
 
     nprint(f"[main] directorio base: {base}")
     nprint(f"[main] logs: {logs_dir}")
     nprint(f"[main] jobs: {jobs_dir}")
 
     tty_name = os.path.basename(args.port_tty)
-    tty_log_dir = logs_dir / tty_name
+    tty_log_dir = paths.tty_log_dir(tty_name)
     ensure_dir(logs_dir)
     ensure_dir(jobs_dir)
     ensure_dir(tty_log_dir)
@@ -111,7 +114,7 @@ def main():
     svc_log.info(f"Token: {'configurado' if args.token else 'sin token'}")
 
     def _register_mac(mac: str):
-        mac_file = tty_log_dir / "mac"
+        mac_file = paths.mac_file(tty_name)
         mac_file.write_text(mac)
         try:
             mac_file.chmod(0o666)
@@ -136,7 +139,7 @@ def main():
         if _attempt < 2:
             svc_log.info("[mac] reintentando en 3s...")
             time.sleep(3)
-    mac_file = tty_log_dir / "mac"
+    mac_file = paths.mac_file(tty_name)
     if mac_addr:
         svc_log.info(f"[mac] MAC: {mac_addr}")
         _register_mac(mac_addr)
@@ -154,12 +157,9 @@ def main():
         "chip": args.chip,
         "flash_baud": args.flash_baud,
         "token": args.token,
-        "logs_dir": logs_dir,
-        "jobs_dir": jobs_dir,
-        "base": base
     }
 
-    elf_path = base / f"current_{os.path.basename(args.port_tty)}.elf"
+    elf_path = paths.current_elf_file(tty_name)
     mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log)
     svc_log.info("Iniciando monitor serial...\r\n")
     mon.start()

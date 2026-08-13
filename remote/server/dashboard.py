@@ -8,12 +8,12 @@ from urllib.parse import unquote
 from fastapi import Body, FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
 
+from server import paths
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
 BASE_DIR = pathlib.Path(__file__).parent.parent
 DASHBOARD_DIR = BASE_DIR / "dashboard"
-_VERSION_FILE = pathlib.Path("/opt/esp/VERSION")
 
 app = FastAPI()
 registry = DeviceRegistry()
@@ -28,7 +28,8 @@ async def _startup():
 @app.get("/api/version")
 async def get_version():
     try:
-        version = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "dev"
+        version_file = paths.version_file()
+        version = version_file.read_text().strip() if version_file.exists() else "dev"
     except Exception:
         version = "dev"
     return {"version": version}
@@ -55,7 +56,6 @@ async def get_device(tty: str):
     return dataclasses.asdict(device)
 
 
-_LOCKS_DIR = pathlib.Path("/opt/esp/locks")
 _devices_file = DevicesFile()
 
 
@@ -78,7 +78,7 @@ async def device_unlock(tty: str, body: dict = Body(...)):
     lock_token = body.get("lock_token", "").strip()
     if not lock_user or not lock_token:
         raise HTTPException(status_code=400, detail="lock_user y lock_token requeridos")
-    lock_file = _LOCKS_DIR / tty
+    lock_file = paths.lock_file(tty)
     if not lock_file.exists():
         return {"ok": True, "message": "no estaba bloqueado"}
     parts = lock_file.read_text().strip().split(':', 1)

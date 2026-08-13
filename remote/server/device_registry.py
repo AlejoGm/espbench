@@ -9,17 +9,14 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-
-_LOCKS_DIR   = pathlib.Path("/opt/esp/locks")
-_LOGS_DIR    = pathlib.Path("/opt/esp/logs")
-_DEVICES_FILE = pathlib.Path("/opt/esp/devices.json")
+from server import paths
 
 
 class DevicesFile:
-    """Process-safe read/write of /opt/esp/devices.json (fcntl.flock)."""
+    """Process-safe read/write de devices.json (fcntl.flock). Ver paths.devices_file()."""
 
-    def __init__(self, path: pathlib.Path = _DEVICES_FILE):
-        self._path = path
+    def __init__(self, path: Optional[pathlib.Path] = None):
+        self._path = path or paths.devices_file()
         self._lock = threading.Lock()
 
     def _update(self, updater, silent: bool = True):
@@ -106,10 +103,10 @@ class DeviceInfo:
 
 
 class DeviceRegistry:
-    def __init__(self, dev_dir: str = "/dev", jobs_dir: str = "/opt/esp/jobs",
+    def __init__(self, dev_dir: str = "/dev", jobs_dir: Optional[str] = None,
                  devices_file: Optional[DevicesFile] = None):
         self._dev_dir = pathlib.Path(dev_dir)
-        self._jobs_dir = pathlib.Path(jobs_dir)
+        self._jobs_dir = pathlib.Path(jobs_dir) if jobs_dir else paths.jobs_dir()
         self._fw_info: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._devices_file = devices_file or DevicesFile()
@@ -160,7 +157,7 @@ class DeviceRegistry:
 
     @staticmethod
     def _get_tty_mac(tty_name: str) -> Optional[str]:
-        f = _LOGS_DIR / tty_name / "mac"
+        f = paths.mac_file(tty_name)
         try:
             if f.exists():
                 return f.read_text().strip() or None
@@ -206,7 +203,7 @@ class DeviceRegistry:
     @staticmethod
     def _get_last_flash_user(tty_name: str) -> Optional[str]:
         try:
-            f = _LOGS_DIR / tty_name / "last_user"
+            f = paths.last_user_file(tty_name)
             if f.exists():
                 return f.read_text().strip() or None
         except Exception:
@@ -216,7 +213,7 @@ class DeviceRegistry:
     @staticmethod
     def _get_lock_user(tty_name: str) -> Optional[str]:
         try:
-            f = _LOCKS_DIR / tty_name
+            f = paths.lock_file(tty_name)
             if f.exists():
                 content = f.read_text().strip()
                 return content.split(":", 1)[0] or None

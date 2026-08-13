@@ -109,8 +109,7 @@ class TestSn:
         assert devices[0].device_key is None
 
     def test_sn_derived_from_mac_file(self, tmp_path, monkeypatch):
-        import server.device_registry as dr
-        monkeypatch.setattr(dr, "_LOGS_DIR", tmp_path / "logs")
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
         registry, dev_dir, _ = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
         mac_dir = tmp_path / "logs" / "ttyUSB0"
@@ -123,8 +122,7 @@ class TestSn:
         assert device.sn.isdigit()
 
     def test_mac_isolation_across_devices(self, tmp_path, monkeypatch):
-        import server.device_registry as dr
-        monkeypatch.setattr(dr, "_LOGS_DIR", tmp_path / "logs")
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
         registry, dev_dir, _ = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
         (dev_dir / "ttyUSB1").touch()
