@@ -11,6 +11,13 @@ System-level infrastructure for Raspberry Pi. Handles device auto-discovery, ses
 | `devremote` | Bash | CLI for session management (`devremote`, `--status`, `--reset`, `<N>`, `--unlock <N>`) |
 | `devremote.service` | systemd | One-shot service: starts missing sessions at boot |
 | `dashboard.service` | systemd | Runs FastAPI dashboard server |
+| `update.sh` | Bash | Updates an existing Pi: git fetch/pull + `install.sh` + restart `dashboard` + `devremote --reset` |
+
+## update.sh
+
+Run from the repo clone on the Pi (not from `/opt/esp`): `sudo bash remote/infra/update.sh`.
+
+Aborts if the repo has uncommitted local changes. No-ops if already up to date with `origin/<current-branch>`. Always resets `devremote` sessions after install — restarting the `devremote` service alone only starts *missing* sessions, it doesn't restart already-running ones onto the new code.
 
 ## udev Rule (`99-esp32.rules`)
 

@@ -98,8 +98,10 @@ Dashboard: `http://<pi-hostname>:8080`
 ## Update (existing Pi)
 
 ```bash
-sudo git pull && sudo bash remote/install.sh && sudo systemctl restart dashboard devremote
+sudo bash remote/infra/update.sh
 ```
+
+Hace `fetch` + `pull` (aborta si hay cambios locales sin commitear), reinstala, reinicia `dashboard` y resetea las sesiones de `devremote` (necesario para que los devices ya conectados corran el código nuevo — reiniciar el servicio `devremote` solo arranca sesiones que falten, no las existentes).
 
 ---
 
