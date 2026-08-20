@@ -14,6 +14,15 @@ Core server logic running on Raspberry Pi. One instance per device (ttyUSBN).
 | `dashboard.py` | FastAPI app: REST + WebSocket APIs + static file serving |
 | `paths.py` | Fuente única de rutas bajo `ESP_BASE` (env var, default `/opt/esp`) — nadie más debe hardcodear `/opt/esp` |
 | `device_log.py` | `DeviceLog`: bufferea el log de un device hasta conocer su MAC, después escribe a `paths.device_output_log(mac)`. Todavía no conectado a `EspMonitor`/`protocol.py` |
+| `device.py` | `TtyPort`/`Device`/`DeviceManager`: modelo de objetos + FSM (DISCOVERING→MONITORING⇄FLASHING/ERASING→DISCONNECTED). Todavía no conectado a `remote_esp32.py`/`protocol.py` |
+
+## Modelo de device (`device.py`)
+
+`TtyPort` (puerto físico) y `Device` (identidad lógica, keyed por MAC) están separados a propósito — un `Device` arranca sin MAC (`DISCOVERING`), se promueve a `MONITORING` apenas se conoce (`Device.promote(mac)`), y esa promoción es también el punto donde se adopta el `DeviceLog`. Transiciones inválidas (flashear dos veces, borrar mientras flashea, etc.) levantan `InvalidTransition` en vez de asumir que "nunca pasa" — reemplaza el `_ignore_signals_flag` + `mon.stop()/start()` sueltos de hoy.
+
+1 proceso `remote_esp32.py` = 1 `TtyPort` = 1 `Device`, para toda su vida — no hay `attach()` para cambiar de tty a mitad de proceso (ver decisión de no consolidar a un servicio único en la memoria del proyecto). `disconnect()` es terminal.
+
+No confundir con `device_registry.py` (`DeviceRegistry`/`DeviceInfo`) — ese es el modelo de lectura que usa hoy el dashboard, escaneando archivos. Se conectan en una fase futura (dashboard lee `devices/<mac>/state.json` en vez de inferir por `tmux has-session`).
 
 ## Rutas (`paths.py`)
 
