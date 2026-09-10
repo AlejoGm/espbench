@@ -213,3 +213,13 @@ def test_manager_wires_tcp_port_from_tty(monkeypatch, tmp_path):
     manager = DeviceManager("/dev/ttyUSB3", mac_reader=lambda: None)
     assert manager.tty_port.tcp_port == 5003
     assert manager.device.tty_name == "ttyUSB3"
+
+
+def test_manager_accepts_explicit_tcp_port(monkeypatch, tmp_path):
+    """El puerto no tiene por qué salir del nombre del tty (ver issue #15 —
+    puertos estables por slot USB: el tty podría llamarse esp-slot3 y el
+    puerto seguir siendo el que decide la capa de infra, no el nombre)."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/esp-slot3", mac_reader=lambda: None, tcp_port=5003)
+    assert manager.tty_port.tcp_port == 5003
+    assert manager.device.tty_name == "esp-slot3"

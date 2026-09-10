@@ -24,13 +24,22 @@ vida del proceso (ver decisión de arquitectura: no se consolida a un
 servicio único). Por eso el TtyPort se fija en el constructor de Device y
 no hay un "attach()" para cambiarlo — "enchufar" pasa una sola vez, al
 crear el Device; "desenchufar" (disconnect()) es terminal.
+
+Cada transición (aceptada o rechazada) se loguea vía taglog.py (TAG="device")
+— primer consumidor real de esa librería. Migrar el resto de los módulos
+(nprint() en remote_esp32.py/monitor.py/protocol.py/flash.py) a taglog es
+un paso aparte, todavía no hecho.
 """
 import dataclasses
 import enum
 import pathlib
 import threading
+from typing import Optional
 
+from server import taglog
 from server.device_log import DeviceLog
+
+TAG = "device"
 
 
 class DeviceState(enum.Enum):
@@ -94,55 +103,74 @@ class Device:
 
     def _require(self, *allowed: DeviceState, action: str) -> None:
         if self.state not in allowed:
-            raise InvalidTransition(
+            msg = (
                 f"{action}: estado actual es {self.state.value}, "
                 f"se esperaba uno de {[s.value for s in allowed]}"
             )
+            taglog.warn(TAG, f"{self.tty_name} (mac={self.mac or '?'}): transición rechazada — {msg}")
+            raise InvalidTransition(msg)
+
+    def _log_transition(self, from_state: DeviceState, to_state: DeviceState) -> None:
+        taglog.info(TAG, f"{self.tty_name} (mac={self.mac or '?'}): {from_state.value} -> {to_state.value}")
 
     def promote(self, mac: str) -> None:
         """DISCOVERING|UNKNOWN → MONITORING. Adopta el log a esta MAC."""
         with self._lock:
             self._require(DeviceState.DISCOVERING, DeviceState.UNKNOWN, action="promote")
+            from_state = self.state
             self.mac = mac
             self.device_log.adopt(mac)
             self.state = DeviceState.MONITORING
+            self._log_transition(from_state, self.state)
 
     def mark_unknown(self) -> None:
         """DISCOVERING → UNKNOWN. La MAC no se pudo leer (esptool ni serial)."""
         with self._lock:
             self._require(DeviceState.DISCOVERING, action="mark_unknown")
+            from_state = self.state
             self.state = DeviceState.UNKNOWN
+            self._log_transition(from_state, self.state)
 
     def start_flash(self) -> None:
         """MONITORING → FLASHING. Rechaza flashear si ya está flasheando/borrando."""
         with self._lock:
             self._require(DeviceState.MONITORING, action="start_flash")
+            from_state = self.state
             self.state = DeviceState.FLASHING
+            self._log_transition(from_state, self.state)
 
     def finish_flash(self) -> None:
         """FLASHING → MONITORING."""
         with self._lock:
             self._require(DeviceState.FLASHING, action="finish_flash")
+            from_state = self.state
             self.state = DeviceState.MONITORING
+            self._log_transition(from_state, self.state)
 
     def start_erase(self) -> None:
         """MONITORING → ERASING."""
         with self._lock:
             self._require(DeviceState.MONITORING, action="start_erase")
+            from_state = self.state
             self.state = DeviceState.ERASING
+            self._log_transition(from_state, self.state)
 
     def finish_erase(self) -> None:
         """ERASING → MONITORING."""
         with self._lock:
             self._require(DeviceState.ERASING, action="finish_erase")
+            from_state = self.state
             self.state = DeviceState.MONITORING
+            self._log_transition(from_state, self.state)
 
     def disconnect(self) -> None:
         """Cualquier estado → DISCONNECTED. Terminal e idempotente."""
         with self._lock:
             if self.state == DeviceState.DISCONNECTED:
                 return
+            from_state = self.state
             self.state = DeviceState.DISCONNECTED
+            self._log_transition(from_state, self.state)
             self.device_log.close()
 
 
@@ -155,10 +183,20 @@ class DeviceManager:
     mac_reader es inyectado a propósito: en producción (fase 3) sería algo
     como `lambda: flash.read_mac(tty_path)`. Acá permite testear la FSM
     sin esptool ni hardware.
+
+    tcp_port es explícito, no se re-deriva del nombre del tty (ver issue
+    #15 — puertos estables por slot USB). `remote_esp32.py` ya recibe
+    `--control-port` por CLI; si algún día el tty se llama `esp-slot3` en
+    vez de `ttyUSB3`, esto sigue andando sin tocar nada acá. Si no se pasa
+    (tests, uso exploratorio), cae al derivado por nombre de `ttyUSBN`.
     """
 
-    def __init__(self, tty_path: str, mac_reader):
-        self.tty_port = TtyPort.from_tty_path(tty_path)
+    def __init__(self, tty_path: str, mac_reader, tcp_port: Optional[int] = None):
+        self.tty_port = (
+            TtyPort(tty_path=tty_path, tcp_port=tcp_port)
+            if tcp_port is not None
+            else TtyPort.from_tty_path(tty_path)
+        )
         self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name))
         self._mac_reader = mac_reader
 

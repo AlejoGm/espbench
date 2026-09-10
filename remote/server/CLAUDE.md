@@ -15,6 +15,15 @@ Core server logic running on Raspberry Pi. One instance per device (ttyUSBN).
 | `paths.py` | Fuente única de rutas bajo `ESP_BASE` (env var, default `/opt/esp`) — nadie más debe hardcodear `/opt/esp` |
 | `device_log.py` | `DeviceLog`: bufferea el log de un device hasta conocer su MAC, después escribe a `paths.device_output_log(mac)`. Todavía no conectado a `EspMonitor`/`protocol.py` |
 | `device.py` | `TtyPort`/`Device`/`DeviceManager`: modelo de objetos + FSM (DISCOVERING→MONITORING⇄FLASHING/ERASING→DISCONNECTED). Todavía no conectado a `remote_esp32.py`/`protocol.py` |
+| `taglog.py` | Logging con TAG + timestamp, estilo `ESP_LOGI(TAG, ...)`. Sinks pluggables (`add_sink()`), default solo stdout. Primer consumidor real: `device.py` |
+
+## Logging (`taglog.py`)
+
+Reemplazo (todavía parcial) de los `nprint()` duplicados en `remote_esp32.py`/`monitor.py`/`protocol.py`/`flash.py` y del `logging.getLogger` ad hoc — un `TAG` estático por módulo, `taglog.info(TAG, msg)` / `.warn()` / `.error()` / `.debug()`, mismo formato en todos lados.
+
+Dónde termina cada línea (archivo, JSON lines por device, lo que sea) es un sink — hoy solo hay uno a stdout. Agregar destino nuevo es `taglog.add_sink(fn)`, sin tocar ningún call site. Visualización (dashboard, etc.) — sin decidir todavía.
+
+`device.py` ya loguea cada transición de su FSM (aceptada o rechazada) por acá — es el único módulo migrado. El resto (`remote_esp32.py`, `monitor.py`, `protocol.py`, `flash.py`) sigue con `nprint()`/`svc_log` — migrarlos es un paso aparte.
 
 ## Modelo de device (`device.py`)
 

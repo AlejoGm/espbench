@@ -22,3 +22,6 @@ jobs/
 .claude/worktrees/
 
 client/.venv/
+
+# graphify (knowledge graph generado, no versionado)
+graphify-out/
