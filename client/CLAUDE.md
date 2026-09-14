@@ -17,6 +17,12 @@ Developer-side deploy tool. Runs on dev machine to build ESP-IDF firmware and fl
 
 Config in `.flashcfg.json` (gitignored, user-created per project).
 
+## Build dir
+
+`--build-dir` (default `build`) selects which build dir to compile and flash; relative paths resolve
+against `project_root`. It is threaded into every `idf.py` call (`-B`), so a project that builds
+several products into separate dirs can flash a specific one instead of whatever is left in `build/`.
+
 ## Flash Config Schema (`.flashcfg.json`)
 
 ```json
