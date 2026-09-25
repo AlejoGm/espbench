@@ -9,6 +9,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
 from server.log_streamer import LogStreamer
 
@@ -32,6 +33,10 @@ class MockWebSocket:
         if self._closed:
             raise RuntimeError("WebSocket closed")
         self.sent.append(text)
+
+    async def receive(self):
+        """Simula un cliente real: bloquea sin mandar nada hasta que el test cancela la tarea."""
+        await asyncio.Future()
 
     def close_ws(self):
         self._closed = True

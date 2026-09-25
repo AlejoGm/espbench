@@ -1,6 +1,7 @@
 import dataclasses
 import fcntl
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -36,6 +37,15 @@ class DevicesFile:
                         f.seek(0)
                         f.truncate()
                         f.write(json.dumps(data, indent=2))
+                        # El flush tiene que pasar ANTES de soltar el flock: f.write()
+                        # solo llega al buffer de Python, y el cierre del `with` (que
+                        # es lo que flushea) ocurre despues del LOCK_UN. Sin esto, dos
+                        # procesos que registran MAC a la vez (ej. devremote --reset,
+                        # que levanta todos los devices juntos) intercalan truncate y
+                        # flush, y el archivo queda con un JSON corto + la cola del
+                        # anterior -> "Extra data" al parsear.
+                        f.flush()
+                        os.fsync(f.fileno())
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
                 try:
@@ -75,8 +85,20 @@ class DevicesFile:
             if not self._path.exists():
                 return {}
             try:
-                return json.loads(self._path.read_text())
-            except Exception:
+                # Lock compartido: sin esto se puede leer un archivo a medio
+                # reescribir por otro proceso.
+                with open(self._path, "r") as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)
+                    try:
+                        content = f.read()
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+                return json.loads(content) if content.strip() else {}
+            except Exception as e:
+                # Devolver {} es el fallback, pero en silencio esconde un
+                # devices.json corrupto: el dashboard lista los devices sin sus
+                # nombres y nadie se entera hasta que falla un rename.
+                print(f"[device_registry] devices.json ilegible: {e}", flush=True)
                 return {}
 
     def find_by_key(self, device_key: str) -> Optional[tuple]:

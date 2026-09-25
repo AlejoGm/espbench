@@ -1,3 +1,5 @@
+import fcntl
+import json
 import pathlib
 import sys
 from unittest.mock import patch, MagicMock
@@ -7,7 +9,7 @@ import pytest
 _repo_root = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(_repo_root))
 sys.path.insert(0, str(_repo_root / "remote"))
-from server.device_registry import DeviceRegistry, DeviceInfo
+from server.device_registry import DeviceRegistry, DeviceInfo, DevicesFile
 
 
 def make_registry(tmp_path: pathlib.Path, create_jobs_dir: bool = True):
@@ -194,3 +196,62 @@ class TestGetDevice:
         assert isinstance(device, DeviceInfo)
         assert device.tty_name == "ttyUSB0"
         assert device.port_tcp == 5000
+
+
+class TestDevicesFileIntegrity:
+    """Regresion: devices.json se corrompia al escribir concurrentemente.
+
+    Causa: f.write() solo llena el buffer de Python y el flush real ocurre al
+    cerrar el archivo, DESPUES de soltar el flock. Dos procesos registrando MAC
+    a la vez (devremote --reset levanta todos los devices juntos) intercalaban
+    truncate y flush, dejando un JSON corto pegado a la cola del anterior.
+    """
+
+    def test_shrinking_write_leaves_no_tail(self, tmp_path):
+        """Escribir un JSON mas corto sobre uno mas largo no debe dejar cola."""
+        path = tmp_path / "devices.json"
+        df = DevicesFile(path=path)
+
+        for i in range(5):
+            df.register_mac(f"AA:BB:CC:DD:EE:0{i}", f"sn{i}")
+        assert len(json.loads(path.read_text())) == 5
+
+        # Ahora una escritura que achica el archivo a una sola entrada.
+        def _shrink(data):
+            data.clear()
+            data["AA:BB:CC:DD:EE:00"] = {"device_key": "solo", "hw_model": None}
+
+        df._update(_shrink, silent=False)
+
+        raw = path.read_text()
+        data = json.loads(raw)  # explota con "Extra data" si quedo cola
+        assert list(data) == ["AA:BB:CC:DD:EE:00"]
+        assert raw.strip().endswith("}")
+
+    def test_data_is_on_disk_before_lock_is_released(self, tmp_path, monkeypatch):
+        """El invariante que rompia todo: cuando se suelta el flock, lo escrito
+        ya tiene que estar en disco. Sin el flush+fsync, el buffer de Python se
+        vacia recien al cerrar el archivo (despues del LOCK_UN), y otro proceso
+        que tomaba el lock en el medio leia datos viejos y reescribia encima.
+        """
+        path = tmp_path / "devices.json"
+        df = DevicesFile(path=path)
+        df.register_mac("AA:BB:CC:DD:EE:00", "viejo")
+
+        visto = {}
+        real_flock = fcntl.flock
+
+        def spy(fd, op):
+            if op == fcntl.LOCK_UN and "contenido" not in visto:
+                # Leer con otro descriptor, como haria otro proceso que
+                # justo agarra el lock recien liberado.
+                visto["contenido"] = path.read_text()
+            return real_flock(fd, op)
+
+        monkeypatch.setattr(fcntl, "flock", spy)
+        df.register_mac("11:22:33:44:55:66", "nuevo")
+
+        en_disco = json.loads(visto["contenido"])
+        assert "11:22:33:44:55:66" in en_disco, (
+            "al soltar el lock, el dato nuevo todavia no estaba en disco"
+        )
