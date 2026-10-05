@@ -115,7 +115,9 @@ def handle_control(sock, cfg, mon: EspMonitor, svc_log: logging.Logger):
     svc_log.info(f"[control] job_id: {job_id}\r\n")
     jobs_dir: pathlib.Path = cfg["jobs_dir"]
     logs_dir: pathlib.Path = cfg["logs_dir"]
-    jobdir = jobs_dir / job_id; ensure_dir(jobdir)
+    # El tty va en el nombre del jobdir: DeviceRegistry._get_last_flash_ts lo busca
+    # por job_*_<tty>. El job_id del cliente trae el nombre amigable, no el tty.
+    jobdir = jobs_dir / f"{job_id}_{tty_name}"; ensure_dir(jobdir)
     svc_log.info(f"[control] directorio de trabajo: {jobdir}\r\n")
     artifact = jobdir / "artifact.zip"
 

@@ -157,7 +157,7 @@ class TestLastFlashTs:
     def test_last_flash_ts_from_jobs(self, tmp_path):
         registry, dev_dir, jobs_dir = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
-        (jobs_dir / "job_20260623_120000").mkdir()
+        (jobs_dir / "job_20260623_120000_board1_ttyUSB0").mkdir()
         with patch("subprocess.run", side_effect=mock_tmux_down):
             device = registry.get_device("ttyUSB0")
         assert device.last_flash_ts == "2026-06-23T12:00:00"
@@ -165,12 +165,42 @@ class TestLastFlashTs:
     def test_last_flash_ts_picks_most_recent(self, tmp_path):
         registry, dev_dir, jobs_dir = make_registry(tmp_path)
         (dev_dir / "ttyUSB0").touch()
-        (jobs_dir / "job_20260623_100000").mkdir()
-        (jobs_dir / "job_20260623_120000").mkdir()
-        (jobs_dir / "job_20260622_235900").mkdir()
+        (jobs_dir / "job_20260623_100000_board1_ttyUSB0").mkdir()
+        (jobs_dir / "job_20260623_120000_board1_ttyUSB0").mkdir()
+        (jobs_dir / "job_20260622_235900_board1_ttyUSB0").mkdir()
         with patch("subprocess.run", side_effect=mock_tmux_down):
             device = registry.get_device("ttyUSB0")
         assert device.last_flash_ts == "2026-06-23T12:00:00"
+
+    def test_last_flash_ts_per_device(self, tmp_path):
+        """Regresion: cada device ve SU ultimo flasheo, no el mas reciente de cualquiera."""
+        registry, dev_dir, jobs_dir = make_registry(tmp_path)
+        (dev_dir / "ttyUSB0").touch()
+        (dev_dir / "ttyUSB1").touch()
+        (jobs_dir / "job_20260601_100000_board1_ttyUSB0").mkdir()
+        (jobs_dir / "job_20260925_150000_board2_ttyUSB1").mkdir()  # mas reciente, otro device
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d0 = registry.get_device("ttyUSB0")
+            d1 = registry.get_device("ttyUSB1")
+        assert d0.last_flash_ts == "2026-06-01T10:00:00"
+        assert d1.last_flash_ts == "2026-09-25T15:00:00"
+
+    def test_last_flash_ts_none_when_only_other_devices_flashed(self, tmp_path):
+        """Device nunca flasheado no hereda la fecha de otro."""
+        registry, dev_dir, jobs_dir = make_registry(tmp_path)
+        (dev_dir / "ttyUSB0").touch()
+        (jobs_dir / "job_20260925_150000_board2_ttyUSB1").mkdir()
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            device = registry.get_device("ttyUSB0")
+        assert device.last_flash_ts is None
+
+    def test_last_flash_ts_ttyusb1_does_not_match_ttyusb10(self, tmp_path):
+        registry, dev_dir, jobs_dir = make_registry(tmp_path)
+        (dev_dir / "ttyUSB1").touch()
+        (jobs_dir / "job_20260925_150000_board_ttyUSB10").mkdir()
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            device = registry.get_device("ttyUSB1")
+        assert device.last_flash_ts is None
 
     def test_last_flash_ts_ignores_non_job_dirs(self, tmp_path):
         registry, dev_dir, jobs_dir = make_registry(tmp_path)

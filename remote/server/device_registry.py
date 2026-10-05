@@ -267,9 +267,9 @@ class DeviceRegistry:
     def _get_last_flash_ts(self, tty_name: str) -> Optional[str]:
         if not self._jobs_dir.exists():
             return None
+        # Sin fallback a glob("job_*"): devolvía el job más reciente de CUALQUIER
+        # device. Mejor None que la fecha de otro.
         job_dirs = sorted(self._jobs_dir.glob(f"job_*_{tty_name}"), reverse=True)
-        if not job_dirs:
-            job_dirs = sorted(self._jobs_dir.glob("job_*"), reverse=True)
         for job_dir in job_dirs:
             ts = self._parse_job_timestamp(job_dir.name)
             if ts is not None:
