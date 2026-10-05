@@ -45,7 +45,7 @@ info "Reiniciando dashboard..."
 systemctl restart dashboard
 
 info "Reseteando sesiones (mata + relanza remote_esp32.py con el código nuevo)..."
-devremote --reset
+devremote --reset || die "devremote --reset falló — levantá las sesiones a mano con: devremote"
 
 echo ""
 info "Estado final:"
