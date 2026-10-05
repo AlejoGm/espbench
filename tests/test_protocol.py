@@ -290,3 +290,31 @@ def test_runner_crash_reports_rc_minus_one_and_restarts_monitor():
     assert not done["ok"] and done["write_rc"] == -1
     assert done["error_hint"] == "Error interno al lanzar esptool."
     assert mon.calls == ["stop", "start"] and device.state == DeviceState.MONITORING
+
+
+def test_upload_progress_is_not_logged_per_recv(tmp_path):
+    """Regresión: con la condición "remaining < CHUNK_SIZE", en el último MB se
+    logueaba CADA recv() (pocos KB): cientos de líneas en el log del device."""
+    from server import taglog
+    payload = b"x" * (11 * 1024 * 1024 + 12345)
+
+    class TrickleSock:
+        """recv() devuelve de a 4 KB, como un socket real con red de por medio."""
+        def __init__(self, data):
+            self.data, self.pos = data, 0
+
+        def recv(self, n):
+            chunk = self.data[self.pos:self.pos + min(n, 4096)]
+            self.pos += len(chunk)
+            return chunk
+
+    lines = []
+    taglog.add_sink(lambda ts, lvl, tag, msg: lines.append(msg) if "progreso" in msg else None)
+    try:
+        protocol.receive_artifact(TrickleSock(payload), {"artifact_size": len(payload)},
+                                  "upload_and_flash", tmp_path / "artifact.zip")
+    finally:
+        taglog.reset_default_sinks()
+    assert (tmp_path / "artifact.zip").stat().st_size == len(payload)
+    assert 2 <= len(lines) <= 4, lines          # cada 5 MB + el final
+    assert lines[-1].endswith(f"{len(payload)}/{len(payload)} bytes")

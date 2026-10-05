@@ -80,6 +80,10 @@ class DeviceLog:
         self.write(self._decoder.decode(data))
 
     def taglog_sink(self, ts: str, level: str, tag: str, msg: str) -> None:
+        # DEBUG queda solo en la terminal tmux (devremote <dev>): el log del
+        # device es lo que se lee en el dashboard.
+        if level == "DEBUG":
+            return
         self.write(taglog.format_line(ts, level, tag, msg) + "\n")
 
     # ---------- adopción ----------

@@ -168,3 +168,15 @@ def test_taglog_sink_writes_formatted_line(monkeypatch, tmp_path):
     log.close()
     line = _out_path(tmp_path).read_text().strip().splitlines()[-1]
     assert "INFO" in line and "protocol" in line and "flash ok" in line
+
+
+def test_taglog_sink_skips_debug(monkeypatch, tmp_path):
+    """DEBUG (progreso de upload, dump de flasher_args...) no ensucia el log del dashboard."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    log = DeviceLog("ttyUSB0")
+    log.adopt(MAC)
+    log.taglog_sink("2026-10-05 12:00:00", "DEBUG", "protocol", "progreso: 1/2 bytes")
+    log.taglog_sink("2026-10-05 12:00:00", "WARN", "protocol", "aviso")
+    log.close()
+    content = _out_path(tmp_path).read_text()
+    assert "progreso" not in content and "aviso" in content

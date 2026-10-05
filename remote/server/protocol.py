@@ -177,6 +177,7 @@ def receive_artifact(sock, header: dict, action: str, artifact: pathlib.Path,
             raise ValueError("artifact_size inválido")
         taglog.info(TAG, f"recibiendo artefacto ({size} bytes)")
         remaining = size
+        next_report = CHUNK_PROGRESS_INTERVAL
         with artifact.open("wb") as f:
             while remaining > 0:
                 chunk = sock.recv(min(CHUNK_SIZE, remaining))
@@ -184,8 +185,11 @@ def receive_artifact(sock, header: dict, action: str, artifact: pathlib.Path,
                     raise ConnectionError("transferencia interrumpida")
                 f.write(chunk)
                 remaining -= len(chunk)
-                if remaining % CHUNK_PROGRESS_INTERVAL == 0 or remaining < CHUNK_SIZE:
-                    taglog.debug(TAG, f"progreso: {size - remaining}/{size} bytes")
+                # Cada 5 MB y al final. recv() trae de a pocos KB: no loguear por recv.
+                received = size - remaining
+                if received >= next_report or remaining == 0:
+                    taglog.debug(TAG, f"progreso: {received}/{size} bytes")
+                    next_report = received + CHUNK_PROGRESS_INTERVAL
         _verify_sha(artifact, header.get("artifact_sha256"), "")
     else:
         url = header.get("artifact_url")
