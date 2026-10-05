@@ -11,10 +11,11 @@ import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading, t
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
-from device_registry import DevicesFile
-from flash import read_mac, parse_mac_from_serial
-from monitor import EspMonitor, _ignore_signals_flag
-from protocol import control_server, ensure_dir
+from server.device_registry import DevicesFile
+from server.flash import read_mac, parse_mac_from_serial
+from server.monitor import EspMonitor, _ignore_signals_flag
+from server.protocol import control_server, ensure_dir
+from server.erase import erase_region_interactive
 from server import paths
 
 # ========== Bandera global de terminación ==========
@@ -160,7 +161,8 @@ def main():
     }
 
     elf_path = paths.current_elf_file(tty_name)
-    mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log)
+    mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log,
+                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg, svc_log))
     svc_log.info("Iniciando monitor serial...\r\n")
     mon.start()
 

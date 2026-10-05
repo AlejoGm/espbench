@@ -10,7 +10,7 @@ con soporte de ELF para decodificación de backtraces.
 import logging, os, pathlib, select, shlex, signal, subprocess, sys, threading, time, pty, tty, termios
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-from flash import find_esptool_cmd, run_cmd
+from server.flash import find_esptool_cmd, run_cmd
 
 # Bandera compartida para ignorar señales durante operaciones temporales (erase_region, etc.)
 # Se importa en remote_esp32.py para que el signal_handler pueda usarla.
@@ -36,274 +36,6 @@ def normalize_line_endings(data: bytes) -> bytes:
     return result
 
 
-# ========== Funciones para erase region ==========
-
-def parse_partition_table(text: str) -> list[dict]:
-    """
-    Parsea una tabla de particiones del ESP32 desde texto del bootloader.
-    Formato esperado:
-    I (71) boot:  0 nvs              WiFi data        01 02 00012000 00100000
-
-    Retorna lista de diccionarios con: name, type, subtype, offset, size
-    """
-    import re
-    partitions = []
-
-    # Patrón para el formato del bootloader del ESP32:
-    # I (XX) boot:  N nombre          descripción     TT SS OOOOOOOO LLLLLLLL
-    # Ejemplo: I (71) boot:  0 nvs              WiFi data        01 02 00012000 00100000
-    # El patrón busca: I (número) boot: número nombre [descripción con espacios] tipo subtipo offset length
-    pattern = r'I\s*\(\s*\d+\s*\)\s+boot:\s+\d+\s+(\w+)\s+[^\d]+\s+([0-9a-fA-F]{2})\s+([0-9a-fA-F]{2})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})'
-
-    # También intentar formato CSV alternativo (por si acaso)
-    pattern_csv = r'(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*([^,]*)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)'
-
-    in_partition_table = False
-
-    for line in text.split('\n'):
-        line_stripped = line.strip()
-
-        # Detectar inicio de tabla de particiones
-        if 'partition table' in line.lower() or '## Label' in line:
-            in_partition_table = True
-            continue
-
-        # Detectar fin de tabla
-        if 'end of partition table' in line.lower():
-            in_partition_table = False
-            continue
-
-        if not in_partition_table and not line_stripped:
-            continue
-
-        # Intentar formato bootloader primero (más común)
-        match = re.search(pattern, line)
-        if match:
-            name, ptype, subtype, offset_str, size_str = match.groups()
-            try:
-                offset = int(offset_str, 16)
-                size = int(size_str, 16)
-                partitions.append({
-                    'name': name.strip(),
-                    'type': ptype.strip(),
-                    'subtype': subtype.strip(),
-                    'offset': offset,
-                    'offset_hex': f"0x{offset_str}",
-                    'size': size,
-                    'size_hex': f"0x{size_str}"
-                })
-                continue
-            except ValueError:
-                pass
-
-        # Intentar formato CSV como fallback
-        if not match:
-            match_csv = re.search(pattern_csv, line)
-            if match_csv:
-                name, ptype, subtype, flags, offset_str, size_str = match_csv.groups()
-                try:
-                    # Remover 0x si está presente
-                    offset_clean = offset_str.replace('0x', '').replace('0X', '')
-                    size_clean = size_str.replace('0x', '').replace('0X', '')
-                    offset = int(offset_clean, 16)
-                    size = int(size_clean, 16)
-                    partitions.append({
-                        'name': name.strip(),
-                        'type': ptype.strip(),
-                        'subtype': subtype.strip(),
-                        'offset': offset,
-                        'offset_hex': offset_str if offset_str.startswith('0x') else f"0x{offset_clean}",
-                        'size': size,
-                        'size_hex': size_str if size_str.startswith('0x') else f"0x{size_clean}"
-                    })
-                except ValueError:
-                    continue
-
-    return partitions
-
-
-def erase_region_interactive(mon: 'EspMonitor', cfg: dict, svc_log: logging.Logger):
-    """
-    Modo interactivo para borrar regiones de la flash.
-    Detecta tabla de particiones o permite entrada manual.
-    """
-    nprint("\r\n" + "="*60)
-    nprint("[erase] Modo Erase Region activado")
-    nprint("="*60)
-
-    # Obtener salida reciente del monitor para buscar tabla de particiones
-    recent_output = mon.get_recent_output()
-    partitions = parse_partition_table(recent_output)
-
-    if partitions:
-        nprint(f"\r\n[erase] Tabla de particiones detectada ({len(partitions)} particiones):\r\n")
-        for i, p in enumerate(partitions, 1):
-            nprint(f"  {i}. {p['name']:20s} @ {p['offset_hex']:>10s} ({p['size_hex']:>10s} bytes)")
-        nprint("\r\n[erase] Selecciona particiones a borrar (ej: 1,3,5 o 'all' para todas):")
-        nprint("[erase] O presiona Enter para entrada manual: ")
-
-        # Restaurar stdin temporalmente para entrada
-        with mon._stdin_access_lock:
-            mon._restore_stdin()
-            try:
-                selection = input().strip()
-            finally:
-                mon._set_stdin_raw()
-
-        regions_to_erase = []
-
-        if selection.lower() == 'all':
-            regions_to_erase = partitions
-        elif selection:
-            try:
-                indices = [int(x.strip()) for x in selection.split(',')]
-                for idx in indices:
-                    if 1 <= idx <= len(partitions):
-                        regions_to_erase.append(partitions[idx - 1])
-                    else:
-                        nprint(f"[erase] Índice inválido: {idx}")
-            except ValueError:
-                nprint("[erase] Entrada inválida, usando modo manual...")
-                regions_to_erase = []
-        else:
-            regions_to_erase = []
-
-        if not regions_to_erase:
-            # Modo manual
-            nprint("\r\n[erase] Modo manual - Ingresa offset y tamaño (hex, ej: 0x9000 0x6000):")
-            nprint("[erase] O 'cancel' para cancelar: ")
-            with mon._stdin_access_lock:
-                mon._restore_stdin()
-                try:
-                    manual_input = input().strip()
-                finally:
-                    mon._set_stdin_raw()
-
-            if manual_input.lower() == 'cancel':
-                nprint("[erase] Operación cancelada")
-                return
-
-            try:
-                parts = manual_input.split()
-                if len(parts) >= 2:
-                    offset = int(parts[0], 16)
-                    size = int(parts[1], 16)
-                    regions_to_erase = [{'offset': offset, 'size': size, 'name': 'manual'}]
-                else:
-                    nprint("[erase] Formato inválido")
-                    return
-            except ValueError as e:
-                nprint(f"[erase] Error parseando valores: {e}")
-                return
-    else:
-        # No se detectó tabla, modo manual
-        nprint("\r\n[erase] No se detectó tabla de particiones")
-        nprint("[erase] Ingresa offset y tamaño en hex (ej: 0x9000 0x6000):")
-        nprint("[erase] O 'cancel' para cancelar: ")
-        with mon._stdin_access_lock:
-            mon._restore_stdin()
-            try:
-                manual_input = input().strip()
-            finally:
-                mon._set_stdin_raw()
-
-        if manual_input.lower() == 'cancel':
-            nprint("[erase] Operación cancelada")
-            return
-
-        try:
-            parts = manual_input.split()
-            if len(parts) >= 2:
-                offset = int(parts[0], 16)
-                size = int(parts[1], 16)
-                regions_to_erase = [{'offset': offset, 'size': size, 'name': 'manual'}]
-            else:
-                nprint("[erase] Formato inválido. Usa: offset_hex size_hex")
-                return
-        except ValueError as e:
-            nprint(f"[erase] Error parseando valores: {e}")
-            return
-
-    # Confirmar antes de borrar
-    nprint(f"\r\n[erase] Se borrarán {len(regions_to_erase)} región(es):")
-    for r in regions_to_erase:
-        offset_hex = f"0x{r['offset']:x}" if isinstance(r['offset'], int) else r.get('offset_hex', 'N/A')
-        size_hex = f"0x{r['size']:x}" if isinstance(r['size'], int) else r.get('size_hex', 'N/A')
-        name = r.get('name', 'manual')
-        nprint(f"  - {name}: offset {offset_hex}, tamaño {size_hex}")
-
-    nprint("\r\n[erase] ¿Confirmar? (s/N): ")
-    with mon._stdin_access_lock:
-        mon._restore_stdin()
-        try:
-            confirm = input().strip().lower()
-        finally:
-            mon._set_stdin_raw()
-
-    if confirm != 's':
-        nprint("[erase] Operación cancelada")
-        return
-
-    # Ejecutar erase_region para cada región
-    try:
-        esptool = find_esptool_cmd()
-        print(esptool)
-        chip = cfg.get("chip", "auto")
-        tty = cfg.get("tty")
-        flash_baud = cfg.get("flash_baud", 921600)
-
-        # Establecer bandera para ignorar señales durante operación temporal
-        _ignore_signals_flag.set()
-        try:
-            nprint("\r\n[erase] Deteniendo monitor temporalmente...")
-            mon.stop()
-
-            for r in regions_to_erase:
-                offset = r['offset'] if isinstance(r['offset'], int) else int(r['offset_hex'], 16)
-                size = r['size'] if isinstance(r['size'], int) else int(r['size_hex'], 16)
-                name = r.get('name', 'manual')
-
-                offset_hex = f"0x{offset:x}"
-                size_hex = f"0x{size:x}"
-
-                nprint(f"\r\n[erase] Borrando {name} @ {offset_hex} (tamaño {size_hex})...")
-
-                cmd = esptool + [
-                    # "--chip", chip,
-                    "--port", tty,
-                    "--after", "no-reset",
-                    # "--baud", str(flash_baud),
-                    "erase_region", offset_hex, size_hex,
-                    "--force"
-
-                ]
-
-                svc_log.info(f"[erase] Ejecutando: {' '.join(shlex.quote(c) for c in cmd)}\r\n")
-                rc = run_cmd(cmd, svc_log)
-
-                if rc == 0:
-                    nprint(f"[erase] Región {name} borrada exitosamente")
-                else:
-                    nprint(f"[erase] Error borrando región {name} (código {rc})")
-
-            nprint("\r\n[erase] Reiniciando monitor...")
-            mon.start()
-            nprint("[erase] Operación completada")
-        finally:
-            # Limpiar bandera para volver a escuchar señales
-            _ignore_signals_flag.clear()
-
-    except Exception as e:
-        nprint(f"\r\n[erase] ERROR: {e}")
-        svc_log.exception(f"[erase] Error en erase_region: {e}\r\n")
-        # Asegurar que la bandera se limpie incluso en caso de error
-        _ignore_signals_flag.clear()
-        try:
-            mon.start()
-        except Exception:
-            pass
-
-
 # ========== Monitor serial ==========
 
 class EspMonitor:
@@ -313,8 +45,12 @@ class EspMonitor:
     """
 
     def __init__(self, tty_path: str, baud: int, logs_dir: pathlib.Path,
-                 elf_path=None, cfg: dict = None, svc_log: logging.Logger = None):
+                 elf_path=None, cfg: dict = None, svc_log: logging.Logger = None,
+                 on_ctrl_e=None):
         self.tty_path = tty_path
+        # Ctrl-E (modo Erase Region) se inyecta desde afuera: el monitor no
+        # sabe nada de esptool ni de la FSM del device.
+        self._on_ctrl_e = on_ctrl_e
         self.baud = baud
         self.logs_dir = logs_dir
         self.elf_path = elf_path
@@ -349,6 +85,23 @@ class EspMonitor:
                 pass
         self._stdin_fd = None
         self._stdin_old_attrs = None
+
+    def interactive_input(self, prompt: str) -> str:
+        """Pide una línea al operador en la terminal de la sesión tmux.
+
+        Saca stdin de modo raw mientras dura el input() y lo vuelve a poner
+        después. Es la única forma en que código de afuera debe leer teclado:
+        nada fuera de esta clase toca _stdin_access_lock / _restore_stdin."""
+        with self._stdin_access_lock:
+            self._restore_stdin()
+            try:
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+                return input().strip()
+            except EOFError:
+                return ""
+            finally:
+                self._set_stdin_raw()
 
     def get_recent_output(self) -> str:
         """Obtiene la salida reciente del monitor como string"""
@@ -455,18 +208,11 @@ class EspMonitor:
                     if b"\x05" in data:
                         sys.stdout.buffer.write(b"\r\n")
                         sys.stdout.buffer.flush()
-                        # Llamar a erase_region_interactive en un hilo separado
-                        # para no bloquear el pump
-                        def run_erase():
-                            try:
-                                erase_region_interactive(self, self.cfg, self.svc_log)
-                            except Exception as e:
-                                nprint(f"[erase] ERROR: {e}")
-                                if self.svc_log:
-                                    self.svc_log.exception(f"[erase] Error: {e}\r\n")
-
-                        erase_thread = threading.Thread(target=run_erase, daemon=True)
-                        erase_thread.start()
+                        # Ctrl-E corre en un hilo aparte para no bloquear el pump
+                        if self._on_ctrl_e is None:
+                            nprint("[monitor] Ctrl-E: modo erase no disponible")
+                            continue
+                        threading.Thread(target=self._run_ctrl_e, daemon=True).start()
                         continue  # No reenviar Ctrl-E al monitor
 
                     # Si no es una combinación especial, reenviamos al monitor
@@ -475,6 +221,14 @@ class EspMonitor:
                             os.write(self.master_fd, data)
                         except OSError:
                             pass
+
+    def _run_ctrl_e(self):
+        try:
+            self._on_ctrl_e()
+        except Exception as e:
+            nprint(f"[erase] ERROR: {e}")
+            if self.svc_log:
+                self.svc_log.exception(f"[erase] Error: {e}\r\n")
 
     def stop(self):
         nprint(f"\r\n[monitor] stop() llamado - PID del proceso: {os.getpid()}")

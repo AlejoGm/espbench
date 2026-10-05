@@ -12,8 +12,8 @@ from urllib.request import urlopen, Request
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
-from flash import find_esptool_cmd, build_esptool_cmd, run_cmd, read_mac
-from monitor import _ignore_signals_flag, nprint, EspMonitor
+from server.flash import find_esptool_cmd, build_esptool_cmd, run_cmd, read_mac
+from server.monitor import _ignore_signals_flag, nprint, EspMonitor
 from server import paths
 
 # ========== Constantes ==========
