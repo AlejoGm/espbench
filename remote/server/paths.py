@@ -12,12 +12,13 @@ ESP_BASE se lee de la variable de entorno del mismo nombre (default
 para que los tests puedan pisarla con monkeypatch.setenv() sin pelear
 con el orden de imports.
 
-Incluye dos esquemas de rutas por dispositivo, más el estado runtime (run/<tty>.json):
-- por tty (mac_file, last_user_file, lock_file, current_elf_file):
-  esquema vigente hoy, keyed por nombre de puerto (ttyUSBN).
-- por device (device_home, device_output_log, ...): esquema nuevo,
-  keyed por MAC — sobrevive a que el device cambie de tty al desconectar
-  y reconectar. Todavía no lo escribe nadie (ver plan de refactor).
+Dos esquemas de rutas por dispositivo, más el estado runtime (run/<tty>.json):
+- por device, keyed por MAC (device_home, device_output_log, device_jobs_dir,
+  ...): donde va todo lo de un device identificado. Sigue a la placa aunque
+  cambie de puerto.
+- por tty (lock_file, current_elf_file, last_user_file, ...): el lock (a
+  propósito, ver docs/ARCHITECTURE.md §5), los devices sin MAC, y lo que
+  dejaron sesiones del esquema anterior.
 """
 import os
 import pathlib

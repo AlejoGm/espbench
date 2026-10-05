@@ -82,7 +82,11 @@ reset_all() {
   sudo pkill -9 -f "python3.*remote_esp32[.]py" 2>/dev/null || true
   sleep 1
 
-  tmux ls 2>/dev/null | awk -F: '{print $1}' | grep "^${PREFIX}" | while read -r s; do
+  # Lo normal es que no quede ninguna: al morir el proceso muere su sesión. Sin
+  # el "|| true", grep sale con 1, y con set -e + pipefail el script moría acá
+  # sin relanzar nada (devremote --reset dejaba la Pi sin sesiones).
+  local s
+  for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep "^${PREFIX}" || true); do
     tmux kill-session -t "$s" || true
   done
 

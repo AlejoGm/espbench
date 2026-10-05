@@ -24,7 +24,10 @@ case "$1" in
   has-session)  [ -f "$FAKE/sessions/$3" ] ;;
   new-session)  touch "$FAKE/sessions/$4"; echo "${@: -1}" > "$FAKE/sessions/$4" ;;
   kill-session) rm -f "$FAKE/sessions/$3" ;;
-  ls)           for s in "$FAKE"/sessions/*; do [ -e "$s" ] && echo "$(basename "$s"): 1 windows"; done ;;
+  ls)           for s in "$FAKE"/sessions/*; do
+                  [ -e "$s" ] || continue
+                  if [ "${2:-}" = "-F" ]; then basename "$s"; else echo "$(basename "$s"): 1 windows"; fi
+                done ;;
   list-panes)   echo 4242 ;;
 esac
 ''',
@@ -233,3 +236,24 @@ def test_devremote_slots_lists_id_paths(infra):
     infra.plug("ttyUSB0", HUB_3)
     out = infra.run("devremote", "--slots").stdout
     assert HUB_3 in out and "slots.conf" in out
+
+
+def test_devremote_reset_all_restarts_when_no_session_survives(infra):
+    """Regresión: lo normal es que pkill -9 mate el proceso y con él la sesión.
+    tmux ls queda vacío, grep sale con 1 y con set -e + pipefail devremote
+    moría sin relanzar nada: --reset dejaba la Pi sin sesiones."""
+    infra.plug("ttyUSB0")
+    infra.plug("ttyUSB1")
+    r = infra.run("devremote", "--reset", check=False)
+    assert r.returncode == 0, r.stderr
+    assert infra.session_cmd("esp32_ttyUSB0") and infra.session_cmd("esp32_ttyUSB1")
+
+
+def test_devremote_reset_all_kills_surviving_sessions(infra):
+    infra.plug("ttyUSB0")
+    (infra.fake / "sessions" / "esp32_ttyUSB0").write_text("viejo")
+    (infra.fake / "sessions" / "otra_cosa").write_text("no tocar")
+    infra.run("devremote", "--reset")
+    assert "kill-session -t esp32_ttyUSB0" in infra.log("tmux")
+    assert "otra_cosa" not in infra.log("tmux").replace("ls -F", "")
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB0")
