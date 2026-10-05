@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.9.0
+**Version:** 0.9.1
 
 ---
 
@@ -10,20 +10,18 @@ Remote ESP32 firmware deployment system. Build on your dev machine, flash to an 
 
 ```
 Dev machine                          Raspberry Pi
-────────────                         ────────────────────────────────────────
-client/deploy.py  ──── TCP ────►  remote/server/remote_esp32.py
-  │                                        │
-  │  1. idf.py build (optional)            ├─ EspMonitor (PTY, always-on)
-  │  2. zip firmware artifact              │   └─ esp_idf_monitor + ELF backtrace
-  │  3. send over TCP                      │
-  │  4. receive result                     ├─ control_server (TCP, port 5000+N)
-  │                                        │   └─ stop monitor → esptool → restart
-  └─ .flashcfg.json                        │
-     (local gitignored config)             └─ dashboard.py (FastAPI, port 8080)
-                                               └─ /api/devices, /ws/device/{tty}
+────────────                         ────────────────────────────────────────────
+client/deploy.py ──── TCP ────►  remote_esp32.py   (one process per device, in tmux)
+  │                                 ├─ Device (FSM) + DeviceLog
+  │  1. idf.py build (optional)     ├─ EspMonitor (esp_idf_monitor + ELF backtraces)
+  │  2. zip firmware artifact       └─ control server (port 5000+N)
+  │  3. send over TCP                       │ writes devices/<mac>/, run/<tty>.json
+  │  4. receive result                      ▼
+  └─ .flashcfg.json               api.py (dashboard, FastAPI, port 8080)
+     (local gitignored config)      └─ /api/devices, /ws/device/{tty}
 ```
 
-One tmux session per device (`esp32_ttyUSBN`). TCP port = `5000 + N`. udev auto-creates sessions on USB plug-in.
+One tmux session per device. Device name and TCP port come from `espbench-name`: `ttyUSBN` → `5000+N`, or a stable `esp-slotK` → `5000+K` if the physical USB port is mapped (see [Stable ports](#stable-ports-optional)). Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -172,20 +170,28 @@ Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and
 
 ```
 espbench/
-├── common.py              # Shared: TCP framing, SHA256, MAC↔SN, HW model utils
+├── common.py                  # Shared: TCP framing, SHA256, MAC↔SN, HW model utils
 ├── client/
-│   └── deploy.py          # CLI: build + artifact + remote/local flash
+│   └── deploy.py              # CLI: build + artifact + remote/local flash
 ├── remote/
 │   ├── server/
-│   │   ├── remote_esp32.py    # Entrypoint: args, logging, monitor + TCP startup
-│   │   ├── protocol.py        # TCP control: flash orchestration, device locking
-│   │   ├── flash.py           # esptool: find, build command, execute
-│   │   ├── monitor.py         # Serial monitor: PTY, circular buffer, log rotation
-│   │   ├── device_registry.py # Device metadata: MAC, SN, fw info, status
-│   │   └── dashboard.py       # FastAPI: REST API + WebSocket log streaming
+│   │   ├── remote_esp32.py    # Per-device process: wiring, MAC discovery, threads
+│   │   ├── device.py          # TtyPort / Device (FSM) / DeviceManager
+│   │   ├── device_log.py      # DeviceLog: the device's log (single writer)
+│   │   ├── monitor.py         # EspMonitor: esp_idf_monitor in a PTY
+│   │   ├── protocol.py        # TCP flash protocol, split into testable phases
+│   │   ├── erase.py           # Interactive Erase Region (Ctrl-E)
+│   │   ├── flash.py           # esptool: find, build command, run, read MAC
+│   │   ├── api.py             # Dashboard backend: REST + WebSocket
+│   │   ├── device_registry.py # Dashboard's read model of the devices
+│   │   ├── log_streamer.py    # Log tail → WebSocket
+│   │   ├── runstate.py        # run/<tty>.json (runtime state between processes)
+│   │   ├── paths.py           # Every path under ESP_BASE
+│   │   └── taglog.py          # taglog.info(TAG, msg) logging
 │   ├── dashboard/             # Web UI: index.html, device.html, style.css
-│   └── infra/                 # systemd services, udev rules, devremote CLI
-├── tests/                     # pytest suite
+│   └── infra/                 # devremote, esp32_tmux.sh, espbench-name, udev, systemd
+├── tests/                     # pytest suite (host, no hardware)
+├── docs/                      # ARCHITECTURE.md; archive/ = old PRDs and code
 ├── rpi/                       # Pi bootstrap script
 └── scripts/                   # Maintenance scripts
 ```
@@ -197,10 +203,11 @@ espbench/
 1. `deploy.py` reads `.flashcfg.json`
 2. Optionally runs `idf.py build`
 3. Zips `flasher_args.json` + `*.bin` + `firmware.elf` → `artifact.zip`
-4. TCP connect to Pi → send header (token, chip, job metadata)
-5. Upload artifact, Pi verifies SHA256
-6. Pi: stops monitor → runs `esptool write_flash` → restarts monitor
-7. Client receives result JSON
+4. TCP connect to Pi → send header (token, chip, job metadata, lock user/token)
+5. Pi checks token, device state (rejects with `device_busy` during an erase) and lock, then ACKs
+6. Upload artifact, Pi verifies SHA256
+7. Pi: device → FLASHING, stops monitor → `esptool write_flash` (retries without `--encrypt` on rc=2) → restarts monitor → back to MONITORING
+8. Client receives result JSON (esptool output is streamed live while flashing)
 
 ---
 
@@ -208,14 +215,21 @@ espbench/
 
 ```
 /opt/esp/
-├── server/            deploy of remote/server/
-├── logs/YYYYMMDD/     daily serial logs per device
-├── jobs/              extracted artifacts per flash job
-├── locks/             device lock files
-├── devices.json       MAC → device_key + hw_model registry
-├── current.elf        last flashed ELF (backtrace decoding)
-└── VERSION            version file
+├── server/, dashboard/, venv/    code + Python env
+├── devices.json                  MAC → device_key + hw_model
+├── slots.conf                    (optional) stable ports: <K> <ID_PATH>
+├── run/<tty>.json                runtime state of each session (state, MAC, port, log path)
+├── devices/<MAC>/
+│   ├── output.log                current session log (serial + server events)
+│   ├── output_<ts>.log           previous sessions
+│   ├── current.elf               last flashed ELF (backtrace decoding)
+│   ├── last_user
+│   └── jobs/<job_id>/            extracted artifact + job.log
+├── locks/<tty>                   device lock (user:token)
+└── VERSION
 ```
+
+Devices whose MAC can't be read keep the per-tty layout (`devices/unknown-<tty>/`, `jobs/`, `current_<tty>.elf`).
 
 ---
 
@@ -225,16 +239,32 @@ espbench/
 pytest tests/
 ```
 
-No hardware required — device registry and monitor are fully mocked.
+No hardware required. The protocol, the per-device entrypoint and the infra shell scripts run end-to-end against fakes at the edges (esptool, esp_idf_monitor, socket, tmux, udev). What can only be verified on a real Pi is listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §10.
 
 ---
 
 ## Device Management (Pi)
 
 ```bash
-devremote           # scan + start missing sessions
-devremote --status  # table: device / port / status / PID
-devremote 0         # attach to ttyUSB0 session
-devremote --reset   # kill + restart all sessions
-devremote --unlock 0  # unlock ttyUSB0
+devremote                 # start missing sessions
+devremote --status        # device / kernel tty / port / session / FSM state / pid
+devremote 0               # attach to a device's session (0 = ttyUSB0; also esp-slotK, slotK)
+devremote --reset         # restart all sessions
+devremote --reset 0       # restart one device
+devremote --unlock 0      # release a device lock
+devremote --slots         # ID_PATH of each physical port (for slots.conf)
+devremote --cleanup       # delete old jobs and rotated logs (--dry-run to preview)
 ```
+
+### Stable ports (optional)
+
+`ttyUSBN` follows the kernel's enumeration order, not the physical port: a replug or reboot can swap them, and with them the TCP port your `.flashcfg.json` points to. To pin ports to physical hub slots:
+
+```bash
+devremote --slots                                  # shows each port's ID_PATH
+sudo nano /opt/esp/slots.conf                      # one line per port: "<K> <ID_PATH>"
+sudo udevadm trigger --subsystem-match=tty && devremote --reset
+```
+
+Mapped devices become `esp-slotK` on port `5000+K`. Without `slots.conf` nothing changes. With it, unmapped devices get `5100+N` so they don't collide with slot ports.
+

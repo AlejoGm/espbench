@@ -1,3 +1,13 @@
+"""
+api.py — backend del dashboard: FastAPI con la API REST, el WebSocket de logs
+y los archivos estáticos de remote/dashboard/.
+
+Corre como servicio aparte (dashboard.service, `uvicorn server.api:app`), no
+dentro de los procesos de los devices: todo lo que sabe de ellos lo lee de
+disco (DeviceRegistry: run/<tty>.json + devices.json; LogStreamer: el log que
+publica cada device). Antes se llamaba dashboard.py y chocaba de nombre con
+remote/dashboard/, que es el frontend.
+"""
 import asyncio
 import dataclasses
 import pathlib

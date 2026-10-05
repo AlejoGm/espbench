@@ -118,6 +118,8 @@ info "Instalando dependencias Python..."
 # ---------------------------------------------------------------------------
 info "Copiando server/ -> /opt/esp/server/..."
 cp -r "$REMOTE_DIR/server/"* /opt/esp/server/
+# server/dashboard.py se renombró a api.py: que no quede la copia vieja
+rm -f /opt/esp/server/dashboard.py
 
 # ---------------------------------------------------------------------------
 # 6. Copy common.py

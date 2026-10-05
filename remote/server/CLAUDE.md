@@ -1,123 +1,40 @@
 # remote/server/
 
-Core server logic running on Raspberry Pi. One instance per device (ttyUSBN).
+Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** (`remote_esp32.py`, en tmux) y **uno de dashboard** (`api.py`, systemd). Se comunican solo por disco (`run/<tty>.json`, `devices.json`, logs). Arquitectura: [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
 
-## Files
+## Archivos
 
-| File | Purpose |
-|------|---------|
-| `remote_esp32.py` | Entrypoint: args, logging, MAC read, monitor + TCP server startup |
-| `protocol.py` | TCP control server: orchestrates flash workflow |
-| `flash.py` | esptool integration: find, build command, execute |
-| `monitor.py` | `esp_idf_monitor` PTY wrapper: circular buffer, log rotation |
-| `device_registry.py` | Device metadata: MAC, SN, fw info, status, locking |
-| `dashboard.py` | FastAPI app: REST + WebSocket APIs + static file serving |
-| `paths.py` | Fuente única de rutas bajo `ESP_BASE` (env var, default `/opt/esp`) — nadie más debe hardcodear `/opt/esp` |
-| `device_log.py` | `DeviceLog`: bufferea el log de un device hasta conocer su MAC, después escribe a `paths.device_output_log(mac)`. Todavía no conectado a `EspMonitor`/`protocol.py` |
-| `device.py` | `TtyPort`/`Device`/`DeviceManager`: modelo de objetos + FSM (DISCOVERING→MONITORING⇄FLASHING/ERASING→DISCONNECTED). Todavía no conectado a `remote_esp32.py`/`protocol.py` |
-| `taglog.py` | Logging con TAG + timestamp, estilo `ESP_LOGI(TAG, ...)`. Sinks pluggables (`add_sink()`), default solo stdout. Primer consumidor real: `device.py` |
+| Archivo | Proceso | Qué hace |
+|---|---|---|
+| `remote_esp32.py` | device | Entrypoint: arma `DeviceManager`, identifica por MAC, levanta monitor + control server + fallback de MAC por serial + watcher del tty |
+| `device.py` | device | `TtyPort` / `Device` (FSM) / `DeviceManager` |
+| `device_log.py` | device | `DeviceLog`: único escritor del log del device (`devices/<mac>/output.log`) |
+| `monitor.py` | device | `EspMonitor`: `esp_idf_monitor` en un PTY; serial → stdout + `DeviceLog`; Ctrl-C / Ctrl-E |
+| `protocol.py` | device | Servidor TCP de flasheo, partido en fases (`authenticate`, `LockStore`, `receive_artifact`, `run_flash`...) |
+| `erase.py` | device | Modo Erase Region (Ctrl-E) |
+| `partition_table.py` | device | Parseo de la tabla de particiones que imprime el bootloader |
+| `flash.py` | device | esptool: buscarlo, armar comandos, correrlos (`run_cmd`), leer MAC |
+| `api.py` | dashboard | FastAPI: REST + WebSocket + estáticos. Antes `dashboard.py` |
+| `device_registry.py` | dashboard (+ device) | `DeviceRegistry` (vista de lectura de los devices), `DevicesFile` (`devices.json`, con `flock`) |
+| `log_streamer.py` | dashboard | Tail del log de cada device → WebSocket |
+| `runstate.py` | ambos | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
+| `paths.py` | ambos | Todas las rutas bajo `ESP_BASE` (default `/opt/esp`) |
+| `taglog.py` | ambos | Logging `taglog.info(TAG, msg)`, sinks pluggables |
 
-## Logging (`taglog.py`)
+## Reglas
 
-Reemplazo (todavía parcial) de los `nprint()` duplicados en `remote_esp32.py`/`monitor.py`/`protocol.py`/`flash.py` y del `logging.getLogger` ad hoc — un `TAG` estático por módulo, `taglog.info(TAG, msg)` / `.warn()` / `.error()` / `.debug()`, mismo formato en todos lados.
+- **Rutas**: siempre `paths.*()`, nunca `"/opt/esp"` a mano. `ESP_BASE` se lee en cada llamada, así los tests la pisan con `monkeypatch.setenv`.
+- **Logs**: `taglog` con un `TAG = "<modulo>"` por archivo. Nada de `print`.
+- **Imports**: `from server import X` / `from server.X import Y`. Nunca `from monitor import ...` suelto: Python lo carga como un módulo distinto de `server.monitor`, y `taglog` (que tiene estado: la lista de sinks) quedaría duplicado.
+- **Estado del device**: solo a través de la FSM (`start_flash`, `promote`...). Si una transición no se permite, `InvalidTransition`. Nada de flags sueltos.
+- **Puertos**: no derivarlos. `remote_esp32.py` los recibe por `--control-port` (los decide `infra/espbench-name`). `TtyPort.from_tty_path` y `DeviceRegistry._parse_tty_number` existen solo como fallback y para tests.
+- **Datos por device**: si `device.mac` está, en `devices/<mac>/` (jobs, `current.elf`, `last_user`). Si no, en las rutas por tty. El lock va siempre por tty (a propósito, ver ARCHITECTURE §5).
+- **Escrituras compartidas entre procesos**: atómicas (`runstate.write`) o con `flock` + `flush` + `fsync` **antes** de soltar el lock (`DevicesFile._update`). Sin eso, `devices.json` ya se corrompió una vez.
+- Python 3.9 en la Pi: nada de `X | None` en firmas de función ni en anotaciones a nivel módulo (`Optional[X]`).
 
-Dónde termina cada línea (archivo, JSON lines por device, lo que sea) es un sink — hoy solo hay uno a stdout. Agregar destino nuevo es `taglog.add_sink(fn)`, sin tocar ningún call site. Visualización (dashboard, etc.) — sin decidir todavía.
+## Tests
 
-`device.py` ya loguea cada transición de su FSM (aceptada o rechazada) por acá — es el único módulo migrado. El resto (`remote_esp32.py`, `monitor.py`, `protocol.py`, `flash.py`) sigue con `nprint()`/`svc_log` — migrarlos es un paso aparte.
+Cada módulo tiene su `tests/test_<modulo>.py`. Los que importan:
 
-## Modelo de device (`device.py`)
-
-`TtyPort` (puerto físico) y `Device` (identidad lógica, keyed por MAC) están separados a propósito — un `Device` arranca sin MAC (`DISCOVERING`), se promueve a `MONITORING` apenas se conoce (`Device.promote(mac)`), y esa promoción es también el punto donde se adopta el `DeviceLog`. Transiciones inválidas (flashear dos veces, borrar mientras flashea, etc.) levantan `InvalidTransition` en vez de asumir que "nunca pasa" — reemplaza el `_ignore_signals_flag` + `mon.stop()/start()` sueltos de hoy.
-
-1 proceso `remote_esp32.py` = 1 `TtyPort` = 1 `Device`, para toda su vida — no hay `attach()` para cambiar de tty a mitad de proceso (ver decisión de no consolidar a un servicio único en la memoria del proyecto). `disconnect()` es terminal.
-
-No confundir con `device_registry.py` (`DeviceRegistry`/`DeviceInfo`) — ese es el modelo de lectura que usa hoy el dashboard, escaneando archivos. Se conectan en una fase futura (dashboard lee `devices/<mac>/state.json` en vez de inferir por `tmux has-session`).
-
-## Rutas (`paths.py`)
-
-Todo path generado en runtime (`logs/`, `jobs/`, `locks/`, `devices.json`, `current_<tty>.elf`, etc.) sale de `paths.py`, nunca de un literal `"/opt/esp"` repetido. Base configurable con la env var `ESP_BASE` (`remote_esp32.py --base` la setea al arrancar).
-
-`paths.py` también expone el esquema nuevo por-device (`device_home(mac)`, `device_output_log(mac)`, ...), keyed por MAC en vez de tty — todavía sin usar, es el target de la próxima fase del refactor (ver conversación de arquitectura / `DeviceLog`).
-
-## Entrypoint (`remote_esp32.py`)
-
-CLI args: `--port-tty`, `--serial-baud`, `--control-port`, `--chip`, `--flash-baud`, `--token`, `--base`
-
-Startup sequence:
-1. Read device MAC (`flash.read_mac()`) — port must be free
-2. Register MAC in `/opt/esp/devices.json`
-3. Start `EspMonitor` (background serial monitor)
-4. Start `control_server` (TCP listener, daemon thread)
-5. Block on signal (SIGTERM/SIGINT/SIGHUP → graceful shutdown)
-
-## Flash Protocol (`protocol.py`)
-
-TCP control server per-connection flow:
-1. Receive header JSON (token, action, job metadata)
-2. Validate token
-3. Create job dir under `/opt/esp/jobs/`
-4. Receive artifact (upload bytes or download from URL)
-5. Verify SHA256
-6. Extract ZIP
-7. Copy `firmware.elf` → `/opt/esp/current.elf`
-8. `_ignore_signals_flag.set()` — inhibit interruption
-9. `mon.stop()` — release serial port
-10. `esptool write_flash` (with retry on encryption errors)
-11. Send result JSON to client
-12. `mon.start()`, `_ignore_signals_flag.clear()`
-
-Stream mode: real-time esptool output sent via `send_msg()` during flash.
-
-Device locking: lock file `user:token` in `/opt/esp/locks/` prevents concurrent flashes.
-
-## Serial Monitor (`monitor.py`)
-
-`EspMonitor` class:
-- Spawns `python -m esp_idf_monitor` in PTY
-- Passes `--elf /opt/esp/current.elf` if file exists (backtrace decoding)
-- Relay: monitor stdout → stdout + daily log file
-- Circular buffer (64 KB) for firmware info parsing
-- Daily log rotation: `/opt/esp/logs/YYYYMMDD/serial.log`
-- Intercepts `Ctrl-C` (shutdown server) and `Ctrl-E` (erase region interactive)
-- `_ignore_signals_flag` (threading.Event) shared with entrypoint — blocks SIGTERM during flash
-
-## Flash Tool (`flash.py`)
-
-- `find_esptool_cmd()` — PATH or `python -m esptool`
-- `build_esptool_cmd()` — reads `flasher_args.json`, resolves bin paths (dict/list/glob)
-- `run_cmd()` — subprocess, line-by-line output relay
-- `read_mac()` — runs `esptool read_mac`
-- Default offsets: 0x1000 (bootloader), 0x8000 (PT), 0xe000 (OTA), 0x10000 (app)
-
-## Device Registry (`device_registry.py`)
-
-`DevicesFile` — thread-safe JSON at `/opt/esp/devices.json`, fcntl-locked:
-- Maps MAC → `{ device_key, hw_model }`
-
-`DeviceInfo` dataclass fields:
-- `tty`, `tty_name`, `port_tcp`, `status` (RUNNING/DOWN)
-- `mac`, `sn`, `device_key`, `hw_model`
-- `fw_project`, `fw_version`, `fw_idf`
-- `last_flash_ts`, `last_flash_user`, `lock_user`
-
-`DeviceRegistry`:
-- `list_devices()` — scans `/dev/ttyUSB*`
-- `get_device(tty_name)` — reads MAC from `/opt/esp/logs/{tty}/mac`, detects status via `tmux has-session`
-- Parses firmware info (project, version, IDF) from circular buffer / log files
-
-## Dashboard API (`dashboard.py`)
-
-FastAPI app:
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/version` | GET | Version from `/opt/esp/VERSION` |
-| `/api/devices` | GET | List all connected devices |
-| `/api/device/by-key/{key}` | GET | Lookup by friendly name |
-| `/api/device/{tty}` | GET | Details for one tty |
-| `/api/devices/{mac}` | PATCH | Rename device (update `device_key`) |
-| `/api/device/{tty}/unlock` | POST | Unlock locked device |
-| `/api/device/{tty}/command/{cmd}` | POST | Send tmux key combo (reset, bootloader) |
-| `/ws/device/{tty}` | WebSocket | Real-time serial log stream |
-
-Serves static files from `../dashboard/`.
+- `test_protocol.py`: pedido completo por `socketpair` con esptool falso.
+- `test_remote_esp32.py`: el entrypoint entero con fakes solo en los bordes.

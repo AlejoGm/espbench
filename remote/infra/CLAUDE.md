@@ -1,58 +1,51 @@
 # remote/infra/
 
-System-level infrastructure for Raspberry Pi. Handles device auto-discovery, session management, and service lifecycle.
+Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, systemd. Arquitectura: [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) §6-7.
 
-## Files
+## Archivos
 
-| File | Type | Purpose |
-|------|------|---------|
-| `99-esp32.rules` | udev | Auto-create tmux session on USB plug-in |
-| `esp32_tmux.sh` | Bash | Helper called by udev: creates tmux session, runs `remote_esp32.py` |
-| `devremote` | Bash | CLI for session management (`devremote`, `--status`, `--reset`, `<N>`, `--unlock <N>`) |
-| `devremote.service` | systemd | One-shot service: starts missing sessions at boot |
-| `dashboard.service` | systemd | Runs FastAPI dashboard server |
-| `update.sh` | Bash | Updates an existing Pi: git fetch/pull + `install.sh` + restart `dashboard` + `devremote --reset` |
+| Archivo | Tipo | Qué hace | Instalado en |
+|---|---|---|---|
+| `espbench-name` | bash | **Única fuente** de la regla de nombre y puerto de un device | `/usr/local/bin/` |
+| `esp32_tmux.sh` | bash | Crea la sesión tmux `esp32_<nombre>` que corre `remote_esp32.py` | `/usr/local/bin/` |
+| `devremote` | bash | CLI de sesiones (ver abajo). Siempre corre como `sfypi` | `/usr/local/bin/` |
+| `99-esp32.rules` | udev | Symlink `/dev/esp-slotK` + hotplug vía systemd | `/etc/udev/rules.d/` |
+| `espbench-attach@.service` | systemd | Hotplug: `devremote --start %I` como `sfypi` | `/etc/systemd/system/` |
+| `devremote.service` | systemd | Al boot: levanta las sesiones de lo que ya esté enchufado | `/etc/systemd/system/` |
+| `dashboard.service` | systemd | `uvicorn server.api:app` en el puerto 8080 | `/etc/systemd/system/` |
+| `update.sh` | bash | Actualizar una Pi: fetch/pull + `install.sh` + restart dashboard + `devremote --reset` | (se corre desde el clone) |
 
-## update.sh
+## Nombres y puertos (`espbench-name`)
 
-Run from the repo clone on the Pi (not from `/opt/esp`): `sudo bash remote/infra/update.sh`.
+| Caso | Nombre | Puerto |
+|---|---|---|
+| Sin `/opt/esp/slots.conf` | `ttyUSBN` | `5000+N` |
+| Puerto físico mapeado | `esp-slotK` | `5000+K` |
+| Hay `slots.conf` y el device no está mapeado | `ttyUSBN` | `5100+N` |
 
-Aborts if the repo has uncommitted local changes. No-ops if already up to date with `origin/<current-branch>`. Always resets `devremote` sessions after install — restarting the `devremote` service alone only starts *missing* sessions, it doesn't restart already-running ones onto the new code.
+`slots.conf`: una línea `<K> <ID_PATH>` por puerto físico del hub. Para armarlo, `devremote --slots`, y después `sudo udevadm trigger --subsystem-match=tty && devremote --reset`.
 
-## udev Rule (`99-esp32.rules`)
+**No duplicar esta regla** en otro script ni en Python. Python recibe el puerto por `--control-port`.
 
-Triggers `esp32_tmux.sh` on every `ttyUSB*` add event:
-```
-ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyUSB*", \
-RUN+="/usr/bin/tmux new-session -d -s esp32_%k '/usr/local/bin/esp32_tmux.sh /dev/%k'"
-```
+## devremote
 
-## esp32_tmux.sh
+| Uso | |
+|---|---|
+| `devremote` | Levanta las sesiones que falten |
+| `devremote <dev>` | `tmux attach` a la sesión del device |
+| `devremote --status` | Device / kernel tty / puerto / sesión / estado de la FSM / pid |
+| `devremote --reset [<dev>]` | Reinicia todas las sesiones, o solo la de `<dev>` |
+| `devremote --unlock <dev>` | Libera el lock |
+| `devremote --slots` | `ID_PATH` de cada puerto (para armar `slots.conf`) |
+| `devremote --start <ttyUSBN>` | Levanta una sesión (lo usa el hotplug) |
+| `devremote --cleanup [--dry-run] [--jobs-days N] [--logs-days N]` | Borra jobs y sesiones de log viejas (nunca la sesión actual) |
 
-- Arg: `/dev/ttyUSBN`
-- Creates tmux session `esp32_ttyUSBN`
-- Runs `remote_esp32.py --port-tty /dev/ttyUSBN --control-port 500N ...`
-- TCP port = `5000 + N`
+`<dev>` acepta `N` (= `ttyUSBN`), `ttyUSBN`, `esp-slotK` o `slotK`.
 
-## devremote CLI
+## Hotplug
 
-| Usage | Behavior |
-|-------|----------|
-| `devremote` | Scan devices, start missing sessions |
-| `devremote --reset` | Kill and restart all sessions |
-| `devremote --reset <N>` | Kill and restart session for ttyUSBN only |
-| `devremote --status` | Table: device / port / status / PID |
-| `devremote <N>` | Attach to session for ttyUSBN |
-| `devremote --unlock <N>` | Interactive unlock for ttyUSBN |
+udev → `espbench-attach@<tty>.service` → `devremote --start`. **No** usar `RUN+=` desde udev para lanzar tmux: corre en el tmux server de root y lo mata el fin del evento. La regla anterior hacía exactamente eso, y por eso el hotplug nunca funcionó.
 
-## Install Locations
+## Tests
 
-```
-/usr/local/bin/devremote
-/usr/local/bin/esp32_tmux.sh
-/etc/udev/rules.d/99-esp32.rules
-/etc/systemd/system/devremote.service
-/etc/systemd/system/dashboard.service
-```
-
-Installed by `../install.sh`.
+`tests/test_infra.py` corre estos scripts reales con `tmux`/`udevadm`/`pkill`/`sudo` falsos en el `PATH`. Para eso existen `ESPBENCH_DEV_DIR` y `DEVREMOTE_NO_REEXEC`, que **son solo para tests**. La regla udev y los units de systemd solo se verifican en la Pi.

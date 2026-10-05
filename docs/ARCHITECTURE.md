@@ -1,328 +1,276 @@
-# remoteFlashServer — Arquitectura
+# espbench — Arquitectura
 
-> Estado: 2026-06-23. Documento descriptivo, no normativo.
-
----
-
-## Visión general
-
-Sistema Python para flashear firmware ESP32 de forma local o remota. El desarrollador corre `deploy.py` desde su máquina; en la Raspberry Pi corre `remote_esp32.py`, que mantiene un monitor serial persistente y acepta conexiones de flash por TCP.
+Flasheo remoto de ESP32 y monitor serie persistente. El developer compila en su
+máquina; los ESP32 están enchufados a una Raspberry Pi que los flashea, los
+monitorea y muestra todo en un dashboard web.
 
 ```
-[Máquina del desarrollador]           [Raspberry Pi / servidor remoto]
-        client/deploy.py  ──TCP──►  server/remote_esp32.py
-                                            │
-                                    monitor serial siempre activo
-                                    (esp_idf_monitor + ELF para backtraces)
-```
-
----
-
-## 1. Estructura de archivos
-
-```
-remoteFlashServer/
-├── common.py                  # Utilidades compartidas: SHA256, send_msg, recv_msg
-├── requirements.txt           # Dependencias Python: esptool, esp-idf-monitor
-├── install.sh                 # Script de instalación en la Pi (como root)
-│
-├── client/
-│   └── deploy.py              # Cliente: build opcional + empaqueta ZIP + envía TCP
-│
-├── server/
-│   ├── remote_esp32.py        # Entrypoint delgado: señales, logging, arranque
-│   ├── protocol.py            # Servidor TCP: acepta conexiones, orquesta el flash
-│   ├── flash.py               # Funciones esptool: find, build_cmd, run_cmd
-│   └── monitor.py             # EspMonitor: esp_idf_monitor via PTY, buffer circular
-│
-├── infra/
-│   ├── devremote              # CLI para gestionar sesiones tmux por dispositivo
-│   ├── devremote.service      # Systemd unit (oneshot) que lanza devremote al boot
-│   ├── esp32_tmux.sh          # Script auxiliar llamado por udev al conectar un USB
-│   └── 99-esp32.rules         # Regla udev: lanza esp32_tmux.sh al detectar ttyUSB*
-│
-├── tests/
-│   ├── test_common.py
-│   ├── test_flash.py
-│   └── test_artifact.py
-│
-└── issues/                    # Historial de issues del proyecto
+Máquina del developer                Raspberry Pi
+─────────────────────                ─────────────────────────────────────────────
+client/deploy.py ──TCP 5000+K──►  remote_esp32.py   (un proceso por device, en tmux)
+                                    ├─ DeviceManager → TtyPort + Device (FSM) + DeviceLog
+                                    ├─ EspMonitor     (esp_idf_monitor en un PTY)
+                                    └─ control_server (protocol.py)
+                                            │ escribe
+                                            ▼
+                                  /opt/esp/devices/<mac>/   log, jobs, .elf
+                                  /opt/esp/run/<tty>.json   estado runtime
+                                            │ lee
+Browser ◄──HTTP/WS 8080──────────  api.py (dashboard, proceso aparte)
 ```
 
 ---
 
-## 2. Módulos
+## 1. Procesos
 
-### `common.py`
+**Un proceso `remote_esp32.py` por device**, cada uno en su sesión tmux
+(`esp32_<nombre>`), más **un proceso de dashboard** (`api.py`, systemd).
 
-Utilidades compartidas entre cliente y servidor. Importado por `deploy.py`, `protocol.py` y los tests.
+### Decisión: no consolidar los devices en un servicio único
 
-- `sha256_file(p)` — calcula SHA256 de un archivo en bloques de 1 MB.
-- `send_msg(sock, obj)` — serializa un dict como JSON y lo envía con framing de 4 bytes big-endian.
-- `recv_msg(sock)` — recibe y deserializa un mensaje con el mismo framing.
+El refactor de `feat/newArch` (`esp_ctrl`) reemplazó tmux por un servicio que
+manejaba todos los devices, y terminó rompiendo todo. tmux por proceso da gratis
+cuatro cosas que un servicio único tiene que reconstruir a mano:
 
-### `server/flash.py`
+1. **Aislamiento de fallas** — si se cuelga el monitor o esptool de un device,
+   los demás siguen.
+2. **Limpieza de recursos** — si el proceso muere, el sistema operativo cierra
+   sus fds, PTYs y subprocesos.
+3. **Reset por device** — `devremote --reset <dev>` mata y relanza solo ese.
+4. **Attach interactivo** — `devremote <dev>` engancha la terminal de la sesión,
+   que es donde funcionan Ctrl-E (erase) y el teclado hacia el monitor.
 
-Funciones puras de flasheo con esptool. Sin estado, sin hilos.
+Consolidar no es imposible, pero requiere su propio diseño de supervisión. No
+sale gratis de tener un buen modelo de objetos.
 
-- `find_esptool_cmd()` — busca `esptool.py` en PATH o como módulo Python (`python -m esptool`). Lanza `RuntimeError` si no lo encuentra.
-- `build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir)` — lee `flasher_args.json` del directorio del job, resuelve los pares `(offset, archivo)` con varios fallbacks (dict, list, nombres por defecto, glob `*.bin`), y construye los comandos `erase-flash` y `write-flash` para esptool.
-- `run_cmd(cmd, log)` — ejecuta un subproceso, imprime su salida línea a línea y retorna el código de retorno.
+---
 
-### `server/monitor.py`
+## 2. Modelo del device (`remote/server/device.py`)
 
-Monitor serial basado en `esp_idf_monitor`. Contiene la clase `EspMonitor` y la lógica de erase region interactivo.
+| Objeto | Qué es | Vida |
+|---|---|---|
+| `TtyPort` | Puerto físico: path del tty + puerto TCP | Fijo durante toda la vida del proceso |
+| `Device` | Identidad lógica, por MAC. FSM + `DeviceLog` | Arranca sin MAC; se *promueve* cuando la conoce |
+| `DeviceManager` | Arma los dos, lee la MAC (con reintentos y fallback por serial), vigila que el tty siga existiendo | Uno por proceso |
 
-**`EspMonitor`:**
-- Lanza `python -m esp_idf_monitor` en un PTY. Si existe `current.elf`, lo pasa con `--elf` para decodificación de backtraces.
-- El hilo `_pump` hace relay bidireccional: salida del monitor → stdout + logfile diario; teclado → monitor.
-- Intercepta `Ctrl-C` (termina el servidor) y `Ctrl-E` (lanza `erase_region_interactive` en hilo separado).
-- Mantiene un buffer circular de 64 KB de salida reciente para que `erase_region_interactive` pueda parsear la tabla de particiones.
-- `_ignore_signals_flag` (threading.Event) compartido con `remote_esp32.py` para inhibir SIGTERM/SIGINT durante operaciones temporales.
+`TtyPort` y `Device` están separados a propósito: el nombre del tty puede cambiar
+(`ttyUSB3` → `esp-slot3`, ver §6) sin que nada del modelo lógico se entere.
 
-**`erase_region_interactive`:**
-- Parsea la tabla de particiones del buffer circular del monitor.
-- Permite seleccionar particiones por número o ingresar offset/tamaño manual.
-- Detiene el monitor, ejecuta `esptool erase_region`, reinicia el monitor.
+### FSM
 
-### `server/protocol.py`
-
-Servidor TCP de control. Importado por `remote_esp32.py`.
-
-- `control_server(cfg, mon, svc_log)` — loop de `accept()`. Por cada conexión, llama a `handle_control` en el mismo hilo (conexiones serializadas).
-- `handle_control(sock, cfg, mon, svc_log)` — orquesta el ciclo completo: recibir header JSON → validar token → ACK → recibir artefacto (upload o pull desde URL) → verificar SHA256 → extraer ZIP → copiar `firmware.elf` → detener monitor → flashear → responder → relanzar monitor.
-
-### `server/remote_esp32.py`
-
-Entrypoint del servidor. Delgado por diseño.
-
-- Parsea argumentos CLI: `--port-tty`, `--serial-baud`, `--control-port`, `--chip`, `--flash-baud`, `--token`, `--base`.
-- Configura logging dual (stdout + archivo `remote_esp32.service.log`).
-- Instancia `EspMonitor` y lo arranca.
-- Lanza `control_server` en un hilo daemon.
-- Espera `_shutdown_flag` (seteado por los signal handlers de SIGTERM/SIGINT/SIGHUP).
-
-### `client/deploy.py`
-
-Cliente de flash. Corre en la máquina del desarrollador.
-
-**Modos de operación:**
-```
---mode local   → idf.py build + idf.py (encrypted-)flash + idf.py monitor
---mode remote  → idf.py build + collect_artifact() → ZIP → TCP → espera resultado
---mode auto    → detecta configuración remota → elige automáticamente
+```mermaid
+stateDiagram-v2
+    [*] --> DISCOVERING
+    DISCOVERING --> MONITORING : MAC leída
+    DISCOVERING --> UNKNOWN : esptool no pudo
+    UNKNOWN --> MONITORING : MAC tarde (serial)
+    MONITORING --> FLASHING
+    FLASHING --> MONITORING
+    MONITORING --> ERASING
+    ERASING --> MONITORING
+    UNKNOWN --> FLASHING
+    UNKNOWN --> ERASING
+    MONITORING --> DISCONNECTED : tty desaparece
+    UNKNOWN --> DISCONNECTED
+    FLASHING --> DISCONNECTED
+    ERASING --> DISCONNECTED
 ```
 
-**`collect_artifact()`:** lee `flasher_args.json` del build dir, arma `artifact.zip` con los binarios y sus offsets. Opcionalmente incluye `firmware.elf` para el pipeline de backtraces.
+- `FLASHING`/`ERASING` vuelven al estado del que salieron. Si en el medio se
+  resolvió la MAC, vuelven a `MONITORING`.
+- **`UNKNOWN` puede flashear**: los chips con flash encryption no siempre dejan
+  leer la MAC con esptool, y tienen que poder usarse igual.
+- Las transiciones inválidas levantan `InvalidTransition`. Por ejemplo, un pedido
+  de flash durante un erase se rechaza con `device_busy` antes de recibir el
+  artefacto. Antes paraba el monitor en medio del erase.
+- **Señales**: mientras `device.busy` (FLASHING/ERASING), el proceso ignora
+  SIGTERM/SIGINT/SIGHUP, para no dejar un chip a medio escribir. Esto reemplaza
+  al viejo `_ignore_signals_flag`.
 
-**Modo `--custom`:** selector de archivos nativo por OS (osascript en macOS, PowerShell en Windows, tkinter en Linux) para flashear binarios de otro proyecto. Persiste la selección en `.custom_flash_files.json`.
+Cada transición se loguea y se publica en `run/<tty>.json`.
 
-**Retry automático:** si el flash falla y hubo build previo, pregunta si reintentar sin build.
+---
 
-**Configuración:** `.flashcfg.json` (gitignoreado), creado manualmente por el usuario:
+## 3. Estado runtime (`remote/server/runstate.py`)
+
+`/opt/esp/run/<tty>.json` es lo único que cruza de proceso a proceso. Lo escribe
+el `Device` en cada transición, con escritura atómica (temp + `os.replace`). Lo
+leen el dashboard (`DeviceRegistry`, `LogStreamer`), `esp32_tmux.sh` y
+`devremote --status`.
+
 ```json
-{
-  "mode": "auto",
-  "paths": { "project_root": ".", "idf_py": "idf.py" },
-  "local":  { "port": "/dev/ttyUSB0", "monitor": true },
-  "remote": { "host": "192.168.1.100", "port": 5000, "token": "secret" },
-  "chip": "esp32",
-  "flash_baud": 921600,
-  "encrypt": true,
-  "erase": false
-}
+{"tty": "esp-slot3", "tty_path": "/dev/esp-slot3", "tcp_port": 5003,
+ "mac": "1C:C3:AB:01:61:D4", "state": "monitoring",
+ "log_path": "/opt/esp/devices/1CC3AB0161D4/output.log",
+ "pid": 1234, "updated_at": "2026-10-05T16:00:00"}
 ```
+
+**Es por tty y no por MAC** porque es el estado del *proceso*, y antes de leer la
+MAC no hay otra clave posible. Los datos que tienen que seguir a la placa (log,
+jobs, `.elf`) sí van por MAC.
+
+Si el `pid` está muerto, el dashboard lo toma como DOWN (un `kill -9` no limpia
+el archivo). Si el estado es `disconnected`, `esp32_tmux.sh` recrea la sesión
+cuando el tty vuelve.
 
 ---
 
-## 3. Flujo de flash remoto
+## 4. Logs
 
-```
-deploy.py                              protocol.py / remote_esp32.py
-   │
-   ├─ 1. idf.py build  (opcional)
-   ├─ 2. collect_artifact()
-   │      └─ ZIP: flasher_args.json + *.bin [+ firmware.elf]
-   │
-   ├─ 3. TCP connect → send_msg(header JSON)
-   │      { token, action, job_id, chip, baud, encrypt, erase,
-   │        artifact_size, artifact_sha256 }
-   │                                        │
-   │                                        ├─ 4. validar token
-   │                                        ├─ 5. crear jobdir
-   │◄────────────────── ACK { ok, phase:"ready", job_id } ───┤
-   │
-   ├─ 6. enviar bytes del ZIP (streaming)
-   │                                        │
-   │                                        ├─ 7. verificar SHA256
-   │                                        ├─ 8. extraer ZIP en jobdir/
-   │                                        ├─ 9. copiar firmware.elf → current.elf
-   │                                        ├─ 10. _ignore_signals_flag.set()
-   │                                        ├─ 11. mon.stop()
-   │                                        ├─ 12. esptool write_flash (retry sin --encrypt si rc==2)
-   │◄────────────── result JSON { ok, job_id, write_rc, ... } ┤
-   │                                        ├─ 13. mon.start()
-   │                                        └─ 14. _ignore_signals_flag.clear()
-```
+### `DeviceLog` — único escritor del log de un device
 
-El monitor se detiene solo después de recibir el artefacto completo y verificado (paso 11), minimizando el tiempo sin salida serial.
+Recibe el serial crudo (`EspMonitor` → `write_bytes`) y las líneas de `taglog`
+(flash, esptool, transiciones). Todo queda en un archivo, que es lo que muestra
+el dashboard.
+
+- **Un archivo por sesión**: `devices/<mac>/output.log` es la sesión actual. Al
+  arrancar una nueva, la anterior rota a `output_<ts>.log`.
+- **Antes de saber la MAC**, el log queda en memoria, con tope de 256 KB.
+- **Si la MAC no se lee nunca** (`UNKNOWN`), el log va a
+  `devices/unknown-<tty>/output.log`. Si la MAC aparece más tarde, ese contenido
+  migra al archivo de la MAC y el provisorio se borra.
+
+Reemplazó a `tmux pipe-pane`, que copiaba a ciegas lo que salía por la terminal,
+y al `serial.log` que escribía `EspMonitor` y nadie leía.
+
+### `taglog` (`remote/server/taglog.py`)
+
+`taglog.info(TAG, msg)` / `.warn` / `.error` / `.debug`, con un `TAG` estático
+por módulo. Es la misma convención que `ESP_LOGI(TAG, ...)` del firmware.
+
+Los sinks son pluggables (`add_sink`). Cada proceso de device tiene dos: stdout
+(la sesión tmux, con `\r\n` porque la terminal está en modo raw) y su
+`DeviceLog`.
 
 ---
 
-## 4. Pipeline `.elf`
+## 5. Flash (`remote/server/protocol.py`)
 
-El archivo `firmware.elf` viaja dentro del ZIP como artefacto opcional. Su propósito es habilitar la decodificación de backtraces en `esp_idf_monitor`.
+Una conexión TCP = un pedido (`upload_and_flash`, `pull_and_flash` o `unlock`).
 
 ```
-[Máquina del desarrollador]
-  build/firmware.elf
-       │
-       └─► collect_artifact() lo incluye en artifact.zip
-                │
-                │  TCP
-                ▼
-[Raspberry Pi]
-  jobdir/firmware.elf
-       │
-       └─► shutil.copy2 → /opt/esp/current.elf
-                                  │
-                                  └─► EspMonitor.start()
-                                        cmd: python -m esp_idf_monitor
-                                             --port /dev/ttyUSBX
-                                             --baud 115200
-                                             --elf /opt/esp/current.elf
+authenticate → validate_action → check_flashable (FSM) → LockStore
+→ ACK {phase: ready} → receive_artifact (upload|pull + SHA256) → extract_artifact
+→ monitor_paused [device.start_flash · mon.stop]
+      verificar MAC → run_flash (erase? + write, reintento sin --encrypt si rc=2)
+      → .elf a devices/<mac>/current.elf, last_user
+  [mon.start · device.finish_flash]
+→ {phase: done, ok, status, write_rc, ...}
 ```
 
-`current.elf` se sobreescribe en cada flash. `EspMonitor` verifica en cada `start()` si el archivo existe antes de pasarlo con `--elf`, por lo que el primer arranque (sin ELF aún) funciona sin decodificación de backtraces.
+- Cada paso es una función aparte, testeable con fakes (`tests/test_protocol.py`).
+  Las herramientas externas (esptool, lectura de MAC) llegan en `FlashTools`.
+- El job vive en `devices/<mac>/jobs/<job_id>/`, con su `job.log` adentro. Para
+  un device sin MAC, en `jobs/<job_id>_<tty>/`.
+- **El lock queda por tty**, no por MAC, a propósito: `esp32_tmux.sh` lo libera
+  al reconectar, y atarlo a la placa cambiaría ese comportamiento.
 
 ---
 
-## 5. Infraestructura
+## 6. Nombres y puertos (`remote/infra/espbench-name`)
 
-### Paths en la Pi (instalados por `install.sh`)
+`ttyUSBN` es el orden en que el kernel enumeró los devices, no el puerto físico:
+un replug o un reboot puede cambiarlo. `espbench-name` es **la única fuente** de
+la regla de nombre y puerto. El proceso Python recibe el puerto ya resuelto por
+`--control-port`.
+
+| Caso | Nombre | Puerto TCP |
+|---|---|---|
+| Sin `/opt/esp/slots.conf` | `ttyUSBN` | `5000+N` (comportamiento histórico) |
+| Puerto físico mapeado en `slots.conf` | `esp-slotK` | `5000+K` |
+| Hay `slots.conf` y el device no está mapeado | `ttyUSBN` | `5100+N` (no choca con los slots) |
+
+`slots.conf` tiene una línea por puerto físico del hub: `<K> <ID_PATH>`.
+`devremote --slots` muestra el `ID_PATH` de lo que está enchufado. Una regla udev
+crea el symlink `/dev/esp-slotK` y la sesión corre sobre él, así que la sesión,
+el estado runtime y el lock quedan atados al puerto físico.
+
+---
+
+## 7. Sesiones y hotplug (`remote/infra/`)
+
+```
+enchufar ──► udev (99-esp32.rules) ──► systemd espbench-attach@ttyUSBN
+                                            └─► devremote --start (como sfypi)
+boot ─────► devremote.service ─────────────────► devremote (escanea /dev/ttyUSB*)
+                                                      └─► esp32_tmux.sh /dev/ttyUSBN
+                                                             └─► tmux esp32_<nombre>: remote_esp32.py
+```
+
+- El hotplug pasa por systemd y no por `RUN+=` de udev. Lo que udev lanza corre
+  en el tmux server de root y se mata al terminar el evento. La regla anterior
+  hacía eso, y en la práctica el hotplug no funcionaba.
+- `devremote`: `--status`, `--reset [<dev>]`, `--unlock <dev>`, `--slots`,
+  `--cleanup`, `<dev>` (attach). `<dev>` acepta `N`, `ttyUSBN`, `esp-slotK` o
+  `slotK`.
+- Desconexión: el watcher del proceso ve que el tty desapareció → `DISCONNECTED`
+  → el proceso termina. Cuando el tty vuelve, `esp32_tmux.sh` recrea la sesión.
+
+---
+
+## 8. Dashboard (`remote/server/api.py` + `remote/dashboard/`)
+
+| Endpoint | |
+|---|---|
+| `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
+| `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
+| `POST /api/device/{tty}/unlock` | Liberar lock |
+| `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys` |
+| `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>` |
+| `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
+
+- `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del
+  `ttyUSB` al que apunta). El estado, la MAC y el puerto salen de
+  `run/<tty>.json`. Sin estado runtime, cae al esquema anterior (`tmux
+  has-session`, `logs/<tty>/mac`).
+- `LogStreamer` sigue el `log_path` que publica el device. Cuando el archivo rota
+  (cambió el inode), lo lee desde el principio.
+- `devices.json` (MAC → nombre amigable + modelo de HW) lo comparten todos los
+  procesos. La escritura es con `flock`, y el `flush`+`fsync` se hace **antes**
+  de soltar el lock: sin eso, dos `register_mac` simultáneos corrompían el
+  archivo (pasaba con `devremote --reset`).
+
+---
+
+## 9. Filesystem en la Pi
 
 ```
 /opt/esp/
-├── server/               ← copia de server/ del repo
-│   ├── remote_esp32.py
-│   ├── protocol.py
-│   ├── flash.py
-│   └── monitor.py
-├── common.py             ← copia de common.py del repo
-├── logs/                 ← logs del servicio y serial diario
-│   ├── remote_esp32.service.log
-│   └── YYYYMMDD/
-│       ├── serial.log
-│       └── job_YYYYMMDD_HHMMSS.log
-├── jobs/                 ← directorio de trabajo por job (ZIPs extraídos)
-│   └── job_YYYYMMDD_HHMMSS/
-│       ├── artifact.zip
-│       ├── flasher_args.json
-│       ├── firmware.elf
-│       └── *.bin
-└── current.elf           ← último ELF flasheado (para backtrace decoding)
-
-/usr/local/bin/
-├── devremote             ← CLI de gestión de sesiones tmux
-└── esp32_tmux.sh         ← script auxiliar llamado por udev
-
-/etc/udev/rules.d/
-└── 99-esp32.rules        ← lanza esp32_tmux.sh al conectar ttyUSB*
-
-/etc/systemd/system/
-└── devremote.service     ← arranca devremote al boot
+├── server/                código (copia de remote/server/)
+├── dashboard/             frontend (copia de remote/dashboard/)
+├── venv/                  Python + esptool + esp-idf-monitor + fastapi
+├── devices.json           MAC → {device_key, hw_model}
+├── slots.conf             (opcional) <K> <ID_PATH>
+├── run/<tty>.json         estado runtime de cada sesión
+├── devices/<MAC>/
+│   ├── output.log         log de la sesión actual
+│   ├── output_<ts>.log    sesiones anteriores
+│   ├── current.elf        para decodificar backtraces
+│   ├── last_user
+│   └── jobs/<job_id>/     artefacto extraído + job.log
+├── devices/unknown-<tty>/ log de un device sin MAC
+├── locks/<tty>            "user:token"
+└── jobs/, logs/, current_<tty>.elf   esquema anterior / devices sin MAC
 ```
 
-### `devremote` (CLI)
-
-Script Bash que gestiona una sesión tmux por cada `/dev/ttyUSBX` presente.
-
-- Sin argumentos: detecta dispositivos y arranca sesiones faltantes.
-- `--reset`: mata todas las sesiones `esp32_*` y las reinicia.
-- `--status`: muestra estado (RUNNING/DOWN), puerto TCP y PID por dispositivo.
-- `<N>`: hace `tmux attach-session` a la sesión del `ttyUSBN`.
-
-Cada sesión se llama `esp32_ttyUSBX` y escucha en el puerto `5000 + X`.
-
-### `esp32_tmux.sh`
-
-Script auxiliar lanzado directamente por la regla udev al detectar un `ttyUSB*` nuevo. Crea la sesión tmux para ese dispositivo si no existe.
-
-### Regla udev `99-esp32.rules`
-
-```
-ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyUSB*", \
-RUN+="/usr/bin/tmux new-session -d -s esp32_%k '/usr/local/bin/esp32_tmux.sh /dev/%k'"
-```
-
-Permite que los dispositivos ESP32 levanten su sesión automáticamente al conectarse.
-
-### Servicio systemd `devremote.service`
-
-Unit de tipo `oneshot` con `RemainAfterExit=yes`. Corre `devremote` al boot para arrancar las sesiones de los dispositivos ya conectados. Complementa la regla udev (que cubre conexiones en caliente).
+`devremote --cleanup` borra jobs y sesiones de log viejas. La sesión actual
+nunca se toca.
 
 ---
 
-## 6. Instalación
+## 10. Tests
 
-```bash
-sudo ./install.sh
-```
+`pytest tests/`, en el host y sin hardware. `tests/conftest.py` aísla `ESP_BASE`,
+así que ningún test toca el `/opt/esp` real.
 
-El script es idempotente. Realiza los siguientes pasos:
+| Qué | Cómo |
+|---|---|
+| Modelo, FSM, `DeviceLog`, `runstate`, `taglog`, `paths` | unitarios |
+| `protocol.py` | pedido completo por `socketpair`, esptool falso (`test_protocol.py`) |
+| Entrypoint | `remote_esp32.main()` con fakes solo en esptool/monitor/TCP (`test_remote_esp32.py`) |
+| Scripts de infra | los scripts reales con `tmux`/`udevadm`/`pkill` falsos (`test_infra.py`) |
+| Dashboard | `DeviceRegistry`, `LogStreamer` (rotación, `log_path` por estado runtime) |
 
-1. Verifica que `tmux`, `python3` y `pip3` estén disponibles.
-2. Crea `/opt/esp/server/`, `/opt/esp/logs/`, `/opt/esp/jobs/`.
-3. Copia `server/*` → `/opt/esp/server/`.
-4. Copia `common.py` → `/opt/esp/common.py`.
-5. Instala `infra/devremote` → `/usr/local/bin/devremote` (ejecutable).
-6. Instala `infra/esp32_tmux.sh` → `/usr/local/bin/esp32_tmux.sh` (ejecutable).
-7. Instala `infra/99-esp32.rules` → `/etc/udev/rules.d/`.
-8. Instala `infra/devremote.service` → `/etc/systemd/system/`.
-9. Recarga reglas udev (`udevadm control --reload-rules && udevadm trigger`).
-10. Habilita el servicio (`systemctl enable devremote`), sin iniciarlo.
-
-Al finalizar muestra un resumen de rutas instaladas. Para iniciar el servicio manualmente: `systemctl start devremote`.
-
----
-
-## 7. Dependencias
-
-| Herramienta | Usado por | Cómo se localiza |
-|---|---|---|
-| `esptool` | `flash.py` (servidor) | `shutil.which("esptool.py")` → `python -m esptool` → `RuntimeError` |
-| `esp-idf-monitor` | `monitor.py` (servidor) | `python -m esp_idf_monitor` (debe estar en el mismo entorno Python) |
-| `idf.py` | `deploy.py` (cliente, build local) | PATH → `IDF_PATH`/`ESP_IDF_PATH` → rutas comunes |
-| `tmux` | `devremote`, `esp32_tmux.sh` | debe estar en PATH del servidor |
-| `osascript` | `deploy.py` (macOS, modo --custom) | sistema |
-| `powershell` | `deploy.py` (Windows, modo --custom) | sistema |
-| `tkinter` | `deploy.py` (Linux, modo --custom) | stdlib Python |
-
-Las dependencias Python del servidor se declaran en `requirements.txt`:
-
-```
-esptool
-esp-idf-monitor
-```
-
-Instalar con: `pip install -r requirements.txt`
-
----
-
-## 8. Norte futuro
-
-El siguiente paso natural es un **dashboard web** que permita ver los logs seriales en tiempo real desde el browser, sin necesidad de hacer `devremote <N>` para adjuntarse a la sesión tmux.
-
-Arquitectura propuesta:
-
-```
-[Browser]  ◄──── WebSocket ────  [Servidor HTTP/WS en la Pi]
-                                          │
-                                  suscribe al buffer circular
-                                  de EspMonitor (ya existe)
-                                          │
-                                  también expone endpoint REST
-                                  para consultar estado y jobs
-```
-
-El buffer circular de 64 KB que `EspMonitor` ya mantiene es la base natural para esto: el servidor WS puede transmitir el contenido existente al conectar un cliente nuevo y luego hacer streaming de los nuevos bytes conforme llegan.
+**Solo se verifica en la Pi**: la regla udev de slots, el hotplug vía systemd, y
+el comportamiento real de `esp_idf_monitor`/esptool con hardware (flash, erase,
+MAC por serial, desconexión física).

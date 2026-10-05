@@ -1,40 +1,30 @@
 # remote/dashboard/
 
-Web UI static files. Served by `server/dashboard.py` (FastAPI static mount).
+Frontend del dashboard. Lo sirve `server/api.py` (montaje estático de FastAPI). Vanilla HTML/CSS/JS: sin framework, sin build.
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `index.html` | Home page: device cards grid |
-| `device.html` | Device detail: serial log viewer with WebSocket |
-| `style.css` | Responsive grid, dark theme, card styling |
-
-No build step. Vanilla HTML/CSS/JS — no framework, no bundler.
+| Archivo | |
+|---|---|
+| `index.html` | Grilla de cards, una por device. Pollea `/api/devices` cada 5 s |
+| `device.html` | Log del device en vivo (`/ws/device/{tty}`) + badges + botones reset/boot/sesión/unlock |
+| `style.css` | Tema oscuro, grilla responsive |
 
 ## index.html
 
-- Polls `/api/devices` every 5 seconds
-- Card per device: key (editable), hw_model, fw version, IDF, deployer, SN, TTY, last flash, TCP port, status badge, lock indicator
-- Groups: known devices (have MAC) vs unknown
-- "Ver monitor" button → `device.html?tty=...`
-- Inline rename: PATCH `/api/devices/{mac}`
+- Card por device: nombre (renombrable, `PATCH /api/devices/{mac}`), modelo de HW, versión de firmware, IDF, último deployer, SN, tty, último flash, puerto TCP, lock.
+- Dos badges de estado:
+  - `status` (RUNNING/DOWN): si hay un proceso vivo atendiendo el device.
+  - `state`, el estado de la FSM: **FLASHEANDO** / **BORRANDO** / **INICIANDO** / **SIN MAC** / **DESCONECTADO**. `monitoring` es lo normal y no lleva badge.
+- Los devices con MAC conocida van en la grilla principal; los que no, en "sin identificar".
+- `tty_name` puede ser `ttyUSBN` o `esp-slotK` (slots, ver `remote/infra/`).
 
 ## device.html
 
-- Query param: `?tty=ttyUSB0`
-- WebSocket to `/ws/device/{tty}`
-- Shows full day log + live stream
-- Auto-scroll on new content
-- Back link to home
+- `?tty=<nombre>`. WebSocket a `/ws/device/{tty}`: manda la sesión actual completa y después el stream en vivo. Si la sesión rota, se ve el arranque de la nueva.
+- El log mezcla el serial del ESP32 con las líneas de `taglog` del server (flash, esptool, transiciones).
+- Los badges (`/api/device/{tty}`) se refrescan cada 3 s, así se ve el estado `flashing` mientras dura.
 
-## style.css
+## Notas
 
-- CSS Grid for card layout (responsive)
-- Dark color scheme (no Bootstrap/Tailwind dependency)
-- Animations + hover effects on cards
-
-## Notes
-
-- All API calls target same host/port as page origin (no hardcoded URLs)
-- No auth on dashboard — internal network use only
+- Las llamadas usan el mismo host/puerto que la página (no hay URLs hardcodeadas).
+- No tiene autenticación: es solo para uso en la red interna.
+- Para probarlo sin Pi: levantar `server.api` con devices simulados en `run/<tty>.json` (necesita `uvicorn[standard]`, que es el que trae soporte de WebSocket).
