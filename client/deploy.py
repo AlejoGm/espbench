@@ -427,7 +427,7 @@ def collect_artifact(build_dir: pathlib.Path, custom_flasher_args_path: str = No
             # Modo normal: usar flasher_args.json del build
             fa = build_dir / "flasher_args.json"
             if not fa.exists():
-                raise SystemExit("no existe build/flasher_args.json (corré un build primero)")
+                raise SystemExit(f"no existe {fa} (corré un build primero)")
             
             z.write(fa, arcname="flasher_args.json")
             print(f"[ARTIFACT] + flasher_args.json")
@@ -710,17 +710,16 @@ def _print_summary(results: dict):
 
 # ------------- flows -------------
 
-def flash_remote(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool, custom_flasher_args_path: str = None, is_custom_mode: bool = False):
+def flash_remote(cfg, project_root: pathlib.Path, build_dir: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool, custom_flasher_args_path: str = None, is_custom_mode: bool = False):
     remotes = _normalize_remotes(cfg)
     if not remotes:
         raise SystemExit("[REMOTE] ✗ No hay 'remote' en .flashcfg.json")
 
-    build_dir = project_root / "build"
     if is_custom_mode:
         print("[CUSTOM] Modo custom: saltando build")
     elif do_build:
         print("[BUILD] Compilando proyecto...")
-        run([idf_py, "build"], cwd=project_root)
+        run([idf_py, "-B", str(build_dir), "build"], cwd=project_root)
     else:
         print("[BUILD] Saltando compilación (usando binarios existentes)")
 
@@ -845,7 +844,7 @@ def unlock_remote(cfg):
     return 0 if all(r.get("ok") for r in results.values()) else 1
 
 
-def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool):
+def flash_local(cfg, project_root: pathlib.Path, build_dir: pathlib.Path, idf_py: str, encrypt: bool, erase: bool, chip: str, flash_baud: int, do_build: bool):
     print("\n=== FLASH LOCAL ===")
     port = cfg["local"]["port"]
     print(f"[LOCAL] Puerto: {port}")
@@ -853,7 +852,7 @@ def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, era
     
     if do_build:
         print("[BUILD] Compilando proyecto...")
-        run([idf_py, "build"], cwd=project_root)
+        run([idf_py, "-B", str(build_dir), "build"], cwd=project_root)
     else:
         print("[BUILD] Saltando compilación (usando binarios existentes)")
 
@@ -861,14 +860,14 @@ def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, era
     if erase:
         print("[LOCAL] Borrando flash...")
         try:
-            run([idf_py, "-p", port, "erase-flash"], cwd=project_root)
+            run([idf_py, "-B", str(build_dir), "-p", port, "erase-flash"], cwd=project_root)
             print("[LOCAL] ✓ Flash borrado")
         except subprocess.CalledProcessError:
             print("[LOCAL] ⚠ Error al borrar flash (continuando)")
 
     target = "encrypted-flash" if encrypt else "write_flash"
     print(f"[LOCAL] Flasheando ({target})...")
-    base_cmd = [idf_py, "-p", port, target]
+    base_cmd = [idf_py, "-B", str(build_dir), "-p", port, target]
     if chip != "auto":
         base_cmd += ["--chip", chip]
     if flash_baud:
@@ -879,7 +878,7 @@ def flash_local(cfg, project_root: pathlib.Path, idf_py: str, encrypt: bool, era
     
     if cfg.get("local", {}).get("monitor", True):
         print("[LOCAL] Iniciando monitor serial...")
-        run([idf_py, "-p", port, "monitor"], cwd=project_root)
+        run([idf_py, "-B", str(build_dir), "-p", port, "monitor"], cwd=project_root)
     return 0
 
 # ------------- main -------------
@@ -896,6 +895,10 @@ def main():
     ap.add_argument("--erase", action="store_true", default=None)
     ap.add_argument("--ask", action="store_true", help="preguntar si build+flash o solo flash")
     ap.add_argument("--custom", action="store_true", help="usar archivos custom para flasheo remoto")
+    ap.add_argument("--build-dir", default="build",
+                    help="directorio de build a compilar y flashear (default: build). Relativo a la raiz "
+                         "del proyecto, o absoluto. Sirve para proyectos que compilan varios productos en "
+                         "build dirs distintos.")
     args = ap.parse_args()
 
     cfg_path = pathlib.Path(args.cfg)
@@ -912,11 +915,17 @@ def main():
     mode = args.mode or cfg.get("mode","auto")
     paths = cfg.get("paths", {})
     project_root = pathlib.Path(paths.get("project_root",".")).resolve()
+    # El build dir no siempre es `build/`: un proyecto que compila varios productos deja uno por
+    # producto, y flashear el equivocado es mandar el firmware de otro producto sin que nada lo grite.
+    build_dir = pathlib.Path(args.build_dir)
+    if not build_dir.is_absolute():
+        build_dir = project_root / build_dir
     idf_py_config = paths.get("idf_py","idf.py")
     idf_py = find_idf_py(idf_py_config)
     
     print(f"[CONFIG] Modo: {mode}")
     print(f"[CONFIG] Proyecto: {project_root}")
+    print(f"[CONFIG] Build dir: {build_dir}")
     print(f"[CONFIG] IDF.PY: {idf_py}")
     
     # Verificar que idf.py existe y es ejecutable
@@ -991,19 +1000,19 @@ def main():
         if args.custom:
             print("[CUSTOM] ⚠ --custom solo funciona en modo remoto, se ignorará")
         print(f"[CONFIG] ✓ Usando modo LOCAL")
-        exitc = flash_local(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build)
+        exitc = flash_local(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, do_build)
     elif mode == "remote":
         print(f"[CONFIG] ✓ Usando modo REMOTO")
-        exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
+        exitc = flash_remote(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
     else:  # auto
         if _normalize_remotes(cfg):
             print(f"[CONFIG] ✓ Modo AUTO detectó configuración remota")
-            exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
+            exitc = flash_remote(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, do_build, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
         else:
             if args.custom:
                 print("[CUSTOM] ⚠ --custom solo funciona en modo remoto, se ignorará")
             print(f"[CONFIG] ✓ Modo AUTO usando LOCAL")
-            exitc = flash_local(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, do_build)
+            exitc = flash_local(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, do_build)
 
     # Si falló, preguntar si se quiere reintentar sin hacer build
     if exitc != 0:
@@ -1014,14 +1023,14 @@ def main():
                 if retry in ['s', 'sí', 'si', 'y', 'yes']:
                     print("\n[RETRY] Reintentando flash sin build...")
                     if mode == "local":
-                        exitc = flash_local(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False)
+                        exitc = flash_local(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, False)
                     elif mode == "remote":
-                        exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
+                        exitc = flash_remote(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
                     else:  # auto
                         if _normalize_remotes(cfg):
-                            exitc = flash_remote(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
+                            exitc = flash_remote(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, False, custom_flasher_args_path=custom_flasher_args_path, is_custom_mode=is_custom_mode)
                         else:
-                            exitc = flash_local(cfg, project_root, idf_py, encrypt, erase, chip, flash_baud, False)
+                            exitc = flash_local(cfg, project_root, build_dir, idf_py, encrypt, erase, chip, flash_baud, False)
                     print(f"\n[DEPLOY] {'✓ Exitoso' if exitc == 0 else '✗ Falló'} (código: {exitc})")
                 else:
                     print("[RETRY] Reintento cancelado")
