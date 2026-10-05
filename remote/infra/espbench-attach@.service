@@ -1,0 +1,13 @@
+[Unit]
+Description=espbench: sesion tmux del device en %I (hotplug)
+After=devremote.service
+
+[Service]
+Type=oneshot
+User=sfypi
+Group=sfypi
+ExecStart=/usr/local/bin/devremote --start %I
+# Si no habia tmux server, lo arranca este oneshot: tiene que sobrevivirle.
+# Con el KillMode por defecto, systemd lo mataria (junto con las sesiones) al
+# terminar el ExecStart.
+KillMode=process

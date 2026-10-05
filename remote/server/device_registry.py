@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -137,10 +138,16 @@ class DeviceRegistry:
         self._devices_file = devices_file or DevicesFile()
 
     def list_devices(self) -> list[DeviceInfo]:
-        return [
-            self._build_device_info(e.name)
-            for e in sorted(self._dev_dir.glob("ttyUSB*"))
-        ]
+        return [self._build_device_info(name) for name in self._device_names()]
+
+    def _device_names(self) -> list:
+        """Un device por puerto físico: /dev/esp-slotK si su puerto está mapeado
+        en slots.conf (symlink estable que crea udev), si no /dev/ttyUSBN. El
+        ttyUSBN al que apunta un slot no se lista dos veces."""
+        slots = list(self._dev_dir.glob("esp-slot*"))
+        claimed = {os.path.realpath(s) for s in slots}
+        ttys = [t for t in self._dev_dir.glob("ttyUSB*") if os.path.realpath(t) not in claimed]
+        return sorted((p.name for p in slots + ttys), key=_natural_key)
 
     def get_device(self, tty_name: str) -> Optional[DeviceInfo]:
         if not (self._dev_dir / tty_name).exists():
@@ -152,8 +159,7 @@ class DeviceRegistry:
         if result is None:
             return None
         mac, _ = result
-        for entry in sorted(self._dev_dir.glob("ttyUSB*")):
-            tty_name = entry.name
+        for tty_name in self._device_names():
             tty_mac = self._get_tty_mac(tty_name)
             if tty_mac and tty_mac.upper() == mac.upper():
                 return self._build_device_info(tty_name)
@@ -257,11 +263,9 @@ class DeviceRegistry:
 
     @staticmethod
     def _parse_tty_number(tty_name: str) -> int:
-        suffix = tty_name.replace("ttyUSB", "")
-        try:
-            return int(suffix)
-        except ValueError:
-            return 0
+        """Fallback para sesiones viejas que no publican tcp_port: ttyUSBN / esp-slotK → N/K."""
+        m = re.search(r"(\d+)$", tty_name)
+        return int(m.group(1)) if m else 0
 
     @staticmethod
     def _live_state(state: dict) -> Optional[str]:
@@ -314,3 +318,9 @@ class DeviceRegistry:
         y, mo, d = date_part[:4], date_part[4:6], date_part[6:]
         h, mi, s = time_part[:2], time_part[2:4], time_part[4:]
         return f"{y}-{mo}-{d}T{h}:{mi}:{s}"
+
+
+def _natural_key(name: str):
+    """esp-slot2 < esp-slot10 < ttyUSB0 < ttyUSB10 (no orden alfabético)."""
+    m = re.match(r"(\D*)(\d*)$", name)
+    return (m.group(1), int(m.group(2)) if m.group(2) else -1)

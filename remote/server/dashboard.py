@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import pathlib
+import re
 import subprocess
 from typing import Any
 from urllib.parse import unquote
@@ -108,11 +109,11 @@ async def device_command(tty: str, command: str):
 
 @app.post("/api/device/{tty}/devremote-reset")
 async def devremote_reset(tty: str):
-    num = tty.replace("ttyUSB", "")
-    if not num.isdigit():
+    # ttyUSBN o esp-slotK: devremote resuelve el nombre.
+    if not re.fullmatch(r"(ttyUSB|esp-slot)\d+", tty):
         raise HTTPException(status_code=400, detail=f"tty no válido: {tty}")
     result = subprocess.run(
-        ["/usr/local/bin/devremote", "--reset", num],
+        ["/usr/local/bin/devremote", "--reset", tty],
         capture_output=True, text=True
     )
     return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}

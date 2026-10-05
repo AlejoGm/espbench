@@ -1,2 +1,14 @@
+# espbench — reglas udev para los ESP32 en /dev/ttyUSB*.
+
+# Symlink estable /dev/esp-slotK para los puertos físicos del hub mapeados en
+# /opt/esp/slots.conf (ver `devremote --slots`). ID_PATH (topología física del
+# USB, no cambia si no movés el cable) lo calcula el builtin path_id de las
+# reglas de serial del sistema, que corren antes que esta.
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_PATH}=="?*", \
+  PROGRAM="/usr/local/bin/espbench-name --slot-for-path %E{ID_PATH}", SYMLINK+="%c"
+
+# Hotplug: al enchufar, systemd arranca la sesión del device como sfypi.
+# No se hace con RUN+= desde udev: lo que udev lanza corre en el tmux server
+# de root y se mata al terminar el evento (por eso antes no hacía nada).
 ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyUSB*", \
-RUN+="/usr/bin/tmux new-session -d -s esp32_%k '/usr/local/bin/esp32_tmux.sh /dev/%k'"
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="espbench-attach@%k.service"

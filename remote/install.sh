@@ -151,6 +151,12 @@ info "Instalando esp32_tmux.sh en /usr/local/bin/..."
 cp "$REMOTE_DIR/infra/esp32_tmux.sh" /usr/local/bin/esp32_tmux.sh
 chmod +x /usr/local/bin/esp32_tmux.sh
 
+# espbench-name: regla única de nombre/puerto de cada device (slots.conf).
+# Tiene que estar antes de recargar udev: la regla de slots la llama.
+info "Instalando espbench-name en /usr/local/bin/..."
+cp "$REMOTE_DIR/infra/espbench-name" /usr/local/bin/espbench-name
+chmod +x /usr/local/bin/espbench-name
+
 # ---------------------------------------------------------------------------
 # 8. Install udev rules
 # ---------------------------------------------------------------------------
@@ -177,6 +183,9 @@ cp "$REMOTE_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
 
 info "Instalando servicio systemd dashboard..."
 cp "$REMOTE_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
+
+info "Instalando servicio de hotplug espbench-attach@..."
+cp "$REMOTE_DIR/infra/espbench-attach@.service" /etc/systemd/system/espbench-attach@.service
 
 # ---------------------------------------------------------------------------
 # 10. Reload udev
@@ -208,9 +217,14 @@ echo "    /opt/esp/logs/            <- logs"
 echo "    /opt/esp/jobs/            <- jobs temporales"
 echo "    /usr/local/bin/devremote  <- CLI"
 echo "    /usr/local/bin/esp32_tmux.sh"
+echo "    /usr/local/bin/espbench-name"
 echo "    /etc/udev/rules.d/99-esp32.rules"
 echo "    /etc/systemd/system/devremote.service"
 echo "    /etc/systemd/system/dashboard.service"
+echo "    /etc/systemd/system/espbench-attach@.service (hotplug)"
+echo ""
+echo "  Puertos estables por slot USB (opcional): 'devremote --slots'"
+echo "  y armar /opt/esp/slots.conf. Sin ese archivo todo sigue igual."
 echo ""
 echo "  Servicios habilitados (no iniciados)."
 echo "  Para iniciar:    systemctl start devremote"

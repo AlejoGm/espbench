@@ -1,0 +1,64 @@
+#!/bin/bash
+# espbench-name — nombre estable y puerto TCP de un device serie.
+#
+# ÚNICA fuente de la regla de nombres y puertos: la usan esp32_tmux.sh,
+# devremote y la regla udev. El proceso Python recibe el puerto ya resuelto
+# por --control-port; no lo deriva.
+#
+#   espbench-name <ttyUSBN | /dev/ttyUSBN | esp-slotK>  →  "<nombre> <puerto>"
+#   espbench-name --slot-for-path <ID_PATH>             →  "esp-slotK" (para udev; exit 1 si no hay slot)
+#
+# Regla:
+#   - sin slots.conf (o vacío): ttyUSBN → "ttyUSBN 5000+N"           (como siempre)
+#   - device mapeado en slots.conf: → "esp-slotK 5000+K"             (estable aunque el kernel renumere)
+#   - hay slots.conf y el device NO está mapeado: → "ttyUSBN 5100+N" (no choca con los slots)
+#
+# slots.conf: una línea por puerto físico del hub, "<K> <ID_PATH>". Ver `devremote --slots`.
+set -uo pipefail
+
+BASE="${ESP_BASE:-/opt/esp}"
+SLOTS="$BASE/slots.conf"
+BASE_PORT=5000
+UNMAPPED_PORT=5100
+
+slot_for_path() {
+  [ -n "${1:-}" ] && [ -f "$SLOTS" ] || return 1
+  awk -v p="$1" '!/^[[:space:]]*(#|$)/ && $2 == p { print $1; found = 1; exit } END { exit !found }' "$SLOTS"
+}
+
+id_path_of() {
+  udevadm info -q property -n "$1" 2>/dev/null | sed -n 's/^ID_PATH=//p'
+}
+
+has_slots() {
+  [ -f "$SLOTS" ] && grep -qv '^[[:space:]]*\(#\|$\)' "$SLOTS"
+}
+
+if [ "${1:-}" = "--slot-for-path" ]; then
+  slot=$(slot_for_path "${2:-}") || exit 1
+  echo "esp-slot$slot"
+  exit 0
+fi
+
+dev="${1:?uso: espbench-name <ttyUSBN|/dev/ttyUSBN|esp-slotK>}"
+kname=$(basename "$dev")
+
+case "$kname" in
+  esp-slot*)
+    k=${kname#esp-slot}
+    echo "$kname $((BASE_PORT + k))"
+    exit 0
+    ;;
+esac
+
+if slot=$(slot_for_path "$(id_path_of "/dev/$kname")"); then
+  echo "esp-slot$slot $((BASE_PORT + slot))"
+  exit 0
+fi
+
+n=${kname#ttyUSB}
+if has_slots; then
+  echo "$kname $((UNMAPPED_PORT + n))"
+else
+  echo "$kname $((BASE_PORT + n))"
+fi

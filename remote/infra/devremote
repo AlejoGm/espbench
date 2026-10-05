@@ -3,53 +3,77 @@ set -euo pipefail
 
 # Siempre correr como sfypi — es el usuario dueño del tmux server y los procesos.
 # Así devremote funciona igual desde systemd, SSH como sensipi, o cualquier usuario.
-if [ "$(whoami)" != "sfypi" ]; then
+# (DEVREMOTE_NO_REEXEC: solo para tests.)
+if [ "$(whoami)" != "sfypi" ] && [ -z "${DEVREMOTE_NO_REEXEC:-}" ]; then
   exec sudo -u sfypi "$0" "$@"
 fi
 
-BASE_PORT=5000
 PREFIX="esp32_"
+BASE="${ESP_BASE:-/opt/esp}"
+DEVDIR="${ESPBENCH_DEV_DIR:-/dev}"   # solo para tests
 
 usage() {
-  echo "Usage: devremote [--reset [N]|--status|--unlock <N>|--cleanup [--dry-run] [--jobs-days N] [--logs-days N]|<N>]"
+  cat <<USAGE
+Usage: devremote                      levanta las sesiones que falten
+       devremote <dev>                se engancha a la sesión del device (tmux attach)
+       devremote --status             tabla: device / puerto / estado
+       devremote --reset [<dev>]      reinicia todas las sesiones, o la de <dev>
+       devremote --unlock <dev>       libera el lock del device
+       devremote --slots              ID_PATH de cada puerto, para armar slots.conf
+       devremote --start <ttyUSBN>    levanta la sesión de un device (lo usa el hotplug)
+       devremote --cleanup [--dry-run] [--jobs-days N] [--logs-days N]
+
+<dev>: N (= ttyUSBN), ttyUSBN, esp-slotK o slotK
+USAGE
   exit 1
 }
 
 list_devs() {
-  ls -1 /dev/ttyUSB* 2>/dev/null || true
+  ls -1 "$DEVDIR"/ttyUSB* 2>/dev/null || true
 }
 
-session_name_for_dev() {
-  local dev="$1"
-  echo "${PREFIX}$(basename "$dev")"
+# Nombre y puerto: única fuente en espbench-name.
+name_port() {
+  espbench-name "$1"
 }
 
-port_for_dev() {
-  local dev="$1"
-  local name num
-  name="$(basename "$dev")"      # ttyUSBX
-  num="${name#ttyUSB}"           # X
-  echo $((BASE_PORT + num))
+# Argumento del operador → nombre del device.
+resolve_name() {
+  case "$1" in
+    ''|*[!a-zA-Z0-9_-]*) echo "devremote: nombre de device inválido: '$1'" >&2; return 1 ;;
+  esac
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    echo "ttyUSB$1"
+  elif [[ "$1" =~ ^slot[0-9]+$ ]]; then
+    echo "esp-$1"
+  else
+    echo "$1"
+  fi
 }
 
 start_one() {
-  local dev="$1"
-  local sess
-  sess="$(session_name_for_dev "$dev")"
-
-  if tmux has-session -t "$sess" 2>/dev/null; then
+  local dev="$1" name port
+  read -r name port < <(name_port "$dev")
+  if tmux has-session -t "${PREFIX}${name}" 2>/dev/null; then
     return 0
   fi
-
-  /usr/local/bin/esp32_tmux.sh "$dev"
+  esp32_tmux.sh "$dev"
 }
 
 scan_start_missing() {
   local dev
   while read -r dev; do
     [ -e "$dev" ] || continue
-    start_one "$dev"
+    start_one "$dev" || echo "devremote: no se pudo levantar $dev" >&2
   done < <(list_devs)
+}
+
+kill_name() {
+  local name="$1"
+  # El espacio final evita que ttyUSB1 también mate a ttyUSB10.
+  sudo pkill -9 -f "python3.*remote_esp32[.]py -p ${DEVDIR}/${name} " 2>/dev/null || true
+  sleep 1
+  tmux kill-session -t "${PREFIX}${name}" 2>/dev/null || true
 }
 
 reset_all() {
@@ -66,31 +90,24 @@ reset_all() {
 }
 
 reset_one() {
-  local num="$1"
-  local dev="/dev/ttyUSB${num}"
-  local sess
-  sess="$(session_name_for_dev "$dev")"
-
-  sudo pkill -9 -f "python3.*remote_esp32[.]py.*ttyUSB${num}" 2>/dev/null || true
-  sleep 1
-
-  tmux kill-session -t "$sess" 2>/dev/null || true
-
-  if [ ! -e "$dev" ]; then
-    echo "Advertencia: $dev no existe, sesión no reiniciada" >&2
+  local name
+  name="$(resolve_name "$1")"
+  kill_name "$name"
+  if [ ! -e "$DEVDIR/$name" ]; then
+    echo "Advertencia: $DEVDIR/$name no existe, sesión no reiniciada" >&2
     return
   fi
-
-  start_one "$dev"
+  start_one "$DEVDIR/$name"
 }
 
 status() {
-  local dev sess port state pid fsm
+  local dev kname name port sess state pid fsm
+  printf "%-12s  %-9s  %-6s  %-7s  %-12s  %s\n" "DEVICE" "KERNEL" "TCP" "SESION" "ESTADO" "PID"
   while read -r dev; do
     [ -e "$dev" ] || continue
-
-    sess="$(session_name_for_dev "$dev")"
-    port="$(port_for_dev "$dev")"
+    kname="$(basename "$dev")"
+    read -r name port < <(name_port "$dev")
+    sess="${PREFIX}${name}"
 
     if tmux has-session -t "$sess" 2>/dev/null; then
       pid="$(tmux list-panes -t "$sess" -F "#{pane_pid}" 2>/dev/null | head -n1 || true)"
@@ -99,47 +116,52 @@ status() {
       pid="-"
       state="DOWN"
     fi
-
     # Estado de la FSM que publica el proceso (flashing, erasing, unknown...)
-    fsm="$(grep -o '"state": "[a-z]*"' "${ESP_BASE:-/opt/esp}/run/$(basename "$dev").json" 2>/dev/null | cut -d'"' -f4 || true)"
+    fsm="$(grep -o '"state": "[a-z]*"' "$BASE/run/$name.json" 2>/dev/null | cut -d'"' -f4 || true)"
 
-    printf "%-12s  %-16s  tcp=%-5s  %-7s  %-12s  pid=%s\n" "$(basename "$dev")" "$sess" "$port" "$state" "${fsm:--}" "$pid"
+    printf "%-12s  %-9s  %-6s  %-7s  %-12s  %s\n" "$name" "$kname" "$port" "$state" "${fsm:--}" "$pid"
   done < <(list_devs)
 }
 
 attach_one() {
-  local num="$1"
-  local dev="/dev/ttyUSB${num}"
-  local sess
-
-  if [ ! -e "$dev" ]; then
-    echo "Error: dispositivo $dev no existe" >&2
-    exit 1
-  fi
-
-  sess="$(session_name_for_dev "$dev")"
-
+  local name sess
+  name="$(resolve_name "$1")"
+  sess="${PREFIX}${name}"
   if ! tmux has-session -t "$sess" 2>/dev/null; then
     echo "Error: sesión tmux '$sess' no existe" >&2
     exit 1
   fi
-
   exec tmux attach-session -t "$sess"
 }
 
 unlock_one() {
-  local dev="/dev/ttyUSB${1}"
-  local name
-  name="$(basename "$dev")"
-  local lock_file="${ESP_BASE:-/opt/esp}/locks/$name"
+  local name lock_file user
+  name="$(resolve_name "$1")"
+  lock_file="$BASE/locks/$name"
   if [ -f "$lock_file" ]; then
-    local user
-    user="$(cat "$lock_file")"
+    user="$(cut -d: -f1 "$lock_file")"
     rm -f "$lock_file"
     echo "Lock liberado (era de: $user) → $name"
   else
     echo "No había lock en $name"
   fi
+}
+
+slots() {
+  local dev kname idp name port
+  echo "slots.conf: $BASE/slots.conf  (una línea por puerto físico: \"<K> <ID_PATH>\")"
+  echo ""
+  printf "%-9s  %-12s  %-6s  %s\n" "KERNEL" "NOMBRE" "TCP" "ID_PATH"
+  while read -r dev; do
+    [ -e "$dev" ] || continue
+    kname="$(basename "$dev")"
+    idp="$(udevadm info -q property -n "$dev" 2>/dev/null | sed -n 's/^ID_PATH=//p')"
+    read -r name port < <(name_port "$dev")
+    printf "%-9s  %-12s  %-6s  %s\n" "$kname" "$name" "$port" "${idp:--}"
+  done < <(list_devs)
+  echo ""
+  echo "Para fijar un slot: agregá \"<K> <ID_PATH>\" a slots.conf y después:"
+  echo "  sudo udevadm trigger --subsystem-match=tty && devremote --reset"
 }
 
 cleanup() {
@@ -217,31 +239,14 @@ cleanup() {
   fi
 }
 
-if [ "${1:-}" = "--reset" ]; then
-  if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
-    reset_one "$2"
-  else
-    reset_all
-  fi
-  exit 0
-elif [ "${1:-}" = "--status" ]; then
-  status
-  exit 0
-elif [ "${1:-}" = "--unlock" ]; then
-  if [ -z "${2:-}" ]; then
-    echo "Uso: devremote --unlock <número>" >&2; exit 1
-  fi
-  unlock_one "$2"
-  exit 0
-elif [ "${1:-}" = "--cleanup" ]; then
-  cleanup "$@"
-  exit 0
-elif [ -z "${1:-}" ]; then
-  scan_start_missing
-  exit 0
-elif [[ "$1" =~ ^[0-9]+$ ]]; then
-  attach_one "$1"
-  exit 0
-else
-  usage
-fi
+case "${1:-}" in
+  --reset)   if [ -n "${2:-}" ]; then reset_one "$2"; else reset_all; fi ;;
+  --status)  status ;;
+  --unlock)  [ -n "${2:-}" ] || usage; unlock_one "$2" ;;
+  --cleanup) cleanup "$@" ;;
+  --start)   [ -n "${2:-}" ] || usage; start_one "$DEVDIR/$(basename "$2")" ;;
+  --slots)   slots ;;
+  "")        scan_start_missing ;;
+  -*)        usage ;;
+  *)         attach_one "$1" ;;
+esac

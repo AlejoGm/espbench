@@ -389,3 +389,40 @@ class TestLiveState:
         registry = self._setup(tmp_path, monkeypatch, {"state": "unknown", "pid": os.getpid()})
         d = dataclasses.asdict(registry.get_device("ttyUSB0"))
         assert d["state"] == "unknown"
+
+
+class TestSlots:
+    """Issue #2: con slots mapeados, el device se lista por su symlink estable."""
+
+    def test_slot_replaces_its_ttyusb(self, tmp_path):
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB7").touch()
+        (dev_dir / "ttyUSB0").touch()
+        (dev_dir / "esp-slot2").symlink_to(dev_dir / "ttyUSB7")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            names = [d.tty_name for d in registry.list_devices()]
+        assert names == ["esp-slot2", "ttyUSB0"]
+
+    def test_natural_order(self, tmp_path):
+        registry, dev_dir, _ = make_registry(tmp_path)
+        for n in (10, 2, 1):
+            (dev_dir / f"ttyUSB{n}").touch()
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert [d.tty_name for d in registry.list_devices()] == ["ttyUSB1", "ttyUSB2", "ttyUSB10"]
+
+    def test_slot_port_fallback_without_runtime_state(self, tmp_path):
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB7").touch()
+        (dev_dir / "esp-slot2").symlink_to(dev_dir / "ttyUSB7")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert registry.get_device("esp-slot2").port_tcp == 5002
+
+    def test_get_device_by_key_finds_slot(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB7").touch()
+        (dev_dir / "esp-slot2").symlink_to(dev_dir / "ttyUSB7")
+        runstate.write("esp-slot2", {"mac": "AA:BB:CC:DD:EE:FF"})
+        registry._devices_file.update_device_key("AA:BB:CC:DD:EE:FF", "OEM_NOVUS")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert registry.get_device_by_key("OEM_NOVUS").tty_name == "esp-slot2"
