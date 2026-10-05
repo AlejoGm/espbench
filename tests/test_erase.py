@@ -45,7 +45,7 @@ class FakeMonitor:
 def esptool(monkeypatch):
     ran = []
     monkeypatch.setattr(erase, "find_esptool_cmd", lambda: ["esptool"])
-    monkeypatch.setattr(erase, "run_cmd", lambda cmd, log, **kw: ran.append(cmd) or 0)
+    monkeypatch.setattr(erase, "run_cmd", lambda cmd, log=None, **kw: ran.append(cmd) or 0)
     return ran
 
 
@@ -66,7 +66,7 @@ def test_parse_manual_region():
 
 def test_erase_selected_partition(esptool):
     mon = FakeMonitor(answers=["1", "s"])
-    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"}, svc_log=None)
+    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"})
     assert len(esptool) == 1
     assert esptool[0][-3:] == ["0x9000", "0x6000", "--force"]
     assert mon.calls == ["input", "input", "stop", "start"]
@@ -75,32 +75,32 @@ def test_erase_selected_partition(esptool):
 
 def test_cancel_at_confirmation_does_not_touch_flash(esptool):
     mon = FakeMonitor(answers=["all", "n"])
-    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"}, svc_log=None)
+    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"})
     assert esptool == []
     assert "stop" not in mon.calls
 
 
 def test_manual_region_when_no_table(esptool):
     mon = FakeMonitor(answers=["0x9000 0x1000", "s"], output="sin tabla")
-    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"}, svc_log=None)
+    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"})
     assert esptool[0][-3:] == ["0x9000", "0x1000", "--force"]
 
 
 def test_manual_cancel(esptool):
     mon = FakeMonitor(answers=["cancel"], output="sin tabla")
-    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"}, svc_log=None)
+    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"})
     assert esptool == [] and mon.calls == ["input"]
 
 
 def test_monitor_restarts_even_if_esptool_fails(monkeypatch):
     monkeypatch.setattr(erase, "find_esptool_cmd", lambda: ["esptool"])
 
-    def boom(cmd, log, **kw):
+    def boom(cmd, log=None, **kw):
         raise RuntimeError("puerto ocupado")
 
     monkeypatch.setattr(erase, "run_cmd", boom)
     mon = FakeMonitor(answers=["1", "s"])
-    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"}, svc_log=None)
+    erase.erase_region_interactive(mon, {"tty": "/dev/ttyUSB0"})
     assert mon.calls[-2:] == ["stop", "start"]
     assert not _ignore_signals_flag.is_set()
 

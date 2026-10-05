@@ -80,3 +80,32 @@ def test_parse_mac_too_short():
 def test_parse_mac_no_false_positive_sha256():
     line = "I (1340) app_init: ELF file SHA256:  5b6b0da6098ac865..."
     assert parse_mac_from_serial(line) is None
+
+
+def test_run_cmd_lines_reach_taglog_job_log_and_callback():
+    import logging
+    from server import taglog
+    from server.flash import run_cmd
+
+    seen = []
+    taglog.reset_default_sinks()
+    taglog.add_sink(lambda ts, lvl, tag, msg: seen.append((tag, msg)))
+    job = logging.getLogger("test.job"); job.setLevel(logging.INFO)
+    records = []
+    h = logging.Handler(); h.emit = lambda r: records.append(r.getMessage()); job.addHandler(h)
+    streamed = []
+    try:
+        rc = run_cmd([sys.executable, "-c", "print('Writing at 0x10000'); print('Hash ok')"],
+                     job, on_line=streamed.append)
+    finally:
+        taglog.reset_default_sinks()
+        job.removeHandler(h)
+    assert rc == 0
+    assert ("esptool", "Writing at 0x10000") in seen and ("esptool", "Hash ok") in seen
+    assert streamed == ["Writing at 0x10000", "Hash ok"]
+    assert "Writing at 0x10000" in records and "EXIT 0" in records
+
+
+def test_run_cmd_without_job_log():
+    from server.flash import run_cmd
+    assert run_cmd([sys.executable, "-c", "import sys; sys.exit(3)"]) == 3

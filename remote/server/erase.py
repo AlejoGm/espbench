@@ -7,13 +7,15 @@ Antes vivía en monitor.py y entraba directo a los privados de EspMonitor
 (_stdin_access_lock, _restore_stdin, _set_stdin_raw). Ahora solo usa su
 interfaz pública: get_recent_output(), interactive_input(), stop(), start().
 """
-import shlex
 import sys
 from typing import List, Optional
 
+from server import taglog
 from server.flash import find_esptool_cmd, run_cmd
 from server.monitor import _ignore_signals_flag
 from server.partition_table import parse_partition_table
+
+TAG = "erase"
 
 
 def _say(msg: str = "") -> None:
@@ -54,7 +56,7 @@ def parse_manual_region(text: str) -> Optional[List[dict]]:
         return None
 
 
-def erase_region_interactive(mon, cfg: dict, svc_log) -> None:
+def erase_region_interactive(mon, cfg: dict) -> None:
     _say()
     _say("=" * 60)
     _say("[erase] Modo Erase Region activado")
@@ -99,19 +101,18 @@ def erase_region_interactive(mon, cfg: dict, svc_log) -> None:
             for r in regions:
                 name = r.get("name", "manual")
                 offset_hex, size_hex = f"0x{r['offset']:x}", f"0x{r['size']:x}"
-                _say(f"\r\n[erase] Borrando {name} @ {offset_hex} (tamaño {size_hex})...")
+                taglog.info(TAG, f"borrando {name} @ {offset_hex} (tamaño {size_hex})")
                 cmd = esptool + ["--port", tty, "--after", "no-reset",
                                  "erase_region", offset_hex, size_hex, "--force"]
-                if svc_log:
-                    svc_log.info(f"[erase] Ejecutando: {' '.join(shlex.quote(c) for c in cmd)}")
-                rc = run_cmd(cmd, svc_log)
-                _say(f"[erase] Región {name} " + ("borrada exitosamente" if rc == 0 else f"con error (código {rc})"))
+                rc = run_cmd(cmd)
+                if rc == 0:
+                    taglog.info(TAG, f"región {name} borrada")
+                else:
+                    taglog.error(TAG, f"región {name}: esptool terminó con código {rc}")
         finally:
             _say("\r\n[erase] Reiniciando monitor...")
             mon.start()
             _ignore_signals_flag.clear()
-        _say("[erase] Operación completada")
+        taglog.info(TAG, "operación completada")
     except Exception as e:
-        _say(f"\r\n[erase] ERROR: {e}")
-        if svc_log:
-            svc_log.exception(f"[erase] Error en erase_region: {e}")
+        taglog.error(TAG, f"erase_region falló: {e}")

@@ -162,7 +162,7 @@ def main():
 
     elf_path = paths.current_elf_file(tty_name)
     mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log,
-                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg, svc_log))
+                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg))
     svc_log.info("Iniciando monitor serial...\r\n")
     mon.start()
 
