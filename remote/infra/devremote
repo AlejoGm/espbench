@@ -85,7 +85,7 @@ reset_one() {
 }
 
 status() {
-  local dev sess port state pid
+  local dev sess port state pid fsm
   while read -r dev; do
     [ -e "$dev" ] || continue
 
@@ -100,7 +100,10 @@ status() {
       state="DOWN"
     fi
 
-    printf "%-12s  %-16s  tcp=%-5s  %-7s  pid=%s\n" "$(basename "$dev")" "$sess" "$port" "$state" "$pid"
+    # Estado de la FSM que publica el proceso (flashing, erasing, unknown...)
+    fsm="$(grep -o '"state": "[a-z]*"' "${ESP_BASE:-/opt/esp}/run/$(basename "$dev").json" 2>/dev/null | cut -d'"' -f4 || true)"
+
+    printf "%-12s  %-16s  tcp=%-5s  %-7s  %-12s  pid=%s\n" "$(basename "$dev")" "$sess" "$port" "$state" "${fsm:--}" "$pid"
   done < <(list_devs)
 }
 

@@ -342,3 +342,50 @@ class TestRuntimeState:
         with patch("subprocess.run", side_effect=mock_tmux_down):
             d = registry.get_device_by_key("OEM_NOVUS")
         assert d is not None and d.tty_name == "ttyUSB0"
+
+
+class TestLiveState:
+    """Fase 5: el estado sale de lo que publica el proceso, no de tmux."""
+
+    def _setup(self, tmp_path, monkeypatch, snapshot):
+        import os
+        from server import runstate
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB0").touch()
+        runstate.write("ttyUSB0", snapshot)
+        return registry
+
+    def test_flashing_process_is_running_with_state(self, tmp_path, monkeypatch):
+        import os
+        registry = self._setup(tmp_path, monkeypatch, {"state": "flashing", "pid": os.getpid()})
+        with patch("subprocess.run", side_effect=AssertionError("no debería consultar tmux")):
+            d = registry.get_device("ttyUSB0")
+        assert d.status == "RUNNING" and d.state == "flashing"
+
+    def test_dead_process_is_down_without_state(self, tmp_path, monkeypatch):
+        registry = self._setup(tmp_path, monkeypatch, {"state": "monitoring", "pid": 2 ** 22 + 12345})
+        with patch("subprocess.run", side_effect=AssertionError("no debería consultar tmux")):
+            d = registry.get_device("ttyUSB0")
+        assert d.status == "DOWN" and d.state is None
+
+    def test_disconnected_is_down(self, tmp_path, monkeypatch):
+        import os
+        registry = self._setup(tmp_path, monkeypatch, {"state": "disconnected", "pid": os.getpid()})
+        with patch("subprocess.run", side_effect=AssertionError("no debería consultar tmux")):
+            d = registry.get_device("ttyUSB0")
+        assert d.status == "DOWN" and d.state == "disconnected"
+
+    def test_without_runtime_state_falls_back_to_tmux(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB0").touch()
+        with patch("subprocess.run", side_effect=mock_tmux_up):
+            d = registry.get_device("ttyUSB0")
+        assert d.status == "RUNNING" and d.state is None
+
+    def test_state_is_exposed_in_api_dict(self, tmp_path, monkeypatch):
+        import dataclasses, os
+        registry = self._setup(tmp_path, monkeypatch, {"state": "unknown", "pid": os.getpid()})
+        d = dataclasses.asdict(registry.get_device("ttyUSB0"))
+        assert d["state"] == "unknown"

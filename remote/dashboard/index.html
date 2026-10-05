@@ -41,6 +41,21 @@
             return d.innerHTML;
         }
 
+        // Estado de la FSM del device (run/<tty>.json). "monitoring" es lo normal
+        // y no lleva badge; el resto sí, para ver de un vistazo qué está pasando.
+        var STATE_BADGES = {
+            discovering: ['badge-busy',    'INICIANDO'],
+            flashing:    ['badge-busy',    'FLASHEANDO'],
+            erasing:     ['badge-busy',    'BORRANDO'],
+            unknown:     ['badge-unknown', 'SIN MAC'],
+            disconnected:['badge-down',    'DESCONECTADO']
+        };
+
+        function stateBadge(device) {
+            var b = STATE_BADGES[device.state];
+            return b ? '<span class="badge ' + b[0] + '">' + b[1] + '</span>' : '';
+        }
+
         var _renamingTty = null;
 
         function buildCard(device) {
@@ -84,6 +99,7 @@
                     '</div>' +
                     '<div class="card-header-badges">' +
                         (device.lock_user ? '<span class="badge badge-locked">&#128274; ' + escapeHtml(device.lock_user) + '</span>' : '') +
+                        stateBadge(device) +
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
                 '</div>' +
@@ -237,6 +253,7 @@
                         '<span class="card-title card-title-dim">' + escapeHtml(device.tty_name) + '</span>' +
                     '</div>' +
                     '<div class="card-header-badges">' +
+                        stateBadge(device) +
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
                 '</div>' +

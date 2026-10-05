@@ -289,6 +289,7 @@ body.device-page {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;   /* con varios badges en una card angosta, bajan de línea */
     gap: 8px;
 }
 
@@ -396,6 +397,18 @@ body.device-page {
 }
 .badge-locked::before { background: #d29922; }
 
+/* Estado de la FSM: flasheando / borrando / iniciando, y device sin MAC */
+.badge-busy {
+    background: rgba(56, 139, 253, 0.15);
+    color: #58a6ff;
+}
+.badge-busy::before { background: #58a6ff; }
+.badge-unknown {
+    background: rgba(139, 148, 158, 0.15);
+    color: #8b949e;
+}
+.badge-unknown::before { background: #8b949e; }
+
 .card-header-badges {
     display: flex;
     align-items: center;
@@ -451,7 +464,7 @@ body.device-page {
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 0;
+    min-width: 6ch;   /* el título nunca se aplasta a cero */
     flex: 1;
 }
 

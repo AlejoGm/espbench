@@ -122,6 +122,9 @@ class DeviceInfo:
     fw_version: Optional[str]
     fw_idf: Optional[str]
     lock_user: Optional[str]
+    # Estado de la FSM del proceso del device (discovering, monitoring, flashing,
+    # erasing, unknown, disconnected). None si no hay proceso vivo que lo publique.
+    state: Optional[str] = None
 
 
 class DeviceRegistry:
@@ -216,7 +219,7 @@ class DeviceRegistry:
             tty=str(self._dev_dir / tty_name),
             tty_name=tty_name,
             port_tcp=port_tcp,
-            status=self._get_status(tty_name),
+            status=self._get_status(tty_name, state),
             last_flash_ts=self._get_last_flash_ts(tty_name, mac),
             last_flash_user=self._get_last_flash_user(tty_name, mac),
             mac=mac,
@@ -227,6 +230,7 @@ class DeviceRegistry:
             fw_version=fw.get("fw_version"),
             fw_idf=fw.get("fw_idf"),
             lock_user=self._get_lock_user(tty_name),
+            state=self._live_state(state),
         )
 
     @staticmethod
@@ -259,7 +263,20 @@ class DeviceRegistry:
         except ValueError:
             return 0
 
-    def _get_status(self, tty_name: str) -> str:
+    @staticmethod
+    def _live_state(state: dict) -> Optional[str]:
+        if not state:
+            return None
+        if state.get("state") == "disconnected":
+            return "disconnected"
+        return state.get("state") if runstate.pid_alive(state.get("pid")) else None
+
+    def _get_status(self, tty_name: str, state: Optional[dict] = None) -> str:
+        """RUNNING si el proceso del device publica estado y sigue vivo. Sin
+        estado runtime (sesión con código anterior) se infiere por tmux."""
+        if state:
+            live = self._live_state(state)
+            return "RUNNING" if live and live != "disconnected" else "DOWN"
         try:
             result = subprocess.run(
                 ["tmux", "has-session", "-t", f"esp32_{tty_name}"],

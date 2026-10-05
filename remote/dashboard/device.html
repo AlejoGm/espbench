@@ -109,6 +109,8 @@
                 .then(function(d) {
                     var badges = [makeBadge('tty', tty)];
                     if (d) {
+                        // Estado de la FSM; "monitoring" es lo normal y no se muestra
+                        if (d.state && d.state !== 'monitoring') badges.push(makeBadge('estado', d.state));
                         if (d.port_tcp)        badges.push(makeBadge('tcp',      ':' + d.port_tcp));
                         if (d.hw_model)        badges.push(makeBadge('hw',       d.hw_model));
                         if (d.device_key)      badges.push(makeBadge('key',      d.device_key));
@@ -156,7 +158,7 @@
 
             connect();
             loadDeviceInfo();
-            setInterval(loadDeviceInfo, 10000);
+            setInterval(loadDeviceInfo, 3000);
             document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
             document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
             document.getElementById('btn-devremote-reset').onclick = function() {
