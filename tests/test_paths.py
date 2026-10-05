@@ -59,4 +59,12 @@ def test_device_scoped_paths(monkeypatch, tmp_path):
     assert paths.device_output_log(mac) == home / "output.log"
     assert paths.device_current_elf(mac) == home / "current.elf"
     assert paths.device_jobs_dir(mac) == home / "jobs"
-    assert paths.device_state_file(mac) == home / "state.json"
+
+
+def test_runtime_and_unknown_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    assert paths.run_dir() == tmp_path / "run"
+    assert paths.tty_state_file("ttyUSB0") == tmp_path / "run" / "ttyUSB0.json"
+    assert paths.tty_state_file("esp-slot3") == tmp_path / "run" / "esp-slot3.json"
+    assert paths.device_unknown_home("ttyUSB0") == tmp_path / "devices" / "unknown-ttyUSB0"
+    assert paths.slots_file() == tmp_path / "slots.conf"

@@ -2,7 +2,9 @@
 Tests para TtyPort / Device / DeviceManager (FSM), fase 2 del refactor.
 Sin hardware — mac_reader se inyecta como fake.
 """
+import json
 import pathlib
+import threading
 import sys
 
 import pytest
@@ -223,3 +225,164 @@ def test_manager_accepts_explicit_tcp_port(monkeypatch, tmp_path):
     manager = DeviceManager("/dev/esp-slot3", mac_reader=lambda: None, tcp_port=5003)
     assert manager.tty_port.tcp_port == 5003
     assert manager.device.tty_name == "esp-slot3"
+
+
+# ---------------------------------------------------------------------------
+# UNKNOWN también flashea (flash encryption) y la FSM vuelve al estado previo
+# ---------------------------------------------------------------------------
+
+def test_unknown_can_flash_and_returns_to_unknown(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    device.mark_unknown()
+    device.start_flash()
+    assert device.state == DeviceState.FLASHING
+    device.finish_flash()
+    assert device.state == DeviceState.UNKNOWN
+
+
+def test_unknown_can_erase(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    device.mark_unknown()
+    device.start_erase()
+    device.finish_erase()
+    assert device.state == DeviceState.UNKNOWN
+
+
+def test_mac_resolved_during_flash_resumes_to_monitoring(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    device.mark_unknown()
+    device.start_flash()
+    device.promote(MAC)
+    assert device.state == DeviceState.FLASHING     # no interrumpe el flash
+    assert device.mac == MAC
+    device.finish_flash()
+    assert device.state == DeviceState.MONITORING
+
+
+def test_busy_flag(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    device.promote(MAC)
+    assert not device.busy
+    device.start_flash()
+    assert device.busy
+
+
+def test_cannot_flash_while_disconnected(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    device.promote(MAC)
+    device.disconnect()
+    with pytest.raises(InvalidTransition):
+        device.start_flash()
+
+
+# ---------------------------------------------------------------------------
+# Publicación de estado
+# ---------------------------------------------------------------------------
+
+def test_every_transition_is_published(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    seen = []
+    tty_port = TtyPort(tty_path="/dev/ttyUSB0", tcp_port=5000)
+    device = Device(tty_port, DeviceLog("ttyUSB0"), state_sink=seen.append)
+    device.promote(MAC)
+    device.start_flash()
+    device.finish_flash()
+    device.disconnect()
+    assert [s["state"] for s in seen] == ["discovering", "monitoring", "flashing", "monitoring", "disconnected"]
+    last = seen[-1]
+    assert last["mac"] == MAC and last["tcp_port"] == 5000 and last["tty"] == "ttyUSB0"
+    assert last["log_path"].endswith("AABBCCDDEEFF/output.log")
+
+
+def test_broken_state_sink_does_not_break_transition(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+
+    def boom(snapshot):
+        raise OSError("disco lleno")
+
+    device = Device(TtyPort("/dev/ttyUSB0", 5000), DeviceLog("ttyUSB0"), state_sink=boom)
+    device.promote(MAC)
+    device.start_flash()
+    assert device.state == DeviceState.FLASHING
+
+
+def test_manager_publishes_to_run_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB2", mac_reader=lambda: MAC, tcp_port=5002)
+    manager.discover()
+    state = json.loads((tmp_path / "run" / "ttyUSB2.json").read_text())
+    assert state["state"] == "monitoring" and state["mac"] == MAC and state["tcp_port"] == 5002
+
+
+# ---------------------------------------------------------------------------
+# DeviceManager: reintentos, fallback por serial, watcher de tty
+# ---------------------------------------------------------------------------
+
+def test_discover_retries_until_mac(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    answers = iter([None, None, MAC])
+    sleeps = []
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: next(answers), publish_state=False)
+    assert manager.discover(attempts=3, delay=3, sleep=sleeps.append) is True
+    assert manager.device.state == DeviceState.MONITORING
+    assert sleeps == [3, 3]
+
+
+def test_discover_gives_up_to_unknown(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: None, publish_state=False)
+    assert manager.discover(attempts=3, delay=0, sleep=lambda s: None) is False
+    assert manager.device.state == DeviceState.UNKNOWN
+
+
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def test_resolve_mac_from_output_promotes(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: None, publish_state=False)
+    manager.discover()
+    outputs = iter(["boot...", "boot... mac = AABBCCDDEEFF"])
+    parse = lambda text: MAC if "mac =" in text else None  # noqa: E731
+    clock = FakeClock()
+    ok = manager.resolve_mac_from_output(lambda: next(outputs), parse,
+                                         timeout=15, poll=0.5, clock=clock, sleep=clock.sleep)
+    assert ok and manager.device.state == DeviceState.MONITORING and manager.device.mac == MAC
+
+
+def test_resolve_mac_from_output_times_out(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: None, publish_state=False)
+    manager.discover()
+    clock = FakeClock()
+    ok = manager.resolve_mac_from_output(lambda: "nada", lambda t: None,
+                                         timeout=15, poll=0.5, clock=clock, sleep=clock.sleep)
+    assert ok is False and manager.device.state == DeviceState.UNKNOWN
+
+
+def test_watch_tty_disconnects_when_tty_disappears(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    manager.discover()
+    present = iter([True, True, False])
+    stop = threading.Event()
+    assert manager.watch_tty(stop, exists=lambda p: next(present), poll=0) is True
+    assert manager.device.state == DeviceState.DISCONNECTED
+
+
+def test_watch_tty_stops_on_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    manager.discover()
+    stop = threading.Event()
+    stop.set()
+    assert manager.watch_tty(stop, exists=lambda p: True) is False
+    assert manager.device.state == DeviceState.MONITORING

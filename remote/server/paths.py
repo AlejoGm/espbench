@@ -12,7 +12,7 @@ ESP_BASE se lee de la variable de entorno del mismo nombre (default
 para que los tests puedan pisarla con monkeypatch.setenv() sin pelear
 con el orden de imports.
 
-Incluye dos esquemas de rutas por dispositivo:
+Incluye dos esquemas de rutas por dispositivo, más el estado runtime (run/<tty>.json):
 - por tty (mac_file, last_user_file, lock_file, current_elf_file):
   esquema vigente hoy, keyed por nombre de puerto (ttyUSBN).
 - por device (device_home, device_output_log, ...): esquema nuevo,
@@ -55,6 +55,14 @@ def version_file() -> pathlib.Path:
     return esp_base() / "VERSION"
 
 
+def run_dir() -> pathlib.Path:
+    return esp_base() / "run"
+
+
+def slots_file() -> pathlib.Path:
+    return esp_base() / "slots.conf"
+
+
 # ---------- rutas por tty (esquema vigente) ----------
 
 def tty_log_dir(tty_name: str) -> pathlib.Path:
@@ -75,6 +83,11 @@ def lock_file(tty_name: str) -> pathlib.Path:
 
 def current_elf_file(tty_name: str) -> pathlib.Path:
     return esp_base() / f"current_{tty_name}.elf"
+
+
+def tty_state_file(tty_name: str) -> pathlib.Path:
+    """Estado runtime del proceso que atiende ese tty (ver runstate.py)."""
+    return run_dir() / f"{tty_name}.json"
 
 
 # ---------- rutas por device, keyed por MAC (esquema nuevo) ----------
@@ -99,5 +112,6 @@ def device_jobs_dir(mac: str) -> pathlib.Path:
     return device_home(mac) / "jobs"
 
 
-def device_state_file(mac: str) -> pathlib.Path:
-    return device_home(mac) / "state.json"
+def device_unknown_home(tty_name: str) -> pathlib.Path:
+    """Hogar provisorio de un device cuya MAC nunca se pudo leer."""
+    return devices_dir() / f"unknown-{tty_name}"

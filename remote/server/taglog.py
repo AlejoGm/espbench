@@ -28,8 +28,15 @@ _lock = threading.Lock()
 _sinks: list = []
 
 
+def format_line(ts: str, level: str, tag: str, msg: str) -> str:
+    """Formato único para todos los sinks (sin fin de línea)."""
+    return f"{ts} | {level:5s} | {tag:14s} | {msg}"
+
+
 def _stdout_sink(ts: str, level: str, tag: str, msg: str) -> None:
-    print(f"{ts} | {level:5s} | {tag:14s} | {msg}", flush=True)
+    # \r\n y no \n: el stdin de la sesión tmux está en modo raw (EspMonitor),
+    # y en raw un \n solo baja de línea sin volver a la columna 0.
+    print(format_line(ts, level, tag, msg), end="\r\n", flush=True)
 
 
 def add_sink(sink: Sink) -> None:
