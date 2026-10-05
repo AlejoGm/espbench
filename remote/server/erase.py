@@ -6,13 +6,17 @@ erase.py — modo Erase Region interactivo (Ctrl-E en la sesión tmux del device
 Antes vivía en monitor.py y entraba directo a los privados de EspMonitor
 (_stdin_access_lock, _restore_stdin, _set_stdin_raw). Ahora solo usa su
 interfaz pública: get_recent_output(), interactive_input(), stop(), start().
+
+El borrado pasa por la FSM del device (start_erase/finish_erase): no se puede
+borrar mientras se flashea, y mientras se borra el proceso no se deja matar
+por una señal (Device.busy).
 """
 import sys
 from typing import List, Optional
 
 from server import taglog
 from server.flash import find_esptool_cmd, run_cmd
-from server.monitor import _ignore_signals_flag
+from server.device import InvalidTransition
 from server.partition_table import parse_partition_table
 
 TAG = "erase"
@@ -56,7 +60,7 @@ def parse_manual_region(text: str) -> Optional[List[dict]]:
         return None
 
 
-def erase_region_interactive(mon, cfg: dict) -> None:
+def erase_region_interactive(mon, cfg: dict, device) -> None:
     _say()
     _say("=" * 60)
     _say("[erase] Modo Erase Region activado")
@@ -92,9 +96,14 @@ def erase_region_interactive(mon, cfg: dict) -> None:
         return
 
     try:
+        device.start_erase()
+    except InvalidTransition:
+        _say(f"[erase] No se puede borrar ahora: el device está en {device.state.value}")
+        return
+
+    try:
         esptool = find_esptool_cmd()
         tty = cfg.get("tty")
-        _ignore_signals_flag.set()
         try:
             _say("\r\n[erase] Deteniendo monitor temporalmente...")
             mon.stop()
@@ -112,7 +121,8 @@ def erase_region_interactive(mon, cfg: dict) -> None:
         finally:
             _say("\r\n[erase] Reiniciando monitor...")
             mon.start()
-            _ignore_signals_flag.clear()
         taglog.info(TAG, "operación completada")
     except Exception as e:
         taglog.error(TAG, f"erase_region falló: {e}")
+    finally:
+        device.finish_erase()

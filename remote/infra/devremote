@@ -160,8 +160,8 @@ cleanup() {
 
   echo "=== devremote cleanup ==="
   [ "$dry_run" = "1" ] && echo "(dry-run: no se borra nada)"
-  echo "  jobs > ${jobs_days}d  →  ${base}/jobs/"
-  echo "  logs > ${logs_days}d  →  ${base}/logs/YYYYMMDD/"
+  echo "  jobs > ${jobs_days}d  →  ${base}/jobs/, ${base}/devices/*/jobs/"
+  echo "  logs > ${logs_days}d  →  ${base}/logs/YYYYMMDD/, ${base}/devices/*/output_*.log"
   echo ""
 
   # Jobs dirs
@@ -190,11 +190,27 @@ cleanup() {
     done < <(find "${base}/logs" -mindepth 2 -maxdepth 2 -type d -mtime "+${logs_days}" -print0)
   fi
 
+  # Por device (devices/<mac>/): jobs y sesiones de log rotadas.
+  # output.log (la sesión actual) nunca se toca.
+  if [ -d "${base}/devices" ]; then
+    while IFS= read -r -d '' jobdir; do
+      echo "  [job] $jobdir  ($(du -sh "$jobdir" 2>/dev/null | cut -f1))"
+      [ "$dry_run" = "0" ] && sudo rm -rf "$jobdir"
+      removed_jobs=$((removed_jobs + 1))
+    done < <(find "${base}/devices" -mindepth 3 -maxdepth 3 -path "*/jobs/*" -type d -mtime "+${jobs_days}" -print0)
+
+    while IFS= read -r -d '' oldlog; do
+      echo "  [log] $oldlog  ($(du -sh "$oldlog" 2>/dev/null | cut -f1))"
+      [ "$dry_run" = "0" ] && sudo rm -f "$oldlog"
+      removed_days=$((removed_days + 1))
+    done < <(find "${base}/devices" -mindepth 2 -maxdepth 2 -name "output_*.log" -type f -mtime "+${logs_days}" -print0)
+  fi
+
   echo ""
   if [ "$dry_run" = "1" ]; then
-    echo "Encontrados: ${removed_jobs} job dir(s), ${removed_days} log day dir(s) para borrar"
+    echo "Encontrados: ${removed_jobs} job(s), ${removed_days} log(s) para borrar"
   else
-    echo "Borrados: ${removed_jobs} job dir(s), ${removed_days} log day dir(s)"
+    echo "Borrados: ${removed_jobs} job(s), ${removed_days} log(s)"
   fi
 }
 

@@ -40,6 +40,10 @@ REPO_DIR="$(dirname "$REMOTE_DIR")"
 # ---------------------------------------------------------------------------
 info "Creando directorios..."
 mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp/toolchain /opt/esp/locks
+# devices/<mac>/: log, jobs y .elf de cada device. run/<tty>.json: estado runtime de cada sesión.
+# Los escribe remote_esp32.py (root); el dashboard (sfypi) solo lee.
+mkdir -p /opt/esp/devices /opt/esp/run
+chmod 755 /opt/esp/devices /opt/esp/run
 chmod 777 /opt/esp/logs /opt/esp/locks
 touch /opt/esp/devices.json
 chmod 666 /opt/esp/devices.json

@@ -283,3 +283,62 @@ class TestDevicesFileIntegrity:
         assert "11:22:33:44:55:66" in en_disco, (
             "al soltar el lock, el dato nuevo todavia no estaba en disco"
         )
+
+
+class TestRuntimeState:
+    """Fase 3: el proceso del device publica MAC y puerto en run/<tty>.json; los
+    datos del flash viven en devices/<mac>/."""
+
+    def _registry(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
+        return make_registry(tmp_path)
+
+    def test_mac_and_port_from_runstate(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF", "tcp_port": 5007, "state": "monitoring"})
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = registry.get_device("ttyUSB0")
+        assert d.mac == "AA:BB:CC:DD:EE:FF" and d.port_tcp == 5007 and d.sn
+
+    def test_runstate_wins_over_legacy_mac_file(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        (tmp_path / "logs" / "ttyUSB0").mkdir(parents=True)
+        (tmp_path / "logs" / "ttyUSB0" / "mac").write_text("11:22:33:44:55:66")
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF"})
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert registry.get_device("ttyUSB0").mac == "AA:BB:CC:DD:EE:FF"
+
+    def test_last_flash_from_device_jobs_and_legacy(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, jobs_dir = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF"})
+        (tmp_path / "devices" / "AABBCCDDEEFF" / "jobs" / "job_20261005_120000_board1").mkdir(parents=True)
+        (jobs_dir / "job_20260101_090000_board1_ttyUSB0").mkdir()   # esquema anterior
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert registry.get_device("ttyUSB0").last_flash_ts == "2026-10-05T12:00:00"
+
+    def test_last_user_from_device_home(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF"})
+        home = tmp_path / "devices" / "AABBCCDDEEFF"
+        home.mkdir(parents=True)
+        (home / "last_user").write_text("alejo")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            assert registry.get_device("ttyUSB0").last_flash_user == "alejo"
+
+    def test_get_device_by_key_via_runstate(self, tmp_path, monkeypatch):
+        from server import runstate
+        registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF"})
+        registry._devices_file.update_device_key("AA:BB:CC:DD:EE:FF", "OEM_NOVUS")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = registry.get_device_by_key("OEM_NOVUS")
+        assert d is not None and d.tty_name == "ttyUSB0"

@@ -112,6 +112,10 @@ def device_jobs_dir(mac: str) -> pathlib.Path:
     return device_home(mac) / "jobs"
 
 
+def device_last_user(mac: str) -> pathlib.Path:
+    return device_home(mac) / "last_user"
+
+
 def device_unknown_home(tty_name: str) -> pathlib.Path:
     """Hogar provisorio de un device cuya MAC nunca se pudo leer."""
     return devices_dir() / f"unknown-{tty_name}"

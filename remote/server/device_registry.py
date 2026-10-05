@@ -10,7 +10,7 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-from server import paths
+from server import paths, runstate
 
 
 class DevicesFile:
@@ -178,7 +178,12 @@ class DeviceRegistry:
         self._devices_file.update_device_key(mac, device_key)
 
     @staticmethod
-    def _get_tty_mac(tty_name: str) -> Optional[str]:
+    def _get_tty_mac(tty_name: str, state: Optional[dict] = None) -> Optional[str]:
+        """La MAC la publica el proceso del device en run/<tty>.json. El archivo
+        logs/<tty>/mac es del esquema anterior (sesiones viejas todavía vivas)."""
+        state = state if state is not None else runstate.read(tty_name)
+        if state and state.get("mac"):
+            return state["mac"]
         f = paths.mac_file(tty_name)
         try:
             if f.exists():
@@ -188,11 +193,13 @@ class DeviceRegistry:
         return None
 
     def _build_device_info(self, tty_name: str) -> DeviceInfo:
-        number   = self._parse_tty_number(tty_name)
-        port_tcp = 5000 + number
+        state = runstate.read(tty_name) or {}
+        # El puerto lo decide la capa de infra y llega por --control-port; el
+        # proceso lo publica. Derivarlo del nombre es solo el fallback.
+        port_tcp = state.get("tcp_port") or 5000 + self._parse_tty_number(tty_name)
         with self._lock:
             fw = self._fw_info.get(tty_name, {})
-        mac = self._get_tty_mac(tty_name)
+        mac = self._get_tty_mac(tty_name, state)
         sn = device_key = hw_model = None
         if mac:
             try:
@@ -210,8 +217,8 @@ class DeviceRegistry:
             tty_name=tty_name,
             port_tcp=port_tcp,
             status=self._get_status(tty_name),
-            last_flash_ts=self._get_last_flash_ts(tty_name),
-            last_flash_user=self._get_last_flash_user(tty_name),
+            last_flash_ts=self._get_last_flash_ts(tty_name, mac),
+            last_flash_user=self._get_last_flash_user(tty_name, mac),
             mac=mac,
             sn=sn,
             device_key=device_key,
@@ -223,13 +230,14 @@ class DeviceRegistry:
         )
 
     @staticmethod
-    def _get_last_flash_user(tty_name: str) -> Optional[str]:
-        try:
-            f = paths.last_user_file(tty_name)
-            if f.exists():
-                return f.read_text().strip() or None
-        except Exception:
-            pass
+    def _get_last_flash_user(tty_name: str, mac: Optional[str] = None) -> Optional[str]:
+        files = ([paths.device_last_user(mac)] if mac else []) + [paths.last_user_file(tty_name)]
+        for f in files:
+            try:
+                if f.exists():
+                    return f.read_text().strip() or None
+            except Exception:
+                pass
         return None
 
     @staticmethod
@@ -261,17 +269,19 @@ class DeviceRegistry:
         except FileNotFoundError:
             return "DOWN"
 
-    def _get_last_flash_ts(self, tty_name: str) -> Optional[str]:
-        if not self._jobs_dir.exists():
-            return None
-        # Sin fallback a glob("job_*"): devolvía el job más reciente de CUALQUIER
-        # device. Mejor None que la fecha de otro.
-        job_dirs = sorted(self._jobs_dir.glob(f"job_*_{tty_name}"), reverse=True)
-        for job_dir in job_dirs:
-            ts = self._parse_job_timestamp(job_dir.name)
-            if ts is not None:
-                return ts
-        return None
+    def _get_last_flash_ts(self, tty_name: str, mac: Optional[str] = None) -> Optional[str]:
+        """Más reciente entre devices/<mac>/jobs/ (si se conoce la MAC) y los jobs
+        por tty del esquema anterior (jobs/job_*_<tty>). Sin fallback a
+        "cualquier job": devolvía el flasheo de otro device."""
+        job_dirs = []
+        if mac:
+            mac_jobs = paths.device_jobs_dir(mac)
+            if mac_jobs.is_dir():
+                job_dirs += list(mac_jobs.glob("job_*"))
+        if self._jobs_dir.exists():
+            job_dirs += list(self._jobs_dir.glob(f"job_*_{tty_name}"))
+        stamps = [ts for ts in (self._parse_job_timestamp(d.name) for d in job_dirs) if ts]
+        return max(stamps) if stamps else None
 
     @staticmethod
     def _parse_job_timestamp(dirname: str) -> Optional[str]:

@@ -225,3 +225,67 @@ def test_disconnect_does_not_affect_other_subscriber(tmp_path):
 
     full_sent_ws2 = "".join(ws2.sent)
     assert "contenido para ws2" in full_sent_ws2
+
+
+def test_follows_log_path_from_runstate(tmp_path, monkeypatch):
+    """Sin logs_base explícito, el archivo lo dice run/<tty>.json (DeviceLog)."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    from server import runstate
+    log = tmp_path / "devices" / "AABBCCDDEEFF" / "output.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("boot del device\n")
+    runstate.write("ttyUSB0", {"log_path": str(log)})
+
+    ws = MockWebSocket()
+    asyncio.run(subscribe_and_cancel(LogStreamer(), "ttyUSB0", ws, cancel_after=0.05))
+    assert "boot del device" in "".join(ws.sent)
+
+
+def test_rotation_streams_new_session_from_start(tmp_path):
+    """Sesión nueva (archivo rotado): se manda desde el principio. Antes se
+    salteaba hasta el final y se perdía el arranque."""
+    log_path = make_log_path(tmp_path)
+    log_path.write_text("sesion vieja con bastante texto\n" * 5)
+    ws = MockWebSocket()
+    streamer = LogStreamer(logs_base=str(tmp_path))
+
+    async def run():
+        task = asyncio.get_event_loop().create_task(streamer.subscribe("ttyUSB0", ws))
+        await asyncio.sleep(0.1)
+        log_path.rename(log_path.with_name("output_20261005_120000.log"))
+        log_path.write_text("ARRANQUE sesion nueva\n")
+        await asyncio.sleep(0.5)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    asyncio.run(run())
+    assert "ARRANQUE sesion nueva" in "".join(ws.sent)
+
+
+def test_no_duplicate_when_file_grows_during_read(tmp_path):
+    log_path = make_log_path(tmp_path)
+    log_path.write_text("")
+    ws = MockWebSocket()
+    streamer = LogStreamer(logs_base=str(tmp_path))
+
+    async def run():
+        task = asyncio.get_event_loop().create_task(streamer.subscribe("ttyUSB0", ws))
+        await asyncio.sleep(0.1)
+        for i in range(20):
+            with open(log_path, "a") as f:
+                f.write(f"linea {i:02d}\n")
+            await asyncio.sleep(0.03)
+        await asyncio.sleep(0.4)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    asyncio.run(run())
+    text = "".join(ws.sent)
+    for i in range(20):
+        assert text.count(f"linea {i:02d}") == 1

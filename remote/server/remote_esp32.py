@@ -1,207 +1,152 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-remote_esp32.py — Monitor persistente con esp_idf_monitor + flasheo remoto
+remote_esp32.py — un proceso por dispositivo: monitor serial persistente +
+servidor TCP de flasheo remoto.
 
-Entrypoint delgado: gestión de señales, logging, arranque del monitor y del
-servidor TCP de control (implementado en protocol.py).
+Lo lanza esp32_tmux.sh en una sesión tmux por device. Arma el modelo
+(DeviceManager → TtyPort + Device + DeviceLog), identifica el device por su
+MAC y levanta tres hilos alrededor:
+
+- control_server: pedidos de flash/unlock por TCP (protocol.py)
+- MAC por serial: si esptool no pudo leerla al arrancar (flash encryption),
+  la busca en lo que imprime el firmware al bootear
+- watcher del tty: si el puerto desaparece, DISCONNECTED y el proceso termina
+  (esp32_tmux.sh relanza la sesión cuando vuelve a aparecer)
+
+Logs: todo pasa por taglog → stdout (la sesión tmux, `devremote <N>`) y el
+DeviceLog del device (devices/<mac>/output.log, lo que muestra el dashboard).
 """
-
-import argparse, datetime as dt, logging, os, pathlib, signal, sys, threading, time
+import argparse
+import os
+import pathlib
+import signal
+import sys
+import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
+from server import paths, runstate, taglog
+from server.device import Device, DeviceManager, DeviceState
 from server.device_registry import DevicesFile
-from server.flash import read_mac, parse_mac_from_serial
-from server.monitor import EspMonitor, _ignore_signals_flag
-from server.protocol import control_server, ensure_dir
 from server.erase import erase_region_interactive
-from server import paths
+from server.flash import parse_mac_from_serial, read_mac
+from server.monitor import EspMonitor
+from server.protocol import control_server
 
-# ========== Bandera global de terminación ==========
-_shutdown_flag = threading.Event()
+TAG = "remote_esp32"
 
+MAC_READ_ATTEMPTS = 3
+MAC_READ_DELAY = 3.0       # el chip puede no estar listo justo después de que udev crea el tty
+MAC_SERIAL_TIMEOUT = 15.0
 
-def nprint(s):
-    print(s + "\r\n", flush=True)
-
-
-def normalize_line_endings(data: bytes) -> bytes:
-    """
-    Normaliza los saltos de línea para terminal:
-    - Mantiene \\r\\n existentes
-    - Convierte \\n solos a \\r\\n
-    """
-    result = data.replace(b'\r\n', b'\n')
-    result = result.replace(b'\n', b'\r\n')
-    return result
+_shutdown = threading.Event()
+_device: "Device | None" = None
 
 
-# ========== Señales ==========
-
-def signal_handler(signum, frame):
-    if _ignore_signals_flag.is_set():
-        print(f"\r\n[DEBUG] Señal {signum} ignorada (operación temporal en curso)\r\n", flush=True)
+def _on_signal(signum, frame):
+    # Durante un flash o un erase el puerto está en manos de esptool: cortarlo
+    # en el medio puede dejar el chip a medio escribir.
+    if _device is not None and _device.busy:
+        taglog.warn(TAG, f"señal {signum} ignorada: {_device.state.value} en curso")
         return
-    print(f"\r\n[DEBUG] Señal recibida: {signum}\r\n", flush=True)
-    print(f"[DEBUG] PID del proceso: {os.getpid()}\r\n", flush=True)
-    _shutdown_flag.set()
+    taglog.info(TAG, f"señal {signum}: terminando")
+    _shutdown.set()
 
 
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGHUP, signal_handler)
+def register_mac(mac: str) -> None:
+    """Alta en devices.json (MAC → nombre amigable). No pisa un nombre existente."""
+    try:
+        sn = mac_to_sn_sfy(mac)
+        DevicesFile().register_mac(mac, sn)
+        taglog.info(TAG, f"MAC {mac} (SN {sn}) registrada en devices.json")
+    except Exception as e:
+        taglog.warn(TAG, f"no se pudo registrar {mac} en devices.json: {e}")
 
 
-# ========== Utilidades de logging ==========
-
-def setup_logging(logs_dir: pathlib.Path) -> logging.Logger:
-    ensure_dir(logs_dir)
-    service_log = logs_dir / "remote_esp32.service.log"
-    L = logging.getLogger("svc")
-    L.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S")
-    sh = logging.StreamHandler(sys.stdout); sh.setFormatter(fmt); L.addHandler(sh)
-    fh = logging.FileHandler(service_log, encoding="utf-8"); fh.setFormatter(fmt); L.addHandler(fh)
-    return L
+def elf_for(device: Device):
+    """El .elf del último flash exitoso, para decodificar backtraces."""
+    if device.mac:
+        candidate = paths.device_current_elf(device.mac)
+        if candidate.exists():
+            return candidate
+    return paths.current_elf_file(device.tty_name)
 
 
-def day_log_path(base: pathlib.Path) -> pathlib.Path:
-    daydir = base / dt.datetime.now().strftime("%Y%m%d")
-    ensure_dir(daydir)
-    return daydir / "serial.log"
-
-
-# ========== main ==========
-
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Monitor persistente con esp_idf_monitor + flasheo remoto")
-    ap.add_argument("-p", "--port-tty", required=True, help="Ruta del /dev/ttyUSBx (ej: /dev/ttyUSB0)")
+    ap.add_argument("-p", "--port-tty", required=True, help="Ruta del tty (ej: /dev/ttyUSB0 o /dev/esp-slot3)")
     ap.add_argument("-b", "--serial-baud", type=int, default=115200, help="Baudrate del firmware")
     ap.add_argument("-tcp", "--control-port", type=int, default=5000, help="Puerto TCP de control")
     ap.add_argument("--chip", default="auto")
     ap.add_argument("--flash-baud", type=int, default=921600)
     ap.add_argument("--token", default="")
     ap.add_argument("--base", default="/opt/esp")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
 
-    nprint("=" * 60)
-    nprint("remote_esp32.py - Monitor + Flasheo Remoto")
-    nprint("=" * 60)
 
-    # --base setea ESP_BASE para todo lo que lea paths.py en este proceso.
-    os.environ["ESP_BASE"] = args.base
-    base = paths.esp_base()
-    logs_dir = paths.logs_dir()
-    jobs_dir = paths.jobs_dir()
+def main(argv=None):
+    global _device
+    args = parse_args(argv)
+    os.environ["ESP_BASE"] = args.base   # todo lo que lea paths.py en este proceso
 
-    nprint(f"[main] directorio base: {base}")
-    nprint(f"[main] logs: {logs_dir}")
-    nprint(f"[main] jobs: {jobs_dir}")
+    manager = DeviceManager(args.port_tty, mac_reader=lambda: read_mac(args.port_tty),
+                            tcp_port=args.control_port)
+    device = _device = manager.device
+    taglog.add_sink(device.device_log.taglog_sink)
 
-    tty_name = os.path.basename(args.port_tty)
-    tty_log_dir = paths.tty_log_dir(tty_name)
-    ensure_dir(logs_dir)
-    ensure_dir(jobs_dir)
-    ensure_dir(tty_log_dir)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
 
-    svc_log = setup_logging(logs_dir)
-    svc_log.info("========== INICIO DEL SERVICIO ==========")
-    svc_log.info(f"TTY: {args.port_tty}")
-    svc_log.info(f"Baud serial: {args.serial_baud}")
-    svc_log.info(f"Puerto TCP: {args.control_port}")
-    svc_log.info(f"Chip: {args.chip}")
-    svc_log.info(f"Baud flash: {args.flash_baud}")
-    svc_log.info(f"Token: {'configurado' if args.token else 'sin token'}")
+    taglog.info(TAG, f"inicio: tty={args.port_tty} tcp={args.control_port} chip={args.chip} "
+                     f"baud={args.serial_baud}/{args.flash_baud} token={'sí' if args.token else 'no'} "
+                     f"base={paths.esp_base()}")
 
-    def _register_mac(mac: str):
-        mac_file = paths.mac_file(tty_name)
-        mac_file.write_text(mac)
-        try:
-            mac_file.chmod(0o666)
-        except Exception:
-            pass
-        try:
-            sn = mac_to_sn_sfy(mac)
-            DevicesFile().register_mac(mac, sn)
-            svc_log.info(f"[mac] SN: {sn} — registrado en devices.json")
-        except Exception as e:
-            svc_log.warning(f"[mac] error en devices.json: {e}")
+    # MAC con esptool antes de arrancar el monitor: el puerto tiene que estar libre.
+    if manager.discover(attempts=MAC_READ_ATTEMPTS, delay=MAC_READ_DELAY):
+        register_mac(device.mac)
 
-    # Leer MAC con esptool antes de arrancar el monitor (puerto libre).
-    # Reintenta hasta 3 veces con 3s de espera: el chip puede no estar listo
-    # inmediatamente después de que udev crea /dev/ttyUSBN.
-    svc_log.info("[mac] leyendo MAC del dispositivo...")
-    mac_addr = None
-    for _attempt in range(3):
-        mac_addr = read_mac(args.port_tty)
-        if mac_addr:
-            break
-        if _attempt < 2:
-            svc_log.info("[mac] reintentando en 3s...")
-            time.sleep(3)
-    mac_file = paths.mac_file(tty_name)
-    if mac_addr:
-        svc_log.info(f"[mac] MAC: {mac_addr}")
-        _register_mac(mac_addr)
-    else:
-        svc_log.warning("[mac] esptool no pudo leer MAC — se intentará desde serial output al bootear")
-        if mac_file.exists():
-            try:
-                mac_file.unlink()
-            except Exception:
-                pass
-
-    cfg = {
-        "port": args.control_port,
-        "tty": args.port_tty,
-        "chip": args.chip,
-        "flash_baud": args.flash_baud,
-        "token": args.token,
-    }
-
-    elf_path = paths.current_elf_file(tty_name)
-    mon = EspMonitor(args.port_tty, args.serial_baud, tty_log_dir, elf_path=elf_path, cfg=cfg, svc_log=svc_log,
-                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg))
-    svc_log.info("Iniciando monitor serial...\r\n")
+    cfg = {"port": args.control_port, "tty": args.port_tty, "chip": args.chip,
+           "flash_baud": args.flash_baud, "token": args.token}
+    mon = EspMonitor(args.port_tty, args.serial_baud,
+                     output_sink=device.device_log.write_bytes,
+                     elf_path=lambda: elf_for(device),
+                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg, device))
     mon.start()
 
-    if not mac_addr:
+    if device.mac is None:
         def _mac_from_serial():
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                found = parse_mac_from_serial(mon.get_recent_output())
-                if found:
-                    svc_log.info(f"[mac] MAC leída desde serial: {found}")
-                    _register_mac(found)
-                    return
-                time.sleep(0.5)
-            buf = mon.get_recent_output()
-            svc_log.warning("[mac] no se pudo leer MAC desde serial output")
-            svc_log.warning(f"[mac] últimos 300 chars del buffer: {repr(buf[-300:])}")
+            if manager.resolve_mac_from_output(mon.get_recent_output, parse_mac_from_serial,
+                                               timeout=MAC_SERIAL_TIMEOUT):
+                register_mac(device.mac)
         threading.Thread(target=_mac_from_serial, daemon=True).start()
 
-    svc_log.info("Iniciando servidor de control TCP...\r\n")
-    th = threading.Thread(target=control_server, args=(cfg, mon), daemon=True)
-    th.start()
-    svc_log.info("Servidor TCP iniciado en hilo daemon\r\n")
+    threading.Thread(target=control_server, args=(cfg, mon, device), daemon=True).start()
 
-    nprint("[main] Sistema listo. Presiona Ctrl-C para salir.")
-    nprint("[main] Presiona Ctrl-E para entrar en modo Erase Region")
+    stop_watch = threading.Event()
+
+    def _watch():
+        if manager.watch_tty(stop_watch):
+            _shutdown.set()
+    threading.Thread(target=_watch, daemon=True).start()
+
+    taglog.info(TAG, "listo — Ctrl-C para salir, Ctrl-E para Erase Region")
     try:
-        while not _shutdown_flag.is_set():
-            _shutdown_flag.wait(timeout=1.0)
+        while not _shutdown.is_set():
+            _shutdown.wait(timeout=1.0)
     except KeyboardInterrupt:
-        nprint("[main] Ctrl-C recibido, cerrando...")
-        svc_log.info("Señal de interrupción recibida\r\n")
-        _shutdown_flag.set()
+        _shutdown.set()
     finally:
-        nprint("[main] Señal de terminación recibida, cerrando...")
-        svc_log.info("Señal de terminación recibida\r\n")
-        svc_log.info("Deteniendo monitor serial...")
+        stop_watch.set()
         mon.stop()
-        svc_log.info("========== FIN DEL SERVICIO ==========\r\n")
-        nprint("[main] Servicio detenido")
+        if device.state == DeviceState.DISCONNECTED:
+            # Se deja run/<tty>.json en "disconnected": esp32_tmux.sh lo usa para
+            # saber que puede recrear la sesión cuando el tty vuelva.
+            taglog.info(TAG, "fin (tty desconectado)")
+        else:
+            taglog.info(TAG, "fin")
+            device.device_log.close()
+            runstate.remove(device.tty_name)
 
 
 if __name__ == "__main__":

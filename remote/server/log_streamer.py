@@ -1,16 +1,22 @@
 """
-Log streamer: tail async del log file de un dispositivo con broadcast a WebSockets.
-Parsea CHIPID en el stream y notifica al DeviceRegistry.
+Log streamer: tail async del log de un dispositivo con broadcast a WebSockets.
+Parsea CHIPID e info de firmware en el stream y notifica al DeviceRegistry.
+
+Qué archivo leer lo dice el proceso del device en run/<tty>.json (log_path):
+el DeviceLog vive en devices/<mac>/ y cambia de archivo en cada sesión. Sin
+estado runtime (o en tests con logs_base explícito) cae al esquema anterior,
+logs/<tty>/output.log.
 """
 
 import asyncio
+import codecs
 import pathlib
 import re
 import sys
 from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-from server import paths
+from server import paths, runstate
 
 CHIPID_RE     = re.compile(r"CHIPID\s*=\s*(\d+)")
 FW_PROJECT_RE = re.compile(r"app_init: Project name:\s+(\S+)")
@@ -29,6 +35,7 @@ class LogStreamer:
     """
 
     def __init__(self, logs_base: Optional[str] = None, registry=None):
+        self._explicit_base = logs_base is not None
         self._logs_base = pathlib.Path(logs_base) if logs_base else paths.logs_dir()
         self._registry = registry
         # tty_name → set of websockets
@@ -39,6 +46,10 @@ class LogStreamer:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _log_path(self, tty_name: str) -> pathlib.Path:
+        if not self._explicit_base:
+            state = runstate.read(tty_name)
+            if state and state.get("log_path"):
+                return pathlib.Path(state["log_path"])
         return self._logs_base / tty_name / "output.log"
 
     def _ensure_lock(self, tty_name: str) -> asyncio.Lock:
@@ -113,31 +124,35 @@ class LogStreamer:
         de los nuevos bytes a todos los suscriptores del tty.
         """
         log_path = self._log_path(tty_name)
-        position = log_path.stat().st_size if log_path.exists() else 0
+        position, inode = _size_and_inode(log_path)
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         while True:
             try:
                 await asyncio.sleep(0.2)
 
-                # Releer la ruta por si cambia el día (edge case)
+                # El archivo cambia con cada sesión del device (rotación) y cuando
+                # una MAC resuelta tarde migra el log del provisorio al de la MAC.
                 log_path = self._log_path(tty_name)
-
                 if not log_path.exists():
                     continue
 
-                current_size = log_path.stat().st_size
-                if current_size < position:
-                    # Log rotado o truncado — arrancar desde el final del nuevo archivo
-                    position = current_size
-                    continue
+                current_size, current_inode = _size_and_inode(log_path)
+                if current_inode != inode or current_size < position:
+                    # Archivo nuevo o truncado: leerlo desde el principio. Antes se
+                    # salteaba hasta el final y se perdía el arranque de la sesión.
+                    inode, position = current_inode, 0
+                    decoder.reset()
                 if current_size == position:
                     continue
 
-                with open(log_path, "r", errors="replace", newline='') as f:
+                # Binario + posición por bytes leídos: si el archivo crece entre el
+                # stat() y el read(), lo leído de más no se vuelve a mandar.
+                with open(log_path, "rb") as f:
                     f.seek(position)
-                    new_content = f.read()
-
-                position = current_size
+                    data = f.read()
+                position += len(data)
+                new_content = decoder.decode(data)
 
                 if not new_content:
                     continue
@@ -195,3 +210,11 @@ class LogStreamer:
                 version=m_ver.group(1)  if m_ver  else None,
                 idf=m_idf.group(1)      if m_idf  else None,
             )
+
+
+def _size_and_inode(path: pathlib.Path):
+    try:
+        st = path.stat()
+        return st.st_size, st.st_ino
+    except OSError:
+        return 0, None

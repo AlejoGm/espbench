@@ -9,6 +9,11 @@ Una conexión = un pedido (upload_and_flash, pull_and_flash o unlock). Flujo:
     → ACK → receive_artifact → extract_artifact
     → monitor_paused { verificar MAC → run_flash } → copiar .elf → respuesta
 
+monitor_paused pasa por la FSM del device (start_flash/finish_flash): no se
+flashea en medio de un erase, y mientras dura el proceso no se deja matar por
+una señal. Los datos del flash (job, .elf, último usuario) van a
+devices/<mac>/ si se conoce la MAC; si no, a las rutas por tty de siempre.
+
 Cada paso es una función con entrada y salida propias, testeable con fakes
 (ver tests/test_protocol.py). Antes todo esto era una única función de 375
 líneas que solo se podía probar con socket, esptool y monitor reales.
@@ -20,7 +25,6 @@ import contextlib
 import dataclasses
 import datetime as dt
 import logging
-import os
 import pathlib
 import shutil
 import socket
@@ -34,7 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import recv_msg, send_msg, sha256_file
 from server import paths, taglog
 from server.flash import build_esptool_cmd, find_esptool_cmd, read_mac, run_cmd
-from server.monitor import _ignore_signals_flag
+from server.device import Device, DeviceState, InvalidTransition
 
 TAG = "protocol"
 
@@ -222,17 +226,16 @@ def flash_params(header: dict, cfg: dict) -> dict:
 # ---------- 4. flash ----------
 
 @contextlib.contextmanager
-def monitor_paused(mon):
-    """Libera el puerto serie para esptool y protege de señales de terminación
-    mientras dura. El monitor se relanza siempre, aunque el flash explote."""
-    _ignore_signals_flag.set()
+def monitor_paused(mon, device: Device):
+    """FLASHING en la FSM + puerto serie libre para esptool. El monitor se
+    relanza y la FSM vuelve al estado previo siempre, aunque el flash explote."""
+    device.start_flash()
     try:
-        taglog.info(TAG, "deteniendo monitor serial")
         mon.stop()
         yield
     finally:
-        _ignore_signals_flag.clear()
         _restart_monitor(mon)
+        device.finish_flash()
 
 
 def _restart_monitor(mon) -> None:
@@ -322,23 +325,49 @@ def _job_logger(job_id: str, path: pathlib.Path):
         handler.close()
 
 
+# ---------- rutas y estado del device ----------
+
+def check_flashable(device: Device) -> None:
+    """Rechazar antes del ACK (y antes de recibir el artefacto) si el device no
+    puede flashearse ahora: por ejemplo, un erase interactivo en curso."""
+    if device.state not in (DeviceState.MONITORING, DeviceState.UNKNOWN):
+        taglog.warn(TAG, f"pedido rechazado: device en {device.state.value}")
+        raise RequestRejected({"ok": False, "error": "device_busy",
+                               "message": f"Device ocupado ({device.state.value})"})
+
+
+def job_dir(device: Device, job_id: str) -> pathlib.Path:
+    """devices/<mac>/jobs/<job_id> si se conoce la MAC (el historial sigue a la
+    placa aunque cambie de puerto). Si no, jobs/<job_id>_<tty>: el tty en el
+    nombre es lo que usa DeviceRegistry para atribuir el último flasheo."""
+    if device.mac:
+        return paths.device_jobs_dir(device.mac) / job_id
+    return paths.jobs_dir() / f"{job_id}_{device.tty_name}"
+
+
+def current_elf(device: Device) -> pathlib.Path:
+    if device.mac:
+        return paths.device_current_elf(device.mac)
+    return paths.current_elf_file(device.tty_name)
+
+
 # ---------- orquestador ----------
 
-def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> None:
+def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTools] = None) -> None:
     tools = tools or FlashTools()
     tty = cfg["tty"]
-    tty_name = os.path.basename(tty)
 
     try:
         header = recv_msg(sock)
         authenticate(header, str(cfg.get("token") or ""))
         action = validate_action(header)
-        locks = LockStore(paths.lock_file(tty_name))
+        locks = LockStore(paths.lock_file(device.tty_name))
         user = header.get("lock_user", "").strip()
         token = header.get("lock_token", "").strip()
         if action == "unlock":
             send_msg(sock, locks.unlock(user, token))
             return
+        check_flashable(device)
         locks.acquire(user, token)
     except RequestRejected as r:
         send_msg(sock, r.response)
@@ -354,10 +383,8 @@ def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> 
         except Exception:
             pass
 
-    # El tty va en el nombre del jobdir: DeviceRegistry._get_last_flash_ts lo busca
-    # por job_*_<tty>. El job_id del cliente trae el nombre amigable, no el tty.
     job_id = header.get("job_id") or time.strftime("job_%Y%m%d_%H%M%S")
-    jobdir = paths.jobs_dir() / f"{job_id}_{tty_name}"
+    jobdir = job_dir(device, job_id)
     ensure_dir(jobdir)
     taglog.info(TAG, f"job {job_id} ({action}) por '{user}'")
     send_msg(sock, {"ok": True, "phase": "ready", "job_id": job_id})
@@ -369,12 +396,10 @@ def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> 
     taglog.info(TAG, f"parámetros: chip={params['chip']} baud={params['baud']} "
                      f"encrypt={params['encrypt']} erase={params['erase']}")
 
-    daydir = paths.logs_dir() / time.strftime("%Y%m%d")
-    ensure_dir(daydir)
-    job_log_path = daydir / f"{job_id}.log"
+    job_log_path = jobdir / "job.log"
 
     try:
-        with monitor_paused(mon), _job_logger(job_id, job_log_path) as job_log:
+        with monitor_paused(mon, device), _job_logger(job_id, job_log_path) as job_log:
             try:
                 esptool = tools.find_esptool()
             except Exception as e:
@@ -382,7 +407,7 @@ def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> 
                 send_msg(sock, {"ok": False, "error": "esptool_not_found", "message": str(e)})
                 return
 
-            mismatch = _device_changed(tools, tty, tty_name)
+            mismatch = _device_changed(tools, tty, device)
             if mismatch:
                 send_msg(sock, mismatch)
                 return
@@ -397,7 +422,7 @@ def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> 
             resp = flash_response(result, job_id, tty, params, job_log_path)
             taglog.info(TAG, f"resultado: {resp['status']} (erase={result.rc_erase}, write={result.rc_write})")
             if result.ok:
-                _after_success(jobdir, tty_name, user)
+                _after_success(jobdir, device, user)
             send_msg(sock, {**resp, "phase": "done"})
     except Exception as e:
         taglog.error(TAG, f"error crítico durante el flash: {e}")
@@ -407,32 +432,37 @@ def handle_control(sock, cfg: dict, mon, tools: Optional[FlashTools] = None) -> 
             pass
 
 
-def _device_changed(tools: FlashTools, tty: str, tty_name: str) -> Optional[dict]:
-    """El device del puerto tiene que ser el mismo que se registró al arrancar
-    la sesión. Si se cambió de placa sin reiniciar la sesión, no flashear."""
+def _device_changed(tools: FlashTools, tty: str, device: Device) -> Optional[dict]:
+    """El device del puerto tiene que ser el mismo que se identificó al arrancar
+    la sesión. Si se cambió de placa sin reiniciar la sesión, no flashear.
+    Si la sesión arrancó sin MAC (UNKNOWN) y ahora se puede leer, se adopta."""
     mac_now = tools.read_mac(tty)
     if not mac_now:
         taglog.warn(TAG, "no se pudo leer la MAC antes de flashear (continuando)")
         return None
-    mac_file = paths.mac_file(tty_name)
-    if mac_file.exists():
-        registered = mac_file.read_text().strip().upper()
-        if mac_now.upper() != registered:
-            taglog.error(TAG, f"MAC cambió: registrada={registered}, actual={mac_now}")
-            return {"ok": False, "error": "device_changed",
-                    "message": f"Dispositivo cambiado (MAC esperada: {registered}). Reiniciar sesión."}
+    if device.mac is None:
+        try:
+            device.promote(mac_now)
+        except InvalidTransition:
+            pass
+    elif mac_now.upper() != device.mac.upper():
+        taglog.error(TAG, f"MAC cambió: registrada={device.mac}, actual={mac_now}")
+        return {"ok": False, "error": "device_changed",
+                "message": f"Dispositivo cambiado (MAC esperada: {device.mac}). Reiniciar sesión."}
     taglog.info(TAG, f"MAC verificada: {mac_now}")
     return None
 
 
-def _after_success(jobdir: pathlib.Path, tty_name: str, user: str) -> None:
+def _after_success(jobdir: pathlib.Path, device: Device, user: str) -> None:
     elf = jobdir / "firmware.elf"
     if elf.exists():
-        dst = paths.current_elf_file(tty_name)
+        dst = current_elf(device)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(elf, dst)
         taglog.info(TAG, f"firmware.elf → {dst}")
     try:
-        f = paths.last_user_file(tty_name)
+        f = (paths.device_last_user(device.mac) if device.mac
+             else paths.last_user_file(device.tty_name))
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(user)
         f.chmod(0o666)
@@ -440,11 +470,11 @@ def _after_success(jobdir: pathlib.Path, tty_name: str, user: str) -> None:
         pass
 
 
-def serve_connection(conn, cfg: dict, mon, tools: Optional[FlashTools] = None) -> None:
+def serve_connection(conn, cfg: dict, mon, device: Device, tools: Optional[FlashTools] = None) -> None:
     """Atiende una conexión y la cierra. Cualquier error no previsto (SHA256,
     ZIP inválido, transferencia cortada) le llega al cliente como "exception"."""
     try:
-        handle_control(conn, cfg, mon, tools)
+        handle_control(conn, cfg, mon, device, tools)
     except Exception as e:
         taglog.error(TAG, f"error atendiendo pedido: {e}")
         try:
@@ -458,7 +488,7 @@ def serve_connection(conn, cfg: dict, mon, tools: Optional[FlashTools] = None) -
             pass
 
 
-def control_server(cfg: dict, mon, tools: Optional[FlashTools] = None) -> None:
+def control_server(cfg: dict, mon, device: Device, tools: Optional[FlashTools] = None) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", cfg["port"]))
@@ -467,4 +497,4 @@ def control_server(cfg: dict, mon, tools: Optional[FlashTools] = None) -> None:
     while True:
         conn, addr = srv.accept()
         taglog.info(TAG, f"conexión desde {addr[0]}:{addr[1]}")
-        serve_connection(conn, cfg, mon, tools)
+        serve_connection(conn, cfg, mon, device, tools)
