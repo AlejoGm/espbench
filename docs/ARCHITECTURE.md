@@ -287,8 +287,11 @@ así que ningún test toca el `/opt/esp` real.
 | `protocol.py` | pedido completo por `socketpair`, esptool falso (`test_protocol.py`) |
 | Entrypoint | `remote_esp32.main()` con fakes solo en esptool/monitor/TCP (`test_remote_esp32.py`) |
 | Scripts de infra | los scripts reales con `tmux`/`udevadm`/`pkill` falsos (`test_infra.py`) |
-| Dashboard | `DeviceRegistry`, `LogStreamer` (rotación, `log_path` por estado runtime) |
+| Dashboard | `DeviceRegistry`, `LogStreamer` (rotación, `log_path` por estado runtime), `history`, endpoints de `api.py` llamados directo (`test_api.py`) |
+| Frontend | lógica de `remote/dashboard/espbench.js` con `node --test` (`tests/js/`, lo corre `test_dashboard_js.py`) |
 
 **Solo se verifica en la Pi**: la regla udev de slots, el hotplug vía systemd, y
 el comportamiento real de `esp_idf_monitor`/esptool con hardware (flash, erase,
-MAC por serial, desconexión física).
+MAC por serial, desconexión física). Del dashboard: que `SerialWatch` cuente un
+panic real (y vuelva a cero al flashear), y que la consola serie (`tmux send-keys`)
+le llegue al firmware a través de `esp_idf_monitor`.
