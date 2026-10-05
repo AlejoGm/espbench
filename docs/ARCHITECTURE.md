@@ -172,6 +172,9 @@ authenticate → validate_action → check_flashable (FSM) → LockStore
   Las herramientas externas (esptool, lectura de MAC) llegan en `FlashTools`.
 - El job vive en `devices/<mac>/jobs/<job_id>/`, con su `job.log` adentro. Para
   un device sin MAC, en `jobs/<job_id>_<tty>/`.
+- Toda respuesta final después del ACK (éxito, fallo de esptool, `device_changed`,
+  SHA256 inválido...) queda también en `jobs/<job_id>/result.json` (`write_result`):
+  es lo que muestra el historial del dashboard.
 - **El lock queda por tty**, no por MAC, a propósito: `esp32_tmux.sh` lo libera
   al reconectar, y atarlo a la placa cambiaría ese comportamiento.
 
@@ -227,8 +230,13 @@ boot ─────► devremote.service ────────────�
 | `POST /api/device/{tty}/unlock` | Liberar lock |
 | `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys` |
 | `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>` |
+| `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
+| `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
+| `POST /api/device/{tty}/send` `{text, enter}` | Texto al serial vía `tmux send-keys -l`; 409 si flashea/borra |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 
+- Las rutas `/api/device/{tty}/...` de GET tienen que declararse **antes** de
+  `/api/device/{tty:path}`, que si no se las come (hay test).
 - `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del
   `ttyUSB` al que apunta). El estado, la MAC y el puerto salen de
   `run/<tty>.json`. Sin estado runtime, cae al esquema anterior (`tmux

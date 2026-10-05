@@ -11,7 +11,7 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-from server import paths, runstate
+from server import history, paths, runstate
 
 
 class DevicesFile:
@@ -126,6 +126,10 @@ class DeviceInfo:
     # Estado de la FSM del proceso del device (discovering, monitoring, flashing,
     # erasing, unknown, disconnected). None si no hay proceso vivo que lo publique.
     state: Optional[str] = None
+    # Lo que SerialWatch publica en run/<tty>.json: reinicios, panics, boot loop.
+    health: Optional[dict] = None
+    # Cómo terminó el último flasheo (result.json). None si no hay o es anterior a result.json.
+    last_flash_ok: Optional[bool] = None
 
 
 class DeviceRegistry:
@@ -207,7 +211,12 @@ class DeviceRegistry:
         # proceso lo publica. Derivarlo del nombre es solo el fallback.
         port_tcp = state.get("tcp_port") or 5000 + self._parse_tty_number(tty_name)
         with self._lock:
-            fw = self._fw_info.get(tty_name, {})
+            fw = dict(self._fw_info.get(tty_name, {}))
+        # Lo que publica el proceso del device (SerialWatch) manda sobre lo que
+        # parsea el LogStreamer, que solo ve lo que pasó con un WebSocket abierto.
+        for key, value in (state.get("fw") or {}).items():
+            if value:
+                fw[f"fw_{key}"] = value
         mac = self._get_tty_mac(tty_name, state)
         sn = device_key = hw_model = None
         if mac:
@@ -221,12 +230,15 @@ class DeviceRegistry:
             if hw_model is None and fw.get("fw_project"):
                 hw_model = hw_model_from_project_name(fw["fw_project"])
                 self._devices_file.update_hw_model(mac, hw_model)
+        last_flash_ts = self._get_last_flash_ts(tty_name, mac)
+        latest = history.list_jobs(tty_name, mac, limit=1)
+        last_flash_ok = latest[0]["ok"] if latest and latest[0]["ts"] == last_flash_ts else None
         return DeviceInfo(
             tty=str(self._dev_dir / tty_name),
             tty_name=tty_name,
             port_tcp=port_tcp,
             status=self._get_status(tty_name, state),
-            last_flash_ts=self._get_last_flash_ts(tty_name, mac),
+            last_flash_ts=last_flash_ts,
             last_flash_user=self._get_last_flash_user(tty_name, mac),
             mac=mac,
             sn=sn,
@@ -237,6 +249,8 @@ class DeviceRegistry:
             fw_idf=fw.get("fw_idf"),
             lock_user=self._get_lock_user(tty_name),
             state=self._live_state(state),
+            health=state.get("health"),
+            last_flash_ok=last_flash_ok,
         )
 
     @staticmethod

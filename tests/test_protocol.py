@@ -318,3 +318,33 @@ def test_upload_progress_is_not_logged_per_recv(tmp_path):
     assert (tmp_path / "artifact.zip").stat().st_size == len(payload)
     assert 2 <= len(lines) <= 4, lines          # cada 5 MB + el final
     assert lines[-1].endswith(f"{len(payload)}/{len(payload)} bytes")
+
+
+# ---------- result.json (historial del dashboard) ----------
+
+def _result(esp_base):
+    jobdir = esp_base / "devices" / "AABBCCDDEEFF" / "jobs" / "job_20261005_120000_board1"
+    return json.loads((jobdir / "result.json").read_text())
+
+
+def test_result_json_on_success(esp_base):
+    payload = make_artifact()
+    request(flash_header(payload), payload)
+    r = _result(esp_base)
+    assert r["ok"] and r["status"] == "exitoso" and r["user"] == "alejo" and r["mac"] == MAC
+    assert r["action"] == "upload_and_flash" and r["write_rc"] == 0
+    assert r["requested_at"] and r["finished_at"] and "phase" not in r
+
+
+def test_result_json_on_failure_before_flash(esp_base):
+    payload = make_artifact()
+    request(flash_header(payload), payload, FakeTools(mac="11:22:33:44:55:66"))
+    r = _result(esp_base)
+    assert not r["ok"] and r["error"] == "device_changed" and r["status"] == "fallido"
+
+
+def test_result_json_on_bad_artifact(esp_base):
+    payload = make_artifact()
+    request(flash_header(payload, artifact_sha256="00" * 32), payload)
+    r = _result(esp_base)
+    assert not r["ok"] and r["error"] == "exception" and "SHA256" in r["message"]

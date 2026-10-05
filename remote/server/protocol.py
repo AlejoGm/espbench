@@ -24,7 +24,9 @@ llegan en FlashTools, así los tests corren sin hardware.
 import contextlib
 import dataclasses
 import datetime as dt
+import json
 import logging
+import os
 import pathlib
 import shutil
 import socket
@@ -329,6 +331,21 @@ def _job_logger(job_id: str, path: pathlib.Path):
         handler.close()
 
 
+def write_result(jobdir: pathlib.Path, meta: dict, resp: dict) -> None:
+    """jobs/<job_id>/result.json: cómo terminó el job, para el historial del
+    dashboard. Se escribe también cuando falla antes de flashear."""
+    result = {**meta, **{k: v for k, v in resp.items() if k != "phase"}}
+    result["ok"] = bool(resp.get("ok"))
+    result.setdefault("status", "fallido" if not result["ok"] else "exitoso")
+    result.setdefault("finished_at", dt.datetime.now().isoformat(timespec="seconds"))
+    try:
+        tmp = jobdir / "result.json.tmp"
+        tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+        os.replace(tmp, jobdir / "result.json")
+    except OSError as e:
+        taglog.warn(TAG, f"no se pudo escribir result.json: {e}")
+
+
 # ---------- rutas y estado del device ----------
 
 def check_flashable(device: Device) -> None:
@@ -392,10 +409,20 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
     ensure_dir(jobdir)
     taglog.info(TAG, f"job {job_id} ({action}) por '{user}'")
     send_msg(sock, {"ok": True, "phase": "ready", "job_id": job_id})
+    meta = {"job_id": job_id, "action": action, "user": user, "mac": device.mac,
+            "requested_at": dt.datetime.now().isoformat(timespec="seconds")}
+
+    def reply(resp: dict) -> None:
+        write_result(jobdir, meta, resp)
+        send_msg(sock, resp)
 
     artifact = jobdir / "artifact.zip"
-    receive_artifact(sock, header, action, artifact)   # errores -> control_server responde "exception"
-    extract_artifact(artifact, jobdir)
+    try:
+        receive_artifact(sock, header, action, artifact)   # errores -> control_server responde "exception"
+        extract_artifact(artifact, jobdir)
+    except Exception as e:
+        write_result(jobdir, meta, {"ok": False, "error": "exception", "message": str(e)})
+        raise
     params = flash_params(header, cfg)
     taglog.info(TAG, f"parámetros: chip={params['chip']} baud={params['baud']} "
                      f"encrypt={params['encrypt']} erase={params['erase']}")
@@ -408,30 +435,30 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
                 esptool = tools.find_esptool()
             except Exception as e:
                 taglog.error(TAG, f"esptool no encontrado: {e}")
-                send_msg(sock, {"ok": False, "error": "esptool_not_found", "message": str(e)})
+                reply({"ok": False, "error": "esptool_not_found", "message": str(e)})
                 return
 
             mismatch = _device_changed(tools, tty, device)
             if mismatch:
-                send_msg(sock, mismatch)
+                reply(mismatch)
                 return
 
             try:
                 result = run_flash(tools, esptool, tty, params, jobdir, job_log, on_line=stream_line)
             except Exception as e:
                 taglog.error(TAG, f"no se pudieron armar los comandos de flasheo: {e}")
-                send_msg(sock, {"ok": False, "error": "build_cmd_failed", "message": str(e)})
+                reply({"ok": False, "error": "build_cmd_failed", "message": str(e)})
                 return
 
             resp = flash_response(result, job_id, tty, params, job_log_path)
             taglog.info(TAG, f"resultado: {resp['status']} (erase={result.rc_erase}, write={result.rc_write})")
             if result.ok:
                 _after_success(jobdir, device, user)
-            send_msg(sock, {**resp, "phase": "done"})
+            reply({**resp, "phase": "done"})
     except Exception as e:
         taglog.error(TAG, f"error crítico durante el flash: {e}")
         try:
-            send_msg(sock, {"ok": False, "error": "flash_critical_error", "message": str(e)})
+            reply({"ok": False, "error": "flash_critical_error", "message": str(e)})
         except Exception:
             pass
 

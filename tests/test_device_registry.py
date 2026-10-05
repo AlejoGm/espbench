@@ -322,6 +322,25 @@ class TestRuntimeState:
         with patch("subprocess.run", side_effect=mock_tmux_down):
             assert registry.get_device("ttyUSB0").last_flash_ts == "2026-10-05T12:00:00"
 
+    def test_health_fw_and_last_flash_result(self, tmp_path, monkeypatch):
+        """Salud y firmware los publica el device (SerialWatch); el resultado del
+        último flash sale de su result.json."""
+        from server import runstate
+        registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
+        (dev_dir / "ttyUSB0").touch()
+        registry.set_firmware_info("ttyUSB0", version="v0.0.1-viejo", idf="v5.1")
+        runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF",
+                                   "health": {"boots": 3, "panics": 1, "boot_loop": True},
+                                   "fw": {"project": "app", "version": "v1.2.3", "idf": None}})
+        job = tmp_path / "devices" / "AABBCCDDEEFF" / "jobs" / "job_20261005_120000_board1"
+        job.mkdir(parents=True)
+        (job / "result.json").write_text(json.dumps({"ok": False, "status": "fallido"}))
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = registry.get_device("ttyUSB0")
+        assert d.health["boot_loop"] and d.health["panics"] == 1
+        assert d.fw_version == "v1.2.3" and d.fw_project == "app" and d.fw_idf == "v5.1"
+        assert d.last_flash_ok is False
+
     def test_last_user_from_device_home(self, tmp_path, monkeypatch):
         from server import runstate
         registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
