@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="/espbench.js"></script>
 </head>
 <body>
     <header class="home-header">
@@ -13,7 +14,9 @@
                 <span class="header-icon">⚡</span>
                 <span class="header-title">espbench</span>
             </div>
+            <div class="header-summary" id="summary"></div>
             <div class="header-meta">
+                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / )" autocomplete="off">
                 <span id="version-badge" class="version-badge"></span>
                 <span class="author-tag">by AlejoGm</span>
             </div>
@@ -35,10 +38,47 @@
             return iso.replace('T', ' ');
         }
 
-        function escapeHtml(str) {
-            var d = document.createElement('div');
-            d.appendChild(document.createTextNode(str));
-            return d.innerHTML;
+        var escapeHtml = EB.escapeHtml;
+
+        function row(label, value, extra) {
+            return '<div class="card-row"><span class="card-label">' + label + '</span>' +
+                   '<span class="card-value"' + (extra || '') + '>' + value + '</span></div>';
+        }
+
+        function healthHtml(device) {
+            var b = EB.healthBadges(device.health);
+            if (!b.length) return '';
+            return '<div class="health-row">' + b.map(function(x) {
+                return '<span class="hbadge ' + x.cls + '" title="' + escapeHtml(x.title) + '">' + escapeHtml(x.text) + '</span>';
+            }).join('') + '</div>';
+        }
+
+        // "app v1.2.3 · IDF v5.3.2", con lo que haya.
+        function firmwareText(device) {
+            var parts = [];
+            if (device.fw_project) parts.push(escapeHtml(device.fw_project));
+            if (device.fw_version) parts.push('<span class="fw-version nowrap">' + escapeHtml(device.fw_version) + '</span>');
+            var main = parts.join(' ');
+            if (device.fw_idf) main += (main ? ' <span class="dim">·</span> ' : '') + '<span class="dim nowrap">IDF ' + escapeHtml(device.fw_idf) + '</span>';
+            return main;
+        }
+
+        function lastFlashHtml(device) {
+            if (!device.last_flash_ts) return '<span class="dim">nunca</span>';
+            var icon = device.last_flash_ok === true ? '<span class="ok-mark">✓</span> '
+                     : device.last_flash_ok === false ? '<span class="fail-mark">✗</span> ' : '';
+            var who = device.last_flash_user ? ' <span class="dim">·</span> ' + escapeHtml(device.last_flash_user) : '';
+            return icon + escapeHtml(EB.relTime(device.last_flash_ts) || device.last_flash_ts) + who;
+        }
+
+        // Clases de la card según estado de la FSM y salud: la franja de color de la izquierda.
+        function cardStateClass(device) {
+            if (device.status !== 'RUNNING') return ' st-down';
+            if (device.state === 'flashing' || device.state === 'erasing') return ' st-busy';
+            if (device.state === 'discovering') return ' st-busy';
+            if (device.state === 'unknown') return ' st-unknown';
+            var lvl = EB.healthLevel(device.health);
+            return lvl === 'bad' ? ' st-bad' : lvl === 'warn' ? ' st-warn' : ' st-ok';
         }
 
         // Estado de la FSM del device (run/<tty>.json). "monitoring" es lo normal
@@ -65,24 +105,16 @@
             var tty = escapeHtml(device.tty_name);
 
             var card = document.createElement('div');
-            card.className = 'device-card' + (device.lock_user ? ' locked' : '');
+            card.className = 'device-card' + cardStateClass(device) + (device.lock_user ? ' locked' : '');
+            card.dataset.search = [title, device.tty_name, device.sn, device.mac, device.hw_model,
+                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
+                                  .filter(Boolean).join(' ').toLowerCase();
 
-            var hwModelRow = device.hw_model
-                ? '<div class="card-row"><span class="card-label">HW Model:</span><span class="card-value">' + escapeHtml(device.hw_model) + '</span></div>'
-                : '';
-            var versionRow = device.fw_version
-                ? '<div class="card-row"><span class="card-label">App version:</span><span class="card-value">' + escapeHtml(device.fw_version) + '</span></div>'
-                : '';
-            var idfRow = device.fw_idf
-                ? '<div class="card-row"><span class="card-label">ESP-IDF:</span><span class="card-value">' + escapeHtml(device.fw_idf) + '</span></div>'
-                : '';
-            var deployerRow = device.last_flash_user
-                ? '<div class="card-row"><span class="card-label">Deployer:</span><span class="card-value">' + escapeHtml(device.last_flash_user) + '</span></div>'
-                : '';
-            var snRow = device.sn
-                ? '<div class="card-row"><span class="card-label">SN:</span><span class="card-value">' + escapeHtml(device.sn) + '</span></div>'
-                : '';
-            var ttyRow = '<div class="card-row"><span class="card-label">TTY:</span><span class="card-value">' + escapeHtml(device.tty_name) + '</span></div>';
+            var fw = firmwareText(device);
+            var hwModelRow = device.hw_model ? row('HW', escapeHtml(device.hw_model)) : '';
+            var fwRow = fw ? row('Firmware', fw) : '';
+            var snRow = device.sn ? row('SN', escapeHtml(device.sn)) : '';
+            var ttyRow = row('Puerto', escapeHtml(device.tty_name) + ' <span class="dim">· tcp ' + escapeHtml(String(device.port_tcp)) + '</span>');
 
             var renameHtml = device.mac
                 ? '<button class="rename-btn" id="rename-btn-' + tty + '" title="Renombrar">✎</button>' +
@@ -103,10 +135,11 @@
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
                 '</div>' +
+                healthHtml(device) +
                 '<div class="card-body">' +
-                    hwModelRow + versionRow + idfRow + deployerRow + snRow + ttyRow +
-                    '<div class="card-row"><span class="card-label">Último flash:</span><span class="card-value">' + escapeHtml(lastFlash) + '</span></div>' +
-                    '<div class="card-row"><span class="card-label">Puerto TCP:</span><span class="card-value">' + escapeHtml(String(device.port_tcp)) + '</span></div>' +
+                    hwModelRow + fwRow +
+                    row('Último flash', lastFlashHtml(device), ' title="' + escapeHtml(lastFlash) + '"') +
+                    snRow + ttyRow +
                 '</div>' +
                 '<div class="card-footer">' +
                     '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
@@ -241,11 +274,10 @@
             var tty = escapeHtml(device.tty_name);
 
             var card = document.createElement('div');
-            card.className = 'device-card card-unknown';
+            card.className = 'device-card card-unknown' + cardStateClass(device);
+            card.dataset.search = device.tty_name.toLowerCase();
 
-            var snRow = device.sn
-                ? '<div class="card-row"><span class="card-label">SN:</span><span class="card-value">' + escapeHtml(device.sn) + '</span></div>'
-                : '';
+            var snRow = device.sn ? row('SN', escapeHtml(device.sn)) : '';
 
             card.innerHTML =
                 '<div class="card-header">' +
@@ -257,9 +289,9 @@
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
                 '</div>' +
+                healthHtml(device) +
                 '<div class="card-body">' +
-                    snRow +
-                    '<div class="card-row"><span class="card-label">Puerto TCP:</span><span class="card-value">' + escapeHtml(String(device.port_tcp)) + '</span></div>' +
+                    snRow + row('Puerto TCP', escapeHtml(String(device.port_tcp))) +
                 '</div>' +
                 '<div class="card-footer">' +
                     '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
@@ -295,12 +327,54 @@
                 }
             });
             unknownWrap.classList.toggle('hidden', !hasUnknown);
+            applySearch();
         }
+
+        // Contadores del header: de un vistazo, cuántos andan y cuántos tienen problemas.
+        function renderSummary(devices) {
+            var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, locked: 0};
+            devices.forEach(function(d) {
+                var cls = cardStateClass(d);
+                if (cls === ' st-down') c.down++;
+                else if (cls === ' st-busy') c.busy++;
+                else if (cls === ' st-bad' || cls === ' st-warn') c.bad++;
+                else if (cls === ' st-unknown') return;
+                else c.ok++;
+                if (d.lock_user) c.locked++;
+            });
+            function chip(n, cls, label, title) {
+                return n ? '<span class="sum-chip ' + cls + '" title="' + title + '"><b>' + n + '</b> ' + label + '</span>' : '';
+            }
+            document.getElementById('summary').innerHTML =
+                chip(c.total, 'sum-total', c.total === 1 ? 'device' : 'devices', 'Devices conectados') +
+                chip(c.ok, 'sum-ok', 'ok', 'Monitoreando, sin problemas') +
+                chip(c.busy, 'sum-busy', 'ocupados', 'Flasheando, borrando o iniciando') +
+                chip(c.bad, 'sum-bad', 'con problemas', 'Panic, boot loop o reset anormal desde el último flash') +
+                chip(c.down, 'sum-down', 'caídos', 'Sin proceso vivo') +
+                chip(c.locked, 'sum-locked', 'bloqueados', 'Con lock de usuario');
+        }
+
+        function applySearch() {
+            var q = document.getElementById('search').value.trim().toLowerCase();
+            document.querySelectorAll('.device-card').forEach(function(card) {
+                card.classList.toggle('hidden', !!q && card.dataset.search.indexOf(q) < 0);
+            });
+        }
+
+        document.getElementById('search').addEventListener('input', applySearch);
+        document.addEventListener('keydown', function(e) {
+            var search = document.getElementById('search');
+            if (e.key === '/' && document.activeElement !== search && document.activeElement.tagName !== 'INPUT') {
+                e.preventDefault();
+                search.focus();
+            }
+            if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; applySearch(); search.blur(); }
+        });
 
         function fetchDevices() {
             fetch('/api/devices')
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-                .then(renderDevices)
+                .then(function(devices) { renderSummary(devices || []); renderDevices(devices); })
                 .catch(function(err) { console.error('Error:', err); });
         }
 

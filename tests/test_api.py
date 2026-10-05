@@ -83,3 +83,20 @@ def test_history_routes_are_not_shadowed_by_device_path_route():
     catch_all = paths_in_order.index("/api/device/{tty:path}")
     for p in ("/api/device/{tty}/jobs", "/api/device/{tty}/sessions", "/api/device/{tty}/send"):
         assert paths_in_order.index(p) < catch_all
+
+
+def test_send_without_tmux_is_502(monkeypatch):
+    def no_tmux(cmd, **kw):
+        raise FileNotFoundError("tmux")
+    monkeypatch.setattr(api.subprocess, "run", no_tmux)
+    with pytest.raises(HTTPException) as e:
+        run(api.device_send("ttyUSB0", {"text": "x"}))
+    assert e.value.status_code == 502
+
+
+def test_static_files_are_revalidated():
+    """Después de un update el navegador tiene que pedir el JS/CSS nuevo."""
+    static = next(r for r in api.app.routes if getattr(r, "name", "") == "static").app
+    scope = {"type": "http", "method": "GET", "path": "/style.css", "headers": []}
+    response = run(static.get_response("style.css", scope))
+    assert response.headers["cache-control"] == "no-cache"

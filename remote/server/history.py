@@ -105,7 +105,8 @@ def list_sessions(tty_name: str, mac: Optional[str]) -> list:
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime,
                     "current": p.name == "output.log"})
-    out.sort(key=lambda s: (s["current"], s["mtime"]), reverse=True)
+    # El nombre lleva el timestamp de la rotación: ordena bien aunque se copien los archivos.
+    out.sort(key=lambda s: (s["current"], s["name"]), reverse=True)
     return out
 
 

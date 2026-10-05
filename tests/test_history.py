@@ -53,6 +53,7 @@ def _make_sessions():
     home.mkdir(parents=True)
     (home / "output.log").write_text("sesion actual\n")
     (home / "output_20261005_100000.log").write_text("sesion vieja\n")
+    (home / "output_20261004_100000.log").write_text("sesion mas vieja, escrita despues\n")
     (home / "otra_cosa.txt").write_text("x")
     return home
 
@@ -60,7 +61,7 @@ def _make_sessions():
 def test_sessions_current_first():
     _make_sessions()
     names = [s["name"] for s in history.list_sessions("ttyUSB0", MAC)]
-    assert names == ["output.log", "output_20261005_100000.log"]
+    assert names == ["output.log", "output_20261005_100000.log", "output_20261004_100000.log"]
     assert history.read_session("ttyUSB0", MAC, "output_20261005_100000.log") == "sesion vieja\n"
 
 

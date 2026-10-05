@@ -5,13 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench — monitor</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="/espbench.js"></script>
 </head>
 <body class="device-page">
 
     <div class="device-header">
         <a class="back-link" href="/">← inicio</a>
         <span class="separator">/</span>
+        <span class="device-name" id="device-name"></span>
         <div class="device-badges" id="device-badges"></div>
+        <div class="device-badges" id="health-badges"></div>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
@@ -22,129 +25,372 @@
         </div>
     </div>
 
-    <pre id="terminal" class="terminal"></pre>
+    <div class="term-toolbar">
+        <input id="filter" class="filter-input" type="search" placeholder="Filtrar líneas…  ( / )" autocomplete="off">
+        <button class="tool-btn" id="btn-problems" title="Mostrar solo panics, resets, errores y warnings">⚠ Solo problemas</button>
+        <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic">⤒ Último panic</button>
+        <span class="tool-sep"></span>
+        <span class="line-count" id="line-count"></span>
+        <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)">⏸ Pausar</button>
+        <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)">⌫ Limpiar</button>
+        <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa">⤓ Log</a>
+        <button class="tool-btn" id="btn-history" title="Flasheos y sesiones anteriores">☰ Historial</button>
+    </div>
+
+    <div class="device-main">
+        <div class="term-wrap">
+            <div id="terminal" class="terminal"></div>
+            <button class="new-lines hidden" id="new-lines">↓ <span id="new-lines-n">0</span> líneas nuevas</button>
+        </div>
+        <aside class="side-panel hidden" id="side-panel">
+            <div class="side-tabs">
+                <button class="side-tab active" data-tab="jobs">Flasheos</button>
+                <button class="side-tab" data-tab="sessions">Sesiones</button>
+                <button class="side-close" id="side-close" title="Cerrar">✕</button>
+            </div>
+            <div class="side-body" id="side-jobs"></div>
+            <div class="side-body hidden" id="side-sessions"></div>
+        </aside>
+    </div>
+
+    <form class="serial-input" id="serial-form" autocomplete="off">
+        <span class="prompt">›</span>
+        <input id="serial-text" placeholder="Enviar al serial del device…  (↑↓ historial)" maxlength="256">
+        <label class="enter-opt" title="Mandar Enter después del texto"><input type="checkbox" id="serial-enter" checked> ⏎</label>
+        <button class="action-btn" type="submit">Enviar</button>
+    </form>
+
+    <div class="viewer hidden" id="viewer">
+        <div class="viewer-box">
+            <div class="viewer-head">
+                <span class="viewer-title" id="viewer-title"></span>
+                <a class="tool-btn" id="viewer-download" target="_blank">⤓ Descargar</a>
+                <button class="tool-btn" id="viewer-close">✕ Cerrar</button>
+            </div>
+            <div class="terminal viewer-body" id="viewer-body"></div>
+        </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
 
     <script>
         var params = new URLSearchParams(window.location.search);
         var tty = params.get('tty') || '';
-        var terminal = document.getElementById('terminal');
-        var statusDot = document.getElementById('status-dot');
-        var statusLabel = document.getElementById('status-label');
-        var deviceBadges = document.getElementById('device-badges');
+        var api = '/api/device/' + encodeURIComponent(tty);
+        var $ = function(id) { return document.getElementById(id); };
+        var terminal = $('terminal');
         var ws = null;
         var reconnectTimer = null;
-        var rawContent = '';
         var currentLockUser = '';
 
-        // ── ANSI → HTML ───────────────────────────────────────────────────────
-        var ANSI_COLORS = {
-            30: '#555555', 31: '#f85149', 32: '#3fb950', 33: '#d29922',
-            34: '#388bfd', 35: '#bc8cff', 36: '#39c5cf', 37: '#b1bac4',
-            90: '#6e7681', 91: '#ff7b72', 92: '#56d364', 93: '#e3b341',
-            94: '#79c0ff', 95: '#d2a8ff', 96: '#56d4dd', 97: '#f0f6fc',
-        };
+        var MAX_LINES = 20000;   // tope de líneas en la vista; el archivo completo se descarga
 
-        function escHtml(s) {
-            return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // ── Terminal: render incremental ──────────────────────────────────────
+        // Cada línea completa es un <div>; la línea en curso (sin \n todavía) es
+        // el último, y se reescribe en cada mensaje. Nunca se re-renderiza todo.
+        var buffer = new EB.LineBuffer();
+        var partialEl = null;
+        var follow = true;
+        var unseen = 0;
+        var dropped = 0;
+        var filterText = '';
+        var onlyProblems = false;
+        var lastPanicEl = null;
+
+        function makeLine(text, el) {
+            el = el || document.createElement('div');
+            var plain = EB.stripAnsi(text);
+            var cls = EB.lineClass(plain);
+            el.className = 'ln' + (cls ? ' ' + cls : '');
+            el.innerHTML = EB.ansiLineToHtml(text) || '​';
+            el._plain = plain.toLowerCase();
+            el._cls = cls;
+            applyFilterTo(el);
+            return el;
         }
 
-        // \r* antes de \n = la PTY (ONLCR) generó CRs extra — colapsar a \n.
-        // \r suelto (sin \n a continuación) = overwrite terminal — quedarse con el
-        // texto posterior al último \r en esa línea (esptool progress bars).
-        function applyCarriageReturns(text) {
-            text = text.replace(/\r*\n/g, '\n');
-            return text.split('\n').map(function(line) {
-                var idx = line.lastIndexOf('\r');
-                return idx >= 0 ? line.slice(idx + 1) : line;
-            }).join('\n');
+        function visible(el) {
+            if (onlyProblems && !EB.isProblem(el._cls)) return false;
+            return !filterText || el._plain.indexOf(filterText) >= 0;
         }
 
-        function ansiToHtml(text) {
-            text = applyCarriageReturns(text);
-            var result = '';
-            var openSpan = false;
-            var parts = text.split(/\x1b\[([0-9;]*)m/);
-            for (var i = 0; i < parts.length; i++) {
-                if (i % 2 === 0) {
-                    result += escHtml(parts[i]);
-                } else {
-                    if (openSpan) { result += '</span>'; openSpan = false; }
-                    var codes = parts[i] === '' ? [0] : parts[i].split(';').map(Number);
-                    var style = '';
-                    for (var j = 0; j < codes.length; j++) {
-                        var c = codes[j];
-                        if (c === 0) { style = ''; }
-                        else if (c === 1) { style += 'font-weight:600;'; }
-                        else if (ANSI_COLORS[c]) { style += 'color:' + ANSI_COLORS[c] + ';'; }
-                    }
-                    if (style) { result += '<span style="' + style + '">'; openSpan = true; }
-                }
-            }
-            if (openSpan) result += '</span>';
-            return result;
-        }
+        function applyFilterTo(el) { el.classList.toggle('hidden', !visible(el)); }
 
-        // ── Terminal rendering ────────────────────────────────────────────────
         function appendText(text) {
-            var atBottom = isAtBottom();
-            rawContent += text;
-            terminal.innerHTML = ansiToHtml(rawContent);
-            if (atBottom) terminal.scrollTop = terminal.scrollHeight;
+            var lines = buffer.push(text);
+            if (!partialEl) {
+                partialEl = document.createElement('div');
+                terminal.appendChild(partialEl);
+            }
+            if (lines.length) {
+                var frag = document.createDocumentFragment();
+                lines.forEach(function(l) {
+                    var el = makeLine(l);
+                    if (el._cls === 'ln-panic') lastPanicEl = el;
+                    frag.appendChild(el);
+                });
+                terminal.insertBefore(frag, partialEl);
+                trim();
+                if (!follow) unseen += lines.length;
+            }
+            makeLine(buffer.partialView(), partialEl);
+            partialEl.classList.add('ln-partial');
+            if (follow) terminal.scrollTop = terminal.scrollHeight;
+            updateCounters();
+        }
+
+        function trim() {
+            var extra = terminal.childElementCount - 1 - MAX_LINES;
+            for (; extra > 0; extra--) {
+                if (terminal.firstChild === lastPanicEl) lastPanicEl = null;
+                terminal.removeChild(terminal.firstChild);
+                dropped++;
+            }
+        }
+
+        function updateCounters() {
+            var n = terminal.childElementCount - (partialEl ? 1 : 0);
+            $('line-count').textContent = n.toLocaleString('es-AR') + ' líneas' +
+                (dropped ? ' (' + dropped.toLocaleString('es-AR') + ' recortadas)' : '');
+            $('new-lines-n').textContent = unseen;
+            $('new-lines').classList.toggle('hidden', follow || unseen === 0);
+            $('btn-panic').classList.toggle('hidden', !lastPanicEl);
+            $('btn-follow').textContent = follow ? '⏸ Pausar' : '▶ Seguir';
+            $('btn-follow').classList.toggle('active', !follow);
+        }
+
+        function setFollow(on) {
+            follow = on;
+            if (on) { unseen = 0; terminal.scrollTop = terminal.scrollHeight; }
+            updateCounters();
         }
 
         function isAtBottom() {
-            return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
+            return terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 40;
         }
 
-        // ── Device info badges ────────────────────────────────────────────────
+        terminal.addEventListener('scroll', function() {
+            var bottom = isAtBottom();
+            if (bottom && !follow) setFollow(true);
+            else if (!bottom && follow) { follow = false; updateCounters(); }
+        });
+
+        function refilter() {
+            for (var el = terminal.firstChild; el; el = el.nextSibling) {
+                if (el._plain !== undefined) applyFilterTo(el);
+            }
+            terminal.classList.toggle('filtered', !!filterText || onlyProblems);
+            if (follow) terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function clearView() {
+            terminal.innerHTML = '';
+            partialEl = null;
+            lastPanicEl = null;
+            dropped = unseen = 0;
+            updateCounters();
+        }
+
+        function jumpToPanic() {
+            if (!lastPanicEl) return;
+            if (lastPanicEl.classList.contains('hidden')) { filterText = ''; $('filter').value = ''; refilter(); }
+            follow = false;
+            lastPanicEl.scrollIntoView({block: 'center'});
+            lastPanicEl.classList.remove('flash');
+            void lastPanicEl.offsetWidth;
+            lastPanicEl.classList.add('flash');
+            updateCounters();
+        }
+
+        // ── Header: badges del device y de salud ─────────────────────────────
         function makeBadge(label, value, extraClass) {
             return '<span class="dev-badge' + (extraClass ? ' ' + extraClass : '') + '">' +
-                   '<span class="dev-badge-label">' + escHtml(label) + '</span>' +
-                   '<span class="dev-badge-value">' + escHtml(value) + '</span></span>';
+                   '<span class="dev-badge-label">' + EB.escapeHtml(label) + '</span>' +
+                   '<span class="dev-badge-value">' + EB.escapeHtml(value) + '</span></span>';
         }
+
+        var STATE_LABELS = {discovering: 'iniciando', flashing: 'flasheando', erasing: 'borrando',
+                            unknown: 'sin MAC', disconnected: 'desconectado'};
 
         function loadDeviceInfo() {
-            fetch('/api/device/' + tty)
+            fetch(api)
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(d) {
-                    var badges = [makeBadge('tty', tty)];
+                    var badges = [];
+                    var name = tty;
                     if (d) {
-                        // Estado de la FSM; "monitoring" es lo normal y no se muestra
-                        if (d.state && d.state !== 'monitoring') badges.push(makeBadge('estado', d.state));
-                        if (d.port_tcp)        badges.push(makeBadge('tcp',      ':' + d.port_tcp));
-                        if (d.hw_model)        badges.push(makeBadge('hw',       d.hw_model));
-                        if (d.device_key)      badges.push(makeBadge('key',      d.device_key));
-                        if (d.sn)              badges.push(makeBadge('sn',       d.sn));
-                        if (d.fw_version)      badges.push(makeBadge('version',  'v' + d.fw_version));
-                        if (d.fw_idf)          badges.push(makeBadge('idf',      d.fw_idf));
-                        if (d.last_flash_user) badges.push(makeBadge('deployer', d.last_flash_user));
-                        if (d.lock_user) {
-                            currentLockUser = d.lock_user;
-                            badges.push(makeBadge('🔒 locked', d.lock_user, 'badge-locked'));
-                        } else {
-                            currentLockUser = '';
+                        name = d.device_key || d.hw_model || tty;
+                        if (d.state && STATE_LABELS[d.state]) badges.push(makeBadge('estado', STATE_LABELS[d.state], 'badge-state-' + d.state));
+                        if (d.device_key && d.device_key !== tty) badges.push(makeBadge('tty', tty));
+                        if (d.port_tcp)        badges.push(makeBadge('tcp', ':' + d.port_tcp));
+                        if (d.hw_model && d.hw_model !== name) badges.push(makeBadge('hw', d.hw_model));
+                        if (d.sn)              badges.push(makeBadge('sn', d.sn));
+                        if (d.fw_version)      badges.push(makeBadge('fw', (d.fw_project ? d.fw_project + ' ' : '') + d.fw_version));
+                        if (d.fw_idf)          badges.push(makeBadge('idf', d.fw_idf));
+                        if (d.last_flash_ts) {
+                            var mark = d.last_flash_ok === false ? '✗ ' : d.last_flash_ok === true ? '✓ ' : '';
+                            badges.push(makeBadge('flash', mark + EB.relTime(d.last_flash_ts) +
+                                                  (d.last_flash_user ? ' · ' + d.last_flash_user : ''),
+                                                  d.last_flash_ok === false ? 'badge-fail' : ''));
                         }
-                        var titleLabel = d.device_key || d.hw_model || tty;
-                        document.title = 'espbench — ' + titleLabel;
+                        currentLockUser = d.lock_user || '';
+                        if (d.lock_user) badges.push(makeBadge('🔒 locked', d.lock_user, 'badge-locked'));
+                        $('health-badges').innerHTML = EB.healthBadges(d.health).map(function(x) {
+                            return '<span class="hbadge ' + x.cls + '" title="' + EB.escapeHtml(x.title) + '">' + EB.escapeHtml(x.text) + '</span>';
+                        }).join('');
+                        var busy = d.state === 'flashing' || d.state === 'erasing';
+                        $('serial-text').disabled = busy;
+                        $('serial-text').placeholder = busy ? 'Device ocupado (' + STATE_LABELS[d.state] + ')…'
+                                                            : 'Enviar al serial del device…  (↑↓ historial)';
                     }
-                    deviceBadges.innerHTML = badges.join('');
-                    var btnUnlock = document.getElementById('btn-unlock');
-                    if (d && d.lock_user) {
-                        btnUnlock.style.display = '';
-                    } else {
-                        btnUnlock.style.display = 'none';
-                    }
+                    $('device-name').textContent = name;
+                    document.title = 'espbench — ' + name;
+                    $('device-badges').innerHTML = badges.join('');
+                    $('btn-unlock').style.display = d && d.lock_user ? '' : 'none';
                 })
-                .catch(function() {
-                    deviceBadges.innerHTML = makeBadge('tty', tty);
-                });
+                .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
         }
 
-        // ── Device commands ───────────────────────────────────────────────────
+        // ── Historial: flasheos y sesiones ────────────────────────────────────
+        var sideTab = 'jobs';
+
+        function panelOpen() { return !$('side-panel').classList.contains('hidden'); }
+
+        function toggleHistory(open) {
+            $('side-panel').classList.toggle('hidden', !open);
+            $('btn-history').classList.toggle('active', open);
+            if (open) loadHistory();
+        }
+
+        function loadHistory() {
+            if (!panelOpen()) return;
+            if (sideTab === 'jobs') {
+                fetch(api + '/jobs').then(function(r) { return r.json(); }).then(renderJobs)
+                    .catch(function() { $('side-jobs').innerHTML = '<div class="side-empty">Error al leer el historial</div>'; });
+            } else {
+                fetch(api + '/sessions').then(function(r) { return r.json(); }).then(renderSessions)
+                    .catch(function() { $('side-sessions').innerHTML = '<div class="side-empty">Error al leer las sesiones</div>'; });
+            }
+        }
+
+        function renderJobs(jobs) {
+            if (!jobs.length) { $('side-jobs').innerHTML = '<div class="side-empty">Sin flasheos registrados</div>'; return; }
+            $('side-jobs').innerHTML = jobs.map(function(j) {
+                var cls = j.ok === true ? 'ok' : j.ok === false ? 'fail' : 'unk';
+                var icon = j.ok === true ? '✓' : j.ok === false ? '✗' : '·';
+                var detail = j.ok === false ? (j.error ? j.error.replace(/_/g, ' ') : '') + (j.message ? ': ' + j.message : '')
+                           : j.status || '';
+                return '<div class="hist-item hist-' + cls + '">' +
+                         '<span class="hist-icon">' + icon + '</span>' +
+                         '<div class="hist-main">' +
+                           '<div class="hist-line"><b title="' + EB.escapeHtml((j.ts || '').replace('T', ' ')) + '">' +
+                               EB.escapeHtml(EB.relTime(j.ts) || j.job_id) + '</b>' +
+                               (j.user ? ' <span class="dim">· ' + EB.escapeHtml(j.user) + '</span>' : '') + '</div>' +
+                           (detail ? '<div class="hist-detail" title="' + EB.escapeHtml(detail) + '">' + EB.escapeHtml(detail) + '</div>' : '') +
+                           '<div class="hist-id">' + EB.escapeHtml(j.job_id) + '</div>' +
+                         '</div>' +
+                         (j.has_log ? '<button class="tool-btn" data-job="' + EB.escapeHtml(j.job_id) + '">log</button>' : '') +
+                       '</div>';
+            }).join('');
+        }
+
+        function renderSessions(sessions) {
+            if (!sessions.length) { $('side-sessions').innerHTML = '<div class="side-empty">Sin sesiones</div>'; return; }
+            $('side-sessions').innerHTML = sessions.map(function(s) {
+                // output_<YYYYMMDD_HHMMSS>.log: cuándo se rotó (cuando terminó esa sesión)
+                var m = /^output_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)/.exec(s.name);
+                var when = new Date(s.mtime * 1000);
+                var iso = m ? m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + m[6]
+                            : when.getFullYear() + '-' + pad(when.getMonth() + 1) + '-' + pad(when.getDate()) + 'T' +
+                              pad(when.getHours()) + ':' + pad(when.getMinutes()) + ':' + pad(when.getSeconds());
+                return '<div class="hist-item' + (s.current ? ' hist-current' : '') + '">' +
+                         '<span class="hist-icon">' + (s.current ? '●' : '▤') + '</span>' +
+                         '<div class="hist-main">' +
+                           '<div class="hist-line"><b title="' + iso.replace('T', ' ') + '">' + (s.current ? 'Sesión actual' : 'hasta ' + EB.escapeHtml(EB.relTime(iso))) + '</b>' +
+                             ' <span class="dim">· ' + EB.fmtBytes(s.size) + '</span></div>' +
+                           '<div class="hist-id">' + EB.escapeHtml(s.name) + '</div>' +
+                         '</div>' +
+                         (s.current ? '' : '<button class="tool-btn" data-session="' + EB.escapeHtml(s.name) + '">ver</button>') +
+                         '<a class="tool-btn" href="' + api + '/sessions/' + encodeURIComponent(s.name) + '?download=1">⤓</a>' +
+                       '</div>';
+            }).join('');
+        }
+
+        function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+        // ── Visor (log de un job o una sesión anterior) ──────────────────────
+        function openViewer(title, url, downloadUrl) {
+            $('viewer-title').textContent = title;
+            $('viewer-body').innerHTML = '<div class="side-empty">Cargando…</div>';
+            $('viewer-download').href = downloadUrl || url;
+            $('viewer').classList.remove('hidden');
+            fetch(url).then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+                .then(function(text) {
+                    var lb = new EB.LineBuffer();
+                    var lines = lb.push(text + '\n');
+                    var frag = document.createDocumentFragment();
+                    lines.forEach(function(l) { frag.appendChild(makeLine(l)); });
+                    $('viewer-body').innerHTML = '';
+                    $('viewer-body').appendChild(frag);
+                    // makeLine aplica el filtro de la vista en vivo: acá se ve todo
+                    Array.prototype.forEach.call($('viewer-body').children, function(el) { el.classList.remove('hidden'); });
+                })
+                .catch(function(e) { $('viewer-body').innerHTML = '<div class="side-empty">Error: ' + e.message + '</div>'; });
+        }
+
+        function closeViewer() { $('viewer').classList.add('hidden'); }
+
+        // ── Entrada serie ────────────────────────────────────────────────────
+        var sent = [];
+        var sentIdx = -1;
+
+        function sendSerial(e) {
+            e.preventDefault();
+            var input = $('serial-text');
+            var text = input.value;
+            var enter = $('serial-enter').checked;
+            if (!text && !enter) return;
+            fetch(api + '/send', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text, enter: enter})
+            }).then(function(r) {
+                return r.json().catch(function() { return {detail: 'HTTP ' + r.status}; })
+                        .then(function(d) { return [r.ok, d]; });
+            })
+              .then(function(res) {
+                  if (!res[0]) { toast(res[1].detail || 'Error', true); return; }
+                  if (text && sent[sent.length - 1] !== text) sent.push(text);
+                  sentIdx = -1;
+                  input.value = '';
+                  setFollow(true);
+              })
+              .catch(function() { toast('Error de conexión', true); });
+        }
+
+        $('serial-text').addEventListener('keydown', function(e) {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            if (!sent.length) return;
+            e.preventDefault();
+            if (e.key === 'ArrowUp') sentIdx = sentIdx < 0 ? sent.length - 1 : Math.max(0, sentIdx - 1);
+            else sentIdx = sentIdx < 0 ? -1 : sentIdx + 1;
+            if (sentIdx >= sent.length) sentIdx = -1;
+            this.value = sentIdx < 0 ? '' : sent[sentIdx];
+        });
+
+        var toastTimer = null;
+        function toast(msg, error) {
+            var t = $('toast');
+            t.textContent = msg;
+            t.className = 'toast' + (error ? ' toast-error' : '');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(function() { t.classList.add('hidden'); }, 3500);
+        }
+
+        // ── Comandos del monitor ─────────────────────────────────────────────
         function sendCommand(cmd) {
-            var btn = document.getElementById('btn-' + cmd);
+            var btn = $('btn-' + cmd);
             btn.disabled = true;
-            fetch('/api/device/' + tty + '/command/' + cmd, {method: 'POST'})
+            fetch(api + '/command/' + cmd, {method: 'POST'})
                 .then(function(r) { return r.json(); })
                 .catch(function() {})
                 .finally(function() { setTimeout(function() { btn.disabled = false; }, 1000); });
@@ -155,27 +401,33 @@
             terminal.textContent = 'Error: parámetro ?tty= faltante.';
         } else {
             document.title = 'espbench — ' + tty;
+            $('device-name').textContent = tty;
+            $('btn-download').href = api + '/sessions/output.log?download=1';
 
             connect();
             loadDeviceInfo();
             setInterval(loadDeviceInfo, 3000);
-            document.getElementById('btn-reset').onclick = function() { sendCommand('reset'); };
-            document.getElementById('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
-            document.getElementById('btn-devremote-reset').onclick = function() {
-                var btn = document.getElementById('btn-devremote-reset');
+            setInterval(loadHistory, 10000);
+
+            $('btn-reset').onclick = function() { sendCommand('reset'); };
+            $('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
+            $('btn-devremote-reset').onclick = function() {
+                if (!confirm('¿Reiniciar la sesión de ' + tty + '? Mata y relanza el proceso del device.')) return;
+                var btn = $('btn-devremote-reset');
                 btn.disabled = true;
-                fetch('/api/device/' + tty + '/devremote-reset', {method: 'POST'})
+                fetch(api + '/devremote-reset', {method: 'POST'})
                     .then(function(r) { return r.json(); })
+                    .then(function(d) { toast(d.ok ? 'Sesión reiniciada' : 'Falló: ' + (d.stderr || ''), !d.ok); })
                     .catch(function() {})
                     .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
             };
-            document.getElementById('btn-unlock').onclick = function() {
+            $('btn-unlock').onclick = function() {
                 if (!currentLockUser) { alert('No hay lock activo'); return; }
                 var token = window.prompt('Token para ' + currentLockUser + ':');
                 if (!token) return;
-                var btn = document.getElementById('btn-unlock');
+                var btn = $('btn-unlock');
                 btn.disabled = true;
-                fetch('/api/device/' + tty + '/unlock', {
+                fetch(api + '/unlock', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({lock_user: currentLockUser, lock_token: token})
@@ -187,23 +439,74 @@
                   .catch(function() { alert('Error de conexión'); })
                   .finally(function() { btn.disabled = false; });
             };
+
+            $('filter').addEventListener('input', function() { filterText = this.value.trim().toLowerCase(); refilter(); });
+            $('btn-problems').onclick = function() {
+                onlyProblems = !onlyProblems;
+                this.classList.toggle('active', onlyProblems);
+                refilter();
+            };
+            $('btn-panic').onclick = jumpToPanic;
+            $('btn-follow').onclick = function() { setFollow(!follow); };
+            $('new-lines').onclick = function() { setFollow(true); };
+            $('btn-clear').onclick = clearView;
+            $('btn-history').onclick = function() { toggleHistory(!panelOpen()); };
+            $('side-close').onclick = function() { toggleHistory(false); };
+            Array.prototype.forEach.call(document.querySelectorAll('.side-tab'), function(tab) {
+                tab.onclick = function() {
+                    sideTab = tab.dataset.tab;
+                    document.querySelectorAll('.side-tab').forEach(function(t) { t.classList.toggle('active', t === tab); });
+                    $('side-jobs').classList.toggle('hidden', sideTab !== 'jobs');
+                    $('side-sessions').classList.toggle('hidden', sideTab !== 'sessions');
+                    loadHistory();
+                };
+            });
+            $('side-panel').addEventListener('click', function(e) {
+                var b = e.target.closest('button[data-job], button[data-session]');
+                if (!b) return;
+                if (b.dataset.job) {
+                    var url = api + '/jobs/' + encodeURIComponent(b.dataset.job) + '/log';
+                    openViewer('Flasheo ' + b.dataset.job, url, url);
+                } else {
+                    var surl = api + '/sessions/' + encodeURIComponent(b.dataset.session);
+                    openViewer('Sesión ' + b.dataset.session, surl, surl + '?download=1');
+                }
+            });
+            $('viewer-close').onclick = closeViewer;
+            $('viewer').addEventListener('click', function(e) { if (e.target === this) closeViewer(); });
+            $('serial-form').addEventListener('submit', sendSerial);
+
+            document.addEventListener('keydown', function(e) {
+                var typing = document.activeElement && document.activeElement.tagName === 'INPUT';
+                if (e.key === 'Escape') {
+                    if (!$('viewer').classList.contains('hidden')) closeViewer();
+                    else if (document.activeElement === $('filter')) { $('filter').value = ''; filterText = ''; refilter(); $('filter').blur(); }
+                }
+                if (typing) return;
+                if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
+                if (e.key === 'End') { e.preventDefault(); setFollow(true); }
+                if (e.key === 'i') { e.preventDefault(); $('serial-text').focus(); }
+            });
         }
 
         function setStatus(state) {
-            statusDot.className = 'status-dot ' + state;
-            if (state === 'connected')    statusLabel.textContent = 'conectado';
-            if (state === 'reconnecting') statusLabel.textContent = 'reconectando...';
-            if (state === 'error')        statusLabel.textContent = 'error';
+            $('status-dot').className = 'status-dot ' + state;
+            var labels = {connected: 'en vivo', reconnecting: 'reconectando...', error: 'error'};
+            $('status-label').textContent = labels[state] || state;
         }
 
         function connect() {
-            if (ws) { ws.close(); }
+            if (ws) { ws.onclose = null; ws.close(); }
             setStatus('reconnecting');
             var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(wsProto + '//' + location.host + '/ws/device/' + tty);
+            ws = new WebSocket(wsProto + '//' + location.host + '/ws/device/' + encodeURIComponent(tty));
             ws.onopen = function() {
                 setStatus('connected');
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                // El server manda la sesión completa al conectar: empezar de cero
+                // para no duplicar lo que ya estaba en la vista.
+                clearView();
+                buffer = new EB.LineBuffer();
             };
             ws.onmessage = function(evt) { appendText(evt.data); };
             ws.onclose   = function() {

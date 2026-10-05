@@ -134,7 +134,10 @@ async def device_send(tty: str, body: dict = Body(...)):
         raise HTTPException(status_code=409, detail=f"device ocupado ({state['state']})")
     session = f"esp32_{tty}"
     for cmd in send_keys_cmds(session, text, enter):
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            raise HTTPException(status_code=502, detail="tmux no disponible")
         if r.returncode != 0:
             raise HTTPException(status_code=502, detail=f"tmux: {r.stderr.strip() or r.returncode}")
     return {"ok": True, "session": session, "sent": text, "enter": enter}
@@ -213,7 +216,17 @@ async def ws_device(websocket: WebSocket, tty: str):
     await streamer.subscribe(tty, websocket)
 
 
-app.mount("/", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="static")
+class _RevalidatedStaticFiles(StaticFiles):
+    """Estáticos con `Cache-Control: no-cache`: el navegador revalida (ETag, 304)
+    en cada carga. Sin esto, después de un update seguía usando el JS/CSS viejo."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", _RevalidatedStaticFiles(directory=str(DASHBOARD_DIR), html=True), name="static")
 
 
 if __name__ == "__main__":
