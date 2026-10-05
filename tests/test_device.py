@@ -386,3 +386,42 @@ def test_watch_tty_stops_on_request(monkeypatch, tmp_path):
     stop.set()
     assert manager.watch_tty(stop, exists=lambda p: True) is False
     assert manager.device.state == DeviceState.MONITORING
+
+
+# ---------------------------------------------------------------------------
+# Salud del device (SerialWatch) en el estado publicado
+# ---------------------------------------------------------------------------
+
+BOOT = b"rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\nI (31) app_init: App version:      v1.2.3\r\n"
+PANIC = b"Guru Meditation Error: Core  0 panic'ed (LoadProhibited). Exception was unhandled.\r\n"
+
+
+def test_manager_publishes_health_and_fw_from_serial(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB2", mac_reader=lambda: MAC, tcp_port=5002)
+    manager.discover()
+    manager.on_serial(BOOT)
+    manager.on_serial(PANIC)
+    state = json.loads((tmp_path / "run" / "ttyUSB2.json").read_text())
+    assert state["fw"]["version"] == "v1.2.3"
+    assert state["health"]["boots"] == 1 and state["health"]["panics"] == 1
+    assert state["health"]["last_panic"]["detail"] == "LoadProhibited"
+    # El serial también llega al log del device
+    assert "Guru Meditation" in (tmp_path / "devices" / "AABBCCDDEEFF" / "output.log").read_text()
+
+
+def test_flash_resets_health_counters_but_keeps_fw(monkeypatch, tmp_path):
+    """El flash reinicia el chip a propósito: no tiene que quedar como problema."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    manager.discover()
+    manager.on_serial(BOOT + PANIC)
+    manager.device.start_flash()
+    health = manager.device.snapshot()["health"]
+    assert health["boots"] == 0 and health["panics"] == 0 and health["last_panic"] is None
+    assert manager.device.snapshot()["fw"]["version"] == "v1.2.3"
+
+
+def test_device_without_watch_has_no_health(monkeypatch, tmp_path):
+    device = make_device(monkeypatch, tmp_path)
+    assert "health" not in device.snapshot()

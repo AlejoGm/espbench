@@ -102,8 +102,18 @@ leen el dashboard (`DeviceRegistry`, `LogStreamer`), `esp32_tmux.sh` y
 {"tty": "esp-slot3", "tty_path": "/dev/esp-slot3", "tcp_port": 5003,
  "mac": "1C:C3:AB:01:61:D4", "state": "monitoring",
  "log_path": "/opt/esp/devices/1CC3AB0161D4/output.log",
- "pid": 1234, "updated_at": "2026-10-05T16:00:00"}
+ "pid": 1234, "updated_at": "2026-10-05T16:00:00",
+ "health": {"since": "...", "boots": 2, "panics": 1, "boot_loop": false,
+            "last_reset": {"ts": "...", "reason": "TG1WDT_SYS_RESET", "abnormal": true},
+            "last_panic": {"ts": "...", "kind": "guru", "detail": "LoadProhibited", "line": "..."}},
+ "fw": {"project": "app", "version": "v1.2.3", "idf": "v5.3.2"}}
 ```
+
+`health` y `fw` los arma `SerialWatch` (`serial_watch.py`) leyendo el mismo serial
+que va al log: cuenta reinicios y panics, detecta boot loop (3 boots en 2 min) y
+toma nombre/versión del firmware de lo que imprime `app_init`. Cuando cambian, el
+`Device` republica sin transición (`publish()`). Al empezar un flash o un erase los
+contadores vuelven a cero: esos reinicios son a propósito.
 
 **Es por tty y no por MAC** porque es el estado del *proceso*, y antes de leer la
 MAC no hay otra clave posible. Los datos que tienen que seguir a la placa (log,

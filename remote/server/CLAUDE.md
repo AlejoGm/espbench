@@ -8,6 +8,7 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 |---|---|---|
 | `remote_esp32.py` | device | Entrypoint: arma `DeviceManager`, identifica por MAC, levanta monitor + control server + fallback de MAC por serial + watcher del tty |
 | `device.py` | device | `TtyPort` / `Device` (FSM) / `DeviceManager` |
+| `serial_watch.py` | device | `SerialWatch`: lee el serial y detecta resets, panics, boot loop y versión de firmware → `health`/`fw` en `run/<tty>.json` |
 | `device_log.py` | device | `DeviceLog`: único escritor del log del device (`devices/<mac>/output.log`) |
 | `monitor.py` | device | `EspMonitor`: `esp_idf_monitor` en un PTY; serial → stdout + `DeviceLog`; Ctrl-C / Ctrl-E |
 | `protocol.py` | device | Servidor TCP de flasheo, partido en fases (`authenticate`, `LockStore`, `receive_artifact`, `run_flash`...) |

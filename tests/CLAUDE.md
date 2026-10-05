@@ -11,6 +11,7 @@ pytest tests/
 | Archivo | Qué cubre |
 |---|---|
 | `test_device.py` | FSM de `Device`, `TtyPort`, `DeviceManager` (reintentos de MAC, MAC por serial, watcher del tty), publicación de estado |
+| `test_serial_watch.py` | `SerialWatch`: resets, panics, boot loop, firmware, serial partido en chunks |
 | `test_device_log.py` | `DeviceLog`: buffer, rotación por sesión, hogar provisorio sin MAC, migración, UTF-8 partido |
 | `test_runstate.py` | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
 | `test_protocol.py` | Pedido de flash completo por `socketpair`, esptool falso: auth, lock, SHA256, retry sin `--encrypt`, device cambiado, FSM |

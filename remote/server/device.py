@@ -40,6 +40,7 @@ from typing import Callable, Optional
 
 from server import runstate, taglog
 from server.device_log import DeviceLog
+from server.serial_watch import SerialWatch
 
 TAG = "device"
 
@@ -89,9 +90,11 @@ class Device:
     """Device lógico enchufado a un único TtyPort para toda la vida del proceso."""
 
     def __init__(self, tty_port: TtyPort, device_log: DeviceLog,
-                 state_sink: Optional[Callable[[dict], None]] = None):
+                 state_sink: Optional[Callable[[dict], None]] = None,
+                 watch: Optional[SerialWatch] = None):
         self.tty_port = tty_port
         self.device_log = device_log
+        self.watch = watch
         self.mac: Optional[str] = None
         self.state = DeviceState.DISCOVERING
         self._resume_state: Optional[DeviceState] = None
@@ -107,9 +110,14 @@ class Device:
     def busy(self) -> bool:
         return self.state in BUSY_STATES
 
+    def publish(self) -> None:
+        """Republicar el estado sin transición (cambió la salud o el firmware)."""
+        with self._lock:
+            self._publish()
+
     def snapshot(self) -> dict:
         log_path = self.device_log.path
-        return {
+        snap = {
             "tty": self.tty_name,
             "tty_path": self.tty_port.tty_path,
             "tcp_port": self.tty_port.tcp_port,
@@ -119,6 +127,10 @@ class Device:
             "pid": os.getpid(),
             "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
         }
+        if self.watch is not None:
+            snap["health"] = self.watch.health()
+            snap["fw"] = self.watch.firmware()
+        return snap
 
     # ---------- internos ----------
 
@@ -151,6 +163,8 @@ class Device:
         with self._lock:
             self._require(DeviceState.MONITORING, DeviceState.UNKNOWN, action=action)
             self._resume_state = self.state
+            if self.watch is not None:
+                self.watch.reset_counters()   # el flash/erase reinicia el chip a propósito
             self._set_state(busy)
 
     def _finish_busy(self, busy: DeviceState, action: str) -> None:
@@ -230,8 +244,16 @@ class DeviceManager:
         if state_sink is None and publish_state:
             tty_name = self.tty_port.tty_name
             state_sink = lambda snap: runstate.write(tty_name, snap)  # noqa: E731
-        self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name), state_sink=state_sink)
+        self.watch = SerialWatch()
+        self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name),
+                             state_sink=state_sink, watch=self.watch)
+        self.watch._on_change = self.device.publish
         self._mac_reader = mac_reader
+
+    def on_serial(self, data: bytes) -> None:
+        """Sink del EspMonitor: el serial va al log del device y al SerialWatch."""
+        self.device.device_log.write_bytes(data)
+        self.watch.feed(data)
 
     def discover(self, attempts: int = 1, delay: float = 0.0,
                  sleep: Callable[[float], None] = time.sleep) -> bool:

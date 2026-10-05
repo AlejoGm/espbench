@@ -34,7 +34,7 @@ class FakeMon:
 
     def start(self):
         self.calls.append("start")
-        self.output_sink(b"I (10) boot: ESP-IDF v5.3.2\r\n")
+        self.output_sink(b"rst:0xc (SW_CPU_RESET),boot:0x13\r\nI (10) boot: ESP-IDF v5.3.2\r\n")
 
     def stop(self):
         self.calls.append("stop")
@@ -98,6 +98,8 @@ def test_startup_identifies_publishes_and_logs(env, monkeypatch):
     # serial (sink del monitor) y logs de taglog en el mismo archivo del device
     log = (base / "devices" / "AABBCCDDEEFF" / "output.log").read_text()
     assert "ESP-IDF v5.3.2" in log and "inicio: tty=" in log and "discovering -> monitoring" in log
+    # y el mismo serial alimenta la salud del device
+    assert seen["device"].snapshot()["health"]["last_reset"]["reason"] == "SW_CPU_RESET"
 
     # alta en devices.json
     assert MAC in json.loads((base / "devices.json").read_text())

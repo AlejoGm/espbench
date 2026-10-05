@@ -109,7 +109,7 @@ def main(argv=None):
     cfg = {"port": args.control_port, "tty": args.port_tty, "chip": args.chip,
            "flash_baud": args.flash_baud, "token": args.token}
     mon = EspMonitor(args.port_tty, args.serial_baud,
-                     output_sink=device.device_log.write_bytes,
+                     output_sink=manager.on_serial,
                      elf_path=lambda: elf_for(device),
                      on_ctrl_e=lambda: erase_region_interactive(mon, cfg, device))
     mon.start()
