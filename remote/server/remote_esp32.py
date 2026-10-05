@@ -182,7 +182,7 @@ def main():
         threading.Thread(target=_mac_from_serial, daemon=True).start()
 
     svc_log.info("Iniciando servidor de control TCP...\r\n")
-    th = threading.Thread(target=control_server, args=(cfg, mon, svc_log), daemon=True)
+    th = threading.Thread(target=control_server, args=(cfg, mon), daemon=True)
     th.start()
     svc_log.info("Servidor TCP iniciado en hilo daemon\r\n")
 
