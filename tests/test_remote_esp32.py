@@ -87,7 +87,7 @@ def wait_for(cond, timeout=5.0):
 
 def test_startup_identifies_publishes_and_logs(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     run_main(tty, base, stop_after=0.5)
 
     # el control server recibió el device ya identificado, con el estado publicado
@@ -112,7 +112,7 @@ def test_startup_identifies_publishes_and_logs(env, monkeypatch):
 
 def test_signal_ignored_while_flashing(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
 
     def fake_control_server(cfg, mon, device):
         device.start_flash()
@@ -128,7 +128,7 @@ def test_signal_ignored_while_flashing(env, monkeypatch):
 
 def test_disconnect_ends_process_and_leaves_state(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     threading.Timer(0.3, tty.unlink).start()        # se desenchufa
     run_main(tty, base)                              # termina solo, sin _shutdown externo
     st = runstate.read("ttyUSB3")
@@ -137,7 +137,7 @@ def test_disconnect_ends_process_and_leaves_state(env, monkeypatch):
 
 def test_mac_from_serial_when_esptool_cannot_read_it(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: None)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: None)
     done = threading.Event()
 
     def fake_control_server(cfg, mon, device):
@@ -162,7 +162,7 @@ def test_mac_from_serial_when_esptool_cannot_read_it(env, monkeypatch):
 
 def test_elf_prefers_device_home(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     run_main(tty, base, stop_after=0.3)
     device = seen["device"]
     elf_resolver = FakeMon.instances[0].elf_path
@@ -176,7 +176,7 @@ def test_startup_drops_reservation_of_other_board(env, monkeypatch):
     """Los ttyUSB se renumeraron: la reserva de ttyUSB3 era para otra placa."""
     import time
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     (base / "locks").mkdir()
     lock = base / "locks" / "ttyUSB3"
     lock.write_text(f"juan:x:{int(time.time()) + 600}:112233445566")
@@ -187,7 +187,7 @@ def test_startup_drops_reservation_of_other_board(env, monkeypatch):
 def test_startup_keeps_reservation_of_same_board(env, monkeypatch):
     import time
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     (base / "locks").mkdir()
     lock = base / "locks" / "ttyUSB3"
     lock.write_text(f"juan:x:{int(time.time()) + 600}:AABBCCDDEEFF")
@@ -197,8 +197,36 @@ def test_startup_keeps_reservation_of_same_board(env, monkeypatch):
 
 def test_startup_with_unreadable_token_does_not_crash(env, monkeypatch):
     base, tty, seen = env
-    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
     (base / "api_token").mkdir()
     run_main(tty, base, stop_after=0.3)
     log = (base / "devices" / "AABBCCDDEEFF" / "output.log").read_text()
     assert "token=ILEGIBLE" in log
+
+
+def test_signal_during_discover_exits_without_monitor(env, monkeypatch):
+    """Un reinicio de la sesión (SIGTERM/SIGHUP) mientras esptool lee la MAC: el proceso
+    sale enseguida, sin pasar a monitoring ni abrir el server. Antes seguía ~10 s en
+    discover() (esptool con reintentos) y quien lo reiniciaba lo veía todavía vivo."""
+    import time
+    base, tty, seen = env
+    calls = []
+
+    def slow_read_mac(port, stop=None):
+        calls.append(port)
+        remote_esp32._on_signal(signal.SIGTERM, None)       # llega en medio de la lectura
+        (stop or threading.Event()).wait(2)                 # esptool tarda; con stop, corta
+        return None
+
+    monkeypatch.setattr(remote_esp32, "read_mac", slow_read_mac)
+    lines = []
+    taglog.add_sink(lambda ts, level, tag, msg: lines.append(f"{tag}: {msg}"))
+    t0 = time.monotonic()
+    run_main(tty, base)
+    assert time.monotonic() - t0 < 1.5
+    assert len(calls) == 1                                  # sin reintentos
+    assert FakeMon.instances == [] and "device" not in seen  # ni monitor ni control server
+    assert runstate.read("ttyUSB3") is None
+    text = "\n".join(lines)
+    assert "señal durante el arranque" in text
+    assert "-> unknown" not in text and "-> monitoring" not in text

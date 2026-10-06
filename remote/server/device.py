@@ -292,17 +292,34 @@ class DeviceManager:
             self.device.publish()
 
     def discover(self, attempts: int = 1, delay: float = 0.0,
-                 sleep: Callable[[float], None] = time.sleep) -> bool:
+                 sleep: Callable[[float], None] = time.sleep,
+                 stop: Optional[threading.Event] = None) -> bool:
         """Lee la MAC hasta `attempts` veces (el chip puede no estar listo justo
-        después de que udev crea el tty). Promueve o marca UNKNOWN."""
+        después de que udev crea el tty). Promueve o marca UNKNOWN.
+
+        `stop` (el shutdown del proceso): se mira antes de cada intento y corta la
+        espera entre intentos. Si se setea, devuelve False sin tocar el estado
+        (queda DISCOVERING): el proceso está terminando."""
+        def stopped() -> bool:
+            return stop is not None and stop.is_set()
+
         for i in range(attempts):
+            if stopped():
+                return False
             mac = self._mac_reader()
+            if stopped():
+                return False
             if mac:
                 self.device.promote(mac)
                 return True
             if i < attempts - 1:
                 taglog.info(TAG, f"{self.device.tty_name}: MAC no leída, reintento en {delay:g}s")
-                sleep(delay)
+                if stop is not None:
+                    stop.wait(delay)
+                else:
+                    sleep(delay)
+        if stopped():
+            return False
         taglog.warn(TAG, f"{self.device.tty_name}: esptool no pudo leer la MAC")
         self.device.mark_unknown()
         return False

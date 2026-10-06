@@ -4,7 +4,7 @@
 flash.py — Funciones de flasheo con esptool para ESP32
 """
 
-import json, logging, pathlib, re, shlex, shutil, subprocess, sys
+import json, logging, pathlib, re, shlex, shutil, subprocess, sys, threading, time
 from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -164,23 +164,55 @@ def build_esptool_cmd(esptool_cmd, chip, port, baud, encrypt, erase, jobdir: pat
 _MAC_RE = re.compile(r"MAC:\s*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
 _MAC_SERIAL_RE = re.compile(r'mac\s*=\s*([0-9A-Fa-f]{12})', re.IGNORECASE)
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+_MAC_POLL = 0.2      # cada cuánto read_mac mira `stop` mientras esptool lee
 
 
-def read_mac(port: str) -> Optional[str]:
-    """Run esptool read_mac on port. Returns MAC string (uppercase, colons) or None."""
+def read_mac(port: str, stop: Optional[threading.Event] = None, timeout: float = 15.0) -> Optional[str]:
+    """Run esptool read_mac on port. Returns MAC string (uppercase, colons) or None.
+
+    Con `stop`: si se setea mientras esptool lee (una señal de terminación al
+    arrancar), esptool se termina enseguida y devuelve None."""
     try:
         esptool = find_esptool_cmd()
-        result = subprocess.run(
-            esptool + ["--port", port, "read_mac"],
-            capture_output=True, text=True, timeout=15,
-        )
-        for line in (result.stdout + result.stderr).splitlines():
-            m = _MAC_RE.search(line)
-            if m:
-                return m.group(1).upper()
+        proc = subprocess.Popen(esptool + ["--port", port, "read_mac"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except Exception:
+        return None
+    out = ""
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            if stop is not None and stop.is_set():
+                _terminate(proc)
+                return None
+            try:
+                out, _ = proc.communicate(timeout=_MAC_POLL)
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    _terminate(proc)
+                    return None
+    except Exception:
+        _terminate(proc)
+        return None
+    for line in (out or "").splitlines():
+        m = _MAC_RE.search(line)
+        if m:
+            return m.group(1).upper()
+    return None
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """SIGTERM y, si no alcanza, SIGKILL: que esptool no quede con el puerto abierto."""
+    try:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate(timeout=2)
     except Exception:
         pass
-    return None
 
 
 def parse_mac_from_serial(text: str) -> Optional[str]:

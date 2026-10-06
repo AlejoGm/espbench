@@ -109,3 +109,41 @@ def test_run_cmd_lines_reach_taglog_job_log_and_callback():
 def test_run_cmd_without_job_log():
     from server.flash import run_cmd
     assert run_cmd([sys.executable, "-c", "import sys; sys.exit(3)"]) == 3
+
+
+def _fake_esptool(monkeypatch, script):
+    from server import flash
+    monkeypatch.setattr(flash, "find_esptool_cmd", lambda: [sys.executable, "-c", script])
+    return flash
+
+
+def test_read_mac_parses_esptool_output(monkeypatch):
+    flash = _fake_esptool(monkeypatch, "print('Chip is ESP32'); print('MAC: aa:bb:cc:dd:ee:ff')")
+    assert flash.read_mac("/dev/ttyUSB0") == "AA:BB:CC:DD:EE:FF"
+
+
+def test_read_mac_stop_terminates_esptool(monkeypatch, tmp_path):
+    """Una señal al proceso mientras esptool lee (stop): esptool se termina enseguida,
+    no queda vivo con el puerto abierto."""
+    import threading
+    import time
+    pidfile = tmp_path / "pid"
+    flash = _fake_esptool(monkeypatch, f"import os, time; open({str(pidfile)!r}, 'w').write(str(os.getpid())); "
+                                       "time.sleep(30)")
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    t0 = time.monotonic()
+    assert flash.read_mac("/dev/ttyUSB0", stop=stop) is None
+    assert time.monotonic() - t0 < 3
+    import os
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_read_mac_timeout_kills_esptool(monkeypatch):
+    import time
+    flash = _fake_esptool(monkeypatch, "import time; time.sleep(30)")
+    t0 = time.monotonic()
+    assert flash.read_mac("/dev/ttyUSB0", timeout=0.5) is None
+    assert time.monotonic() - t0 < 3

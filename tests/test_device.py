@@ -211,6 +211,38 @@ def test_manager_discover_marks_unknown_when_mac_reader_returns_none(monkeypatch
     assert manager.device.state == DeviceState.UNKNOWN
 
 
+def test_manager_discover_stops_on_shutdown_without_retrying(monkeypatch, tmp_path):
+    """Señal en medio de la lectura de la MAC: no reintenta, no espera el delay y
+    deja el estado en DISCOVERING (el proceso está terminando)."""
+    import threading
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    stop = threading.Event()
+    reads = []
+
+    def reader():
+        reads.append(1)
+        stop.set()
+        return None
+
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=reader)
+    assert manager.discover(attempts=3, delay=30, stop=stop) is False
+    assert reads == [1]
+    assert manager.device.state == DeviceState.DISCOVERING
+
+
+def test_manager_discover_delay_is_cut_by_shutdown(monkeypatch, tmp_path):
+    import threading
+    import time
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    stop = threading.Event()
+    threading.Timer(0.2, stop.set).start()
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: None)
+    t0 = time.monotonic()
+    assert manager.discover(attempts=3, delay=30, stop=stop) is False
+    assert time.monotonic() - t0 < 2
+    assert manager.device.state == DeviceState.DISCOVERING
+
+
 def test_manager_wires_tcp_port_from_tty(monkeypatch, tmp_path):
     monkeypatch.setenv("ESP_BASE", str(tmp_path))
     manager = DeviceManager("/dev/ttyUSB3", mac_reader=lambda: None)

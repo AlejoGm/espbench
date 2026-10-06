@@ -99,7 +99,7 @@ def main(argv=None):
     args = parse_args(argv)
     os.environ["ESP_BASE"] = args.base   # todo lo que lea paths.py en este proceso
 
-    manager = DeviceManager(args.port_tty, mac_reader=lambda: read_mac(args.port_tty),
+    manager = DeviceManager(args.port_tty, mac_reader=lambda: read_mac(args.port_tty, stop=_shutdown),
                             tcp_port=args.control_port)
     device = _device = manager.device
     taglog.add_sink(device.device_log.taglog_sink)
@@ -117,9 +117,17 @@ def main(argv=None):
                      f"base={paths.esp_base()}")
 
     # MAC con esptool antes de arrancar el monitor: el puerto tiene que estar libre.
-    if manager.discover(attempts=MAC_READ_ATTEMPTS, delay=MAC_READ_DELAY):
+    # Una señal en el medio (un reinicio de la sesión) corta la lectura: sin esto el
+    # proceso seguía vivo hasta 3 intentos de esptool, y quien lo reiniciaba lo veía
+    # todavía corriendo.
+    if manager.discover(attempts=MAC_READ_ATTEMPTS, delay=MAC_READ_DELAY, stop=_shutdown):
         register_mac(device.mac)
         drop_foreign_reservation(device)
+    if _shutdown.is_set():
+        taglog.info(TAG, "fin (señal durante el arranque: sin monitor ni server)")
+        device.device_log.close()
+        runstate.remove(device.tty_name)
+        return
 
     cfg = {"port": args.control_port, "tty": args.port_tty, "chip": args.chip,
            "flash_baud": args.flash_baud, "token": args.token}

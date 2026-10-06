@@ -86,7 +86,10 @@ stateDiagram-v2
   artefacto. Antes paraba el monitor en medio del erase.
 - **Señales**: mientras `device.busy` (FLASHING/ERASING), el proceso ignora
   SIGTERM/SIGINT/SIGHUP, para no dejar un chip a medio escribir. Esto reemplaza
-  al viejo `_ignore_signals_flag`.
+  al viejo `_ignore_signals_flag`. En `DISCOVERING` la señal corta la lectura de la
+  MAC (`discover(stop=...)` mira el shutdown entre intentos y durante la espera;
+  `read_mac(stop=...)` termina a esptool) y el proceso sale sin monitor ni server:
+  antes seguía ~10 s leyendo y quien reiniciaba la sesión lo veía todavía vivo.
 
 Cada transición se loguea y se publica en `run/<tty>.json`.
 
