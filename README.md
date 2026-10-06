@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.31.6
+**Version:** 0.31.7
 
 ---
 
@@ -251,7 +251,7 @@ Para volver a sin auth: borrar el archivo (o dejarlo vacío).
 |---|---|
 | El dueño (con su par) | `espbench release <dev>`, `python client/deploy.py --unlock`, o **Liberar** en el dashboard |
 | Cualquiera, con `api_token` | **Forzar** en el dashboard (queda un `release` con el dueño anterior y quién forzó) |
-| Desde la Pi | `devremote --unlock <dev>`: suelta cualquier lock o reserva |
+| Desde la Pi | `devremote --unlock <dev>`: suelta cualquier lock o reserva y deja un evento `release` (forzado, `by_host: devremote`) |
 | Solo | una reserva vence sola (máx. 24 h); el lock de un flash se borra al relanzar la sesión (replug, `devremote --reset`) |
 
 ---
@@ -366,7 +366,7 @@ devremote --status        # device / kernel tty / port / session / FSM state / p
 devremote 0               # attach to a device's session (0 = ttyUSB0; also esp-slotK, slotK)
 devremote --reset         # restart all sessions
 devremote --reset 0       # restart one device
-devremote --unlock 0      # release a device lock
+devremote --unlock 0      # release a device lock (any owner; leaves a `release` event)
 devremote --slots         # ID_PATH of each physical port (for slots.conf)
 devremote --cleanup       # delete old jobs and rotated logs (--dry-run to preview)
 ```

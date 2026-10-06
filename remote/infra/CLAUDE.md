@@ -36,7 +36,7 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | `devremote <dev>` | `tmux attach` a la sesión del device |
 | `devremote --status` | Device / kernel tty / puerto / sesión / estado de la FSM / pid |
 | `devremote --reset [<dev>]` | Reinicia todas las sesiones, o solo la de `<dev>` |
-| `devremote --unlock <dev>` | Libera el lock |
+| `devremote --unlock <dev>` | Libera el lock o la reserva (de quien sea), bajo el `flock` de `locks.exclusive` y con un evento `release` forzado (`python3 -m server.locks unlock`; sin el server instalado, `rm`) |
 | `devremote --slots` | `ID_PATH` de cada puerto (para armar `slots.conf`) |
 | `devremote --start <ttyUSBN>` | Levanta una sesión (lo usa el hotplug) |
 | `devremote --cleanup [--dry-run] [--jobs-days N] [--logs-days N]` | Borra jobs y sesiones de log viejas (nunca la sesión actual) |

@@ -179,3 +179,34 @@ def drop_if_other_board(tty_name: str, mac: Optional[str]) -> Optional[Lock]:
             return None
         remove(tty_name)
         return lock
+
+
+def unlock_from_shell(tty_name: str) -> str:
+    """`devremote --unlock <dev>` en la Pi: suelta cualquier lock o reserva (aun
+    vencida o ajena), bajo el mismo flock que el resto, y deja un evento
+    `release` forzado (by_host=devremote) con el dueño anterior. Devuelve el
+    mensaje para el operador."""
+    from server import events, runstate
+    with exclusive(tty_name):
+        try:
+            lock = parse(paths.lock_file(tty_name).read_text())
+        except OSError:
+            return f"No había lock en {tty_name}"
+        remove(tty_name)
+    owner = lock.user if lock else "?"
+    log_path = (runstate.read(tty_name) or {}).get("log_path")
+    if log_path:
+        detail = {"user": owner, "expires": lock.expires_iso_tz() if lock else None, "forced": True,
+                  "by_user": None, "by_host": "devremote"}
+        try:
+            events.record(log_path, "release", detail, by="devremote")
+        except OSError:
+            pass
+    return f"Lock liberado (era de: {owner}) → {tty_name}"
+
+
+if __name__ == "__main__":       # python3 -m server.locks unlock <tty> (lo usa devremote)
+    import sys
+    if len(sys.argv) != 3 or sys.argv[1] != "unlock":
+        sys.exit("uso: python3 -m server.locks unlock <tty>")
+    print(unlock_from_shell(sys.argv[2]))

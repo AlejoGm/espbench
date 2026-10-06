@@ -251,6 +251,28 @@ def test_devremote_unlock_by_number_and_slot(infra):
     assert list((infra.base / "locks").iterdir()) == []
 
 
+def test_devremote_unlock_takes_the_flock_and_records_release(infra):
+    """Con el server instalado, --unlock pasa por locks.exclusive (el mismo flock
+    del api y del flash) y deja un evento release forzado con el dueño anterior."""
+    import json
+    import os
+    (infra.base / "server").symlink_to(INFRA.parent / "server")
+    sid = "20261006_120000_7"
+    home = infra.base / "devices" / "AABBCCDDEEFF"
+    home.mkdir(parents=True)
+    (home / "output.log").write_text(f"2026-10-06 12:00:00.000 | INFO  | devicelog      | sesión {sid} tty=ttyUSB3\n")
+    (infra.base / "run" / "ttyUSB3.json").write_text(json.dumps({"log_path": str(home / "output.log"),
+                                                                   "mac": "AA:BB:CC:DD:EE:FF"}))
+    (infra.base / "locks" / "ttyUSB3").write_text("al%3Aejo:t0k:4102444800:AABBCCDDEEFF")
+    r = infra.run("devremote", "--unlock", "3")
+    assert "era de: al:ejo" in r.stdout
+    assert sorted(os.listdir(infra.base / "locks")) == ["ttyUSB3.lck"]          # el flock de locks.exclusive
+    (ev,) = [json.loads(l) for l in (home / "events.jsonl").read_text().splitlines()]
+    assert ev["type"] == "release" and ev["by"] == "devremote" and ev["cursor"].startswith(f"c:{sid}:")
+    assert ev["detail"]["user"] == "al:ejo" and ev["detail"]["forced"] and ev["detail"]["by_host"] == "devremote"
+    assert "No había lock" in infra.run("devremote", "--unlock", "3").stdout
+
+
 def test_devremote_rejects_weird_names(infra):
     r = infra.run("devremote", "--unlock", "../../etc", check=False)
     assert r.returncode != 0 and "inválido" in r.stderr

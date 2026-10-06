@@ -139,8 +139,15 @@ attach_one() {
 }
 
 unlock_one() {
-  local name lock_file user
+  local name lock_file user py
   name="$(resolve_name "$1")"
+  # Con el flock que usan el api y el flash (locks.exclusive) y un evento
+  # `release` en la placa. Sin el server instalado, el rm de siempre.
+  py="$BASE/venv/bin/python3"
+  [ -x "$py" ] || py=python3
+  if [ -f "$BASE/server/locks.py" ] && ESP_BASE="$BASE" PYTHONPATH="$BASE" "$py" -m server.locks unlock "$name"; then
+    return 0
+  fi
   lock_file="$BASE/locks/$name"
   if [ -f "$lock_file" ]; then
     user="$(cut -d: -f1 "$lock_file")"
