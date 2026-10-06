@@ -353,7 +353,7 @@ boot ─────► devremote.service ────────────�
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 | `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
-| `GET /api/board/{key}/events?type=a,b&since=&limit=&order=` | Eventos de la placa, ordenados por (sesión, offset): los últimos `limit` (50), o los primeros desde `since` con `order=asc`; `more` si quedaron afuera |
+| `GET /api/board/{key}/events?type=a,b&since=&limit=&order=&counts=` | Eventos de la placa, ordenados por (sesión, offset): los últimos `limit` (50), o los primeros desde `since` con `order=asc`; `more` si quedaron afuera; `counts=1`: además `{tipo: n}` de todos desde `since` (sin el filtro de tipo) |
 
 - **Token (opcional)**: si existe `/opt/esp/api_token` (`auth.py`, se lee en cada
   pedido), las escrituras (POST/PATCH) exigen `Authorization: Bearer <token>` →
@@ -427,8 +427,9 @@ boot ─────► devremote.service ────────────�
 - **Dashboard (fase 4)**: pestaña Eventos en `device.html` (`/api/board/{MAC}/events`,
   chips por tipo, "cargar más" con `limit`/`more`, visor del evento con
   `/log?around=<cursor>`, también de sesiones anteriores), marcas de eventos en el
-  log en vivo (panic/boot por contenido de línea; send/command/flash por hora del
-  evento, porque el WebSocket no lleva offsets) y reservas visibles (`lock_expires`
+  log en vivo (panic/boot por contenido de línea, con las regex de `line_kind`
+  —`tests/test_linemark_parity.py`—; send/command/flash por hora del evento y el
+  eco, porque el WebSocket no lleva offsets) y reservas visibles (`lock_expires`
   con "vence en" que se actualiza solo, contador y `@usuario` en la home, liberar
   con el par o forzar con `unlock {force: true}`). Detalle en `remote/dashboard/CLAUDE.md`.
 - `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del
