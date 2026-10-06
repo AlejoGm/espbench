@@ -16,42 +16,37 @@
 <body class="device-page">
 
     <div class="device-header">
-        <a class="back-link" href="./"><i class="ti ti-arrow-left" aria-hidden="true"></i>Placas</a>
-        <span class="separator">/</span>
+        <a class="back-link" id="back-link" href="./" title="Volver a las placas"><i class="ti ti-arrow-left" aria-hidden="true"></i><span class="lbl">Placas</span></a>
         <span class="device-name" id="device-name"></span>
-        <div class="device-badges" id="device-badges"></div>
-        <div class="device-badges" id="health-badges"></div>
+        <div class="hdr-chips">
+            <span class="hdr-meta hidden" id="device-meta"></span>
+            <div class="device-badges" id="device-badges"></div>
+            <div class="device-badges" id="health-badges"></div>
+        </div>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
-            <button class="action-btn hidden" id="btn-release" title="Liberar la reserva/lock con su lock_user y lock_token"><i class="ti ti-lock-open"></i>Liberar</button>
-            <button class="action-btn action-btn--danger hidden" id="btn-force" title="Soltar la reserva/lock de otro (queda registrado como forzado)"><i class="ti ti-alert-triangle"></i>Forzar</button>
-            <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)"><i class="ti ti-refresh"></i>Reset</button>
-            <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)"><i class="ti ti-player-skip-back"></i>Boot</button>
-            <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)"><i class="ti ti-power"></i>Sesión</button>
-            <button class="action-btn" data-theme-toggle aria-label="Cambiar tema"><i class="ti ti-moon"></i></button>
+            <button class="action-btn hidden" id="btn-release" title="Liberar la reserva/lock con su lock_user y lock_token"><i class="ti ti-lock-open"></i><span class="lbl">Liberar</span></button>
+            <button class="action-btn action-btn--danger hidden" id="btn-force" title="Soltar la reserva/lock de otro (queda registrado como forzado)"><i class="ti ti-alert-triangle"></i><span class="lbl">Forzar</span></button>
+            <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)" aria-label="Reset"><i class="ti ti-refresh"></i><span class="lbl">Reset</span></button>
+            <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)" aria-label="Bootloader"><i class="ti ti-player-skip-back"></i><span class="lbl">Boot</span></button>
+            <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)" aria-label="Reiniciar sesión"><i class="ti ti-power"></i><span class="lbl">Sesión</span></button>
+            <button class="action-btn" data-theme-toggle aria-label="Cambiar tema" title="Cambiar tema"><i class="ti ti-moon"></i></button>
         </div>
     </div>
 
-    <div class="device-meta hidden" id="device-meta">
-        <span class="card-note hidden" id="device-note"></span>
-        <span class="prop-row" id="device-props"></span>
-        <button class="meta-btn" id="btn-props" title="Propiedades: chip, conectividad, estado…">◇ props</button>
-        <button class="meta-btn" id="btn-note" title="Agregar una nota">✎ nota</button>
-        <div class="meta-editor" id="device-meta-editor"></div>
-    </div>
-
     <div class="term-toolbar">
-        <input id="filter" class="filter-input" type="search" placeholder="Filtrar líneas…  ( / )" autocomplete="off">
-        <button class="tool-btn" id="btn-problems" title="Mostrar solo panics, resets, errores y warnings"><i class="ti ti-alert-triangle"></i>Solo problemas</button>
-        <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic"><i class="ti ti-arrow-bar-to-up"></i>Último panic</button>
-        <button class="tool-btn" id="btn-ts" title="Mostrar la hora de cada línea (la pone la Pi al recibirla)"><i class="ti ti-clock"></i>Hora</button>
+        <label class="filter-box" title="Filtrar líneas ( / )"><i class="ti ti-filter" aria-hidden="true"></i>
+            <input id="filter" class="filter-input" type="search" placeholder="Filtrar  /" autocomplete="off" aria-label="Filtrar líneas"></label>
+        <button class="tool-btn" id="btn-problems" title="Solo problemas: panics, resets, errores y warnings" aria-label="Solo problemas"><i class="ti ti-alert-triangle"></i><span class="lbl">Problemas</span></button>
+        <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic" aria-label="Ir al último panic"><i class="ti ti-arrow-bar-to-up"></i><span class="lbl">Último panic</span></button>
+        <button class="tool-btn" id="btn-ts" title="Hora de cada línea (la pone la Pi al recibirla)" aria-label="Hora"><i class="ti ti-clock"></i><span class="lbl">Hora</span></button>
         <span class="tool-sep"></span>
         <span class="line-count" id="line-count"></span>
-        <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)"><i class="ti ti-player-pause"></i>Pausar</button>
-        <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)"><i class="ti ti-eraser"></i>Limpiar</button>
-        <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa"><i class="ti ti-download"></i>Log</a>
-        <button class="tool-btn" id="btn-history" title="Eventos, flasheos y sesiones anteriores"><i class="ti ti-history"></i>Historial</button>
+        <button class="tool-btn" id="btn-follow" title="Pausar: dejar de seguir el final del log (End sigue)" aria-label="Pausar"><i class="ti ti-player-pause"></i><span class="lbl">Pausar</span></button>
+        <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)" aria-label="Limpiar"><i class="ti ti-eraser"></i><span class="lbl">Limpiar</span></button>
+        <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa" aria-label="Descargar el log"><i class="ti ti-download"></i><span class="lbl">Log</span></a>
+        <button class="tool-btn" id="btn-history" title="Historial: eventos, flasheos y sesiones anteriores" aria-label="Historial"><i class="ti ti-history"></i><span class="lbl">Historial</span></button>
     </div>
 
     <div class="device-main">
@@ -106,6 +101,11 @@
         var boardApi = '';
         var deviceLoaded = false;
         var curSession = null;      // sesión actual de la placa (de /events)
+
+        // "← Placas": al master si el monitor se abrió por su proxy (/bench/<n>/device.html), si no al bench
+        var nav = EB.monitorNav(location.pathname, document.referrer, location.origin);
+        $('back-link').href = nav.href;
+        $('back-link').title = nav.master ? 'Volver a bench-master' : 'Volver a las placas del bench';
 
         var MAX_LINES = 20000;   // tope de líneas en la vista; el archivo completo se descarga
 
@@ -259,11 +259,16 @@
             var n = terminal.childElementCount - (partialEl ? 1 : 0);
             $('line-count').textContent = n.toLocaleString('es-AR') + ' líneas' +
                 (dropped ? ' (' + dropped.toLocaleString('es-AR') + ' recortadas)' : '');
+            $('line-count').title = $('line-count').textContent;
             $('new-lines-n').textContent = unseen;
             $('new-lines').classList.toggle('hidden', follow || unseen === 0);
             $('btn-panic').classList.toggle('hidden', !lastPanicEl);
-            $('btn-follow').innerHTML = follow ? '<i class="ti ti-player-pause"></i>Pausar' : '<i class="ti ti-player-play"></i>Seguir';
-            $('btn-follow').classList.toggle('active', !follow);
+            var fb = $('btn-follow');
+            fb.innerHTML = follow ? '<i class="ti ti-player-pause"></i><span class="lbl">Pausar</span>'
+                                  : '<i class="ti ti-player-play"></i><span class="lbl">Seguir</span>';
+            fb.title = follow ? 'Pausar: dejar de seguir el final del log (End sigue)' : 'Seguir el final del log (End)';
+            fb.setAttribute('aria-label', follow ? 'Pausar' : 'Seguir');
+            fb.classList.toggle('active', !follow);
         }
 
         function setFollow(on) {
@@ -491,40 +496,90 @@
                 .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
         }
 
-        // ── Nota y propiedades (meta.js edita; click en un chip → la home filtrada) ──
+        // ── Nota y propiedades: chips en el header; se editan en un popover (meta.js) ──
+        // Click en un chip → la home filtrada (el master si el monitor se abrió por su proxy).
         var metaDevice = null;
+        var pop = null;             // {el, anchor}: popover abierto (menú o editor)
 
         function renderMeta(d) {
             if (EBMeta.editing()) return;
             metaDevice = d && d.mac ? d : null;
             $('device-meta').classList.toggle('hidden', !metaDevice);
             if (!metaDevice) return;
-            var note = EB.noteHtml(d);
-            $('device-note').innerHTML = note ? '<span class="note-icon">✎</span> ' + note : '';
-            $('device-note').title = note ? EB.noteInfo(d).title : '';
-            $('device-note').classList.toggle('hidden', !note);
-            $('device-props').innerHTML = EB.propChipsHtml(d.props, EBMeta.catalog());
-            $('btn-note').textContent = note ? '✎' : '✎ nota';
-            $('btn-note').title = note ? 'Editar la nota' : 'Agregar una nota';
-            $('btn-props').textContent = d.props && Object.keys(d.props).length ? '◇' : '◇ props';
+            var ok = EB.metaSupported(d, EBMeta.catalogStatus());
+            $('device-meta').innerHTML = EB.monitorMetaHtml(d, EBMeta.catalog(), ok);
+        }
+
+        function closePop() {
+            if (!pop) return;
+            var p = pop;
+            pop = null;
+            EBMeta.cancel();            // un editor abierto se cierra como cancelado
+            p.el.remove();
+        }
+
+        // Anclado debajo del botón/chip; en celular ocupa el ancho (CSS).
+        function placePop() {
+            if (!pop) return;
+            var r = pop.anchor.getBoundingClientRect(), el = pop.el;
+            if (window.innerWidth <= 760) { el.style.left = el.style.top = ''; return; }
+            el.style.top = Math.round(r.bottom + 6) + 'px';
+            el.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - el.offsetWidth - 8))) + 'px';
+        }
+
+        function openPop(anchor, fill) {
+            closePop();
+            var el = document.createElement('div');
+            el.className = 'meta-pop';
+            document.body.appendChild(el);
+            pop = {el: el, anchor: anchor};
+            fill(el);
+            placePop();
         }
 
         function metaDone(changed) {
-            $('device-meta-editor').innerHTML = '';
-            if (changed) loadDeviceInfo();
+            closePop();
+            if (changed) loadDeviceInfo(); else renderMeta(metaDevice);
         }
 
-        $('btn-note').onclick = function() {
-            if (metaDevice && !EBMeta.editing()) EBMeta.noteEditor($('device-meta-editor'), metaDevice, metaDone);
-        };
-        $('btn-props').onclick = function() {
-            if (metaDevice && !EBMeta.editing()) EBMeta.propsEditor($('device-meta-editor'), metaDevice, metaDone);
-        };
-        $('device-props').onclick = function(e) {
+        function editNote(el) { EBMeta.noteEditor(el, metaDevice, metaDone); placePop(); }
+        function editProps(el) {
+            EBMeta.propsEditor(el, metaDevice, metaDone);
+            EBMeta.loadCatalog().then(placePop);    // el editor se arma cuando llega el catálogo
+        }
+
+        $('device-meta').onclick = function(e) {
             var chip = e.target.closest('.prop-chip');
-            if (chip) location.href = './?q=' + encodeURIComponent(chip.dataset.filter);
+            if (chip) { location.href = EB.navFilterHref(nav, chip.dataset.filter); return; }
+            var b = e.target.closest('[data-act]');
+            if (!b || !metaDevice) return;
+            if (pop && pop.anchor === b) { closePop(); return; }       // segundo click: cierra
+            if (EBMeta.editing()) closePop();
+            var act = b.dataset.act;
+            openPop(b, function(el) {
+                if (act === 'note') return editNote(el);
+                if (act === 'props') return editProps(el);
+                el.innerHTML = '<div class="pop-menu">' +
+                    '<button data-pick="props"><i class="ti ti-adjustments-horizontal"></i><span><b>Propiedades</b>' +
+                        '<span class="dim">chip, conectividad, uso, estado</span></span></button>' +
+                    '<button data-pick="note"><i class="ti ti-note"></i><span><b>Nota</b>' +
+                        '<span class="dim">testeando, no tocar, dev ana…</span></span></button></div>';
+                el.onclick = function(ev) {
+                    var pick = ev.target.closest('[data-pick]');
+                    if (!pick) return;
+                    el.onclick = null;
+                    if (pick.dataset.pick === 'note') editNote(el); else editProps(el);
+                };
+            });
         };
-        EBMeta.loadCatalog();
+
+        // Click fuera del popover (o Esc) lo cierra; la barra del token (EBAuth) no cuenta como fuera.
+        document.addEventListener('mousedown', function(e) {
+            if (!pop || pop.el.contains(e.target) || pop.anchor.contains(e.target) || e.target.closest('.token-bar')) return;
+            closePop();
+        });
+        window.addEventListener('resize', placePop);
+        EBMeta.loadCatalog().then(function() { if (metaDevice) renderMeta(metaDevice); });
 
         // ── Historial: flasheos y sesiones ────────────────────────────────────
         var sideTab = 'events';
@@ -924,7 +979,8 @@
             document.addEventListener('keydown', function(e) {
                 var typing = document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
                 if (e.key === 'Escape') {
-                    if (!$('viewer').classList.contains('hidden')) closeViewer();
+                    if (pop) closePop();
+                    else if (!$('viewer').classList.contains('hidden')) closeViewer();
                     else if (document.activeElement === $('filter')) { $('filter').value = ''; filterText = ''; refilter(); $('filter').blur(); }
                 }
                 if (typing) return;

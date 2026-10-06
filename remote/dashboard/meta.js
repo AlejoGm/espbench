@@ -13,12 +13,14 @@
     var esc = EB.escapeHtml;
     var catalog = null;         // GET api/properties (null: todavía no, o bench sin propiedades)
     var catalogP = null;
+    var catalogStatus = null;   // HTTP de api/properties: 404 = bench viejo, sin nota ni propiedades (EB.metaSupported)
     var open = 0;               // editores abiertos: las páginas no re-renderizan mientras tanto
+    var closers = [];           // done(false) de cada editor abierto: cancel() los cierra
 
     function loadCatalog(force) {
         if (catalogP && !force) return catalogP;
         catalogP = fetch('api/properties')
-            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (r) { catalogStatus = r.status; return r.ok ? r.json() : null; })
             .then(function (d) { catalog = d ? d.categories || [] : null; return catalog; })
             .catch(function () { catalogP = null; return catalog; });
         return catalogP;
@@ -49,12 +51,20 @@
     function track(done) {
         open++;
         var closed = false;
-        return function (changed) {
+        var close = function (changed) {
             if (closed) return;
             closed = true;
             open--;
+            closers.splice(closers.indexOf(close), 1);
             done(changed);
         };
+        closers.push(close);
+        return close;
+    }
+
+    // Cierra los editores abiertos como si se cancelaran (p. ej. click fuera del popover del monitor).
+    function cancel() {
+        closers.slice().forEach(function (c) { c(false); });
     }
 
     // Nota: input en `host` (reemplaza lo que tenga). onDone(changed) al guardar o cancelar.
@@ -244,6 +254,7 @@
 
     window.EBMeta = {
         loadCatalog: loadCatalog, catalog: function () { return catalog; },
+        catalogStatus: function () { return catalogStatus; }, cancel: cancel,
         noteEditor: noteEditor, propsEditor: propsEditor, locationEditor: locationEditor,
         editing: function () { return open > 0; }
     };

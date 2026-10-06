@@ -339,15 +339,24 @@
         var t = e.target.closest('[data-tab]');
         if (t) { filter = t.dataset.tab; renderBoards(); }
     });
-    document.getElementById('search').addEventListener('input', renderBoards);
+    // La búsqueda va en ?q= (replaceState): "← Placas" del monitor (por el proxy) vuelve acá con el filtro puesto,
+    // y los chips del monitor llegan con ?q=cat:valor.
+    function syncQuery() {
+        var u = new URL(location.href), q = document.getElementById('search').value;
+        if (q) u.searchParams.set('q', q); else u.searchParams.delete('q');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+    }
+    var q0 = new URLSearchParams(location.search).get('q');
+    if (q0) document.getElementById('search').value = q0;
+    document.getElementById('search').addEventListener('input', function() { syncQuery(); renderBoards(); });
     document.addEventListener('keydown', function(e) {
         var s = document.getElementById('search');
         if (e.key === '/' && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) { e.preventDefault(); s.focus(); }
-        if (e.key === 'Escape' && document.activeElement === s) { s.value = ''; renderBoards(); s.blur(); }
+        if (e.key === 'Escape' && document.activeElement === s) { s.value = ''; syncQuery(); renderBoards(); s.blur(); }
     });
     document.getElementById('boards').addEventListener('click', function(e) {
         var chip = e.target.closest('.prop-chip');
-        if (chip) { document.getElementById('search').value = chip.dataset.filter; renderBoards(); return; }
+        if (chip) { document.getElementById('search').value = chip.dataset.filter; syncQuery(); renderBoards(); return; }
         var card = e.target.closest('.board');
         var act = e.target.closest('[data-act="copy"]');
         if (!card || !act) return;

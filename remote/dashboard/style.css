@@ -183,18 +183,20 @@ button { cursor: pointer; }
 
 /* ══ Monitor (device.html) ═══════════════════════════════════════════════ */
 
-body.device-page { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding: 12px; gap: 12px; }
+body.device-page { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding: 10px; gap: 8px; }
 
+/* Header: volver, nombre, chips (nota/propiedades + badges del device; parten línea entre ellos), estado y acciones */
 .device-header {
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex-shrink: 0;
-    background: var(--card); border-radius: var(--r-md); padding: 10px 12px 10px 14px; box-shadow: var(--shadow);
+    display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; flex-shrink: 0;
+    background: var(--card); border-radius: var(--r-md); padding: 7px 8px 7px 8px; box-shadow: var(--shadow);
 }
-.device-header .back-link { display: inline-flex; align-items: center; gap: 6px; color: var(--ink2); font-weight: 600; padding: 6px 10px; border-radius: 999px; background: var(--row); white-space: nowrap; }
+.device-header .back-link { display: inline-flex; align-items: center; gap: 6px; height: 30px; color: var(--ink2); font-weight: 600; font-size: 13px; padding: 0 11px 0 9px; border-radius: 999px; background: var(--row); white-space: nowrap; }
 .device-header .back-link:hover { color: var(--ink); }
-.device-header .separator { display: none; }
-.device-name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
-.device-badges { display: flex; gap: 6px; flex-wrap: wrap; }
-.dev-badge { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--row); font-size: 12px; white-space: nowrap; max-width: 100%; }
+.device-name { font-size: 16px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32ch; }
+.hdr-chips { flex: 1 1 320px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.hdr-chips:empty { display: none; }
+.device-badges { display: contents; }
+.dev-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; background: var(--row); font-size: 11.5px; white-space: nowrap; max-width: 100%; }
 .dev-badge-label { color: var(--ink3); }
 .dev-badge-value { color: var(--ink); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
 .dev-badge.badge-fail .dev-badge-value { color: var(--bad); }
@@ -203,7 +205,7 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 .dev-badge.badge-state-discovering .dev-badge-value { color: var(--flash); }
 .dev-badge.badge-state-disconnected { background: var(--bad-bg); } .dev-badge.badge-state-disconnected .dev-badge-value { color: var(--bad); }
 .dev-badge.badge-locked { background: var(--warn-bg); } .dev-badge.badge-locked .dev-badge-label, .dev-badge.badge-locked .dev-badge-value { color: var(--warn); }
-.hbadge { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: help; }
+.hbadge { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: help; }
 .hb-loop { background: var(--bad); color: #fff; }
 .hb-panic { background: var(--bad-bg); color: var(--bad); }
 .hb-warn { background: var(--warn-bg); color: var(--warn); }
@@ -213,7 +215,9 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 .status-dot.reconnecting { background: var(--warn); }
 .status-dot.error { background: var(--bad); }
 .device-header .status-label { font-size: 12.5px; color: var(--ink2); }
-.header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.header-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+.header-actions .action-btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.header-actions .action-btn:not(:has(.lbl)) { width: 30px; padding: 0; justify-content: center; }
 .action-btn {
     height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card);
     color: var(--ink); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
@@ -223,23 +227,28 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 .action-btn--danger { color: var(--bad); }
 .action-btn--danger:hover { background: var(--bad-bg); border-color: transparent; }
 
-.term-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
-.filter-input {
-    height: 36px; width: 260px; border-radius: 999px; border: none; background: var(--card); padding: 0 16px;
-    color: var(--ink); box-shadow: var(--shadow);
+/* Toolbar del log: una línea, botones de ícono con tooltip (el texto solo si entra, ver Responsive) */
+.term-toolbar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; flex-shrink: 0; min-width: 0; }
+.filter-box {
+    display: inline-flex; align-items: center; gap: 6px; height: 30px; width: 200px; min-width: 70px; flex: 0 1 200px;
+    border-radius: 999px; background: var(--card); padding: 0 12px 0 11px; color: var(--ink3); box-shadow: var(--shadow);
 }
+.filter-box:focus-within { box-shadow: var(--shadow), inset 0 0 0 1.5px var(--accent); }
+.filter-box .ti { font-size: 14px; flex: none; }
+.filter-input { flex: 1; min-width: 0; height: 100%; border: none; background: none; outline: none; color: var(--ink); font-size: 12.5px; }
 .filter-input::placeholder { color: var(--ink3); }
 .tool-btn {
-    height: 36px; padding: 0 14px; border-radius: 999px; border: none; background: var(--card); color: var(--ink2);
-    font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; box-shadow: var(--shadow);
+    height: 30px; padding: 0 11px; border-radius: 999px; border: none; background: var(--card); color: var(--ink2);
+    font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; box-shadow: var(--shadow); flex: none;
 }
+.tool-btn .ti { font-size: 15px; }
 .tool-btn:hover { color: var(--ink); }
 .tool-btn.active { background: var(--ink); color: var(--page); }
 .tool-btn--panic { color: var(--bad); }
 .tool-sep { flex: 1; }
-.line-count { font-size: 12px; color: var(--ink3); }
+.line-count { font-size: 11.5px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding: 0 4px; }
 
-.device-main { flex: 1; display: flex; gap: 12px; min-height: 0; }
+.device-main { flex: 1; display: flex; gap: 8px; min-height: 0; }
 .term-wrap { flex: 1; position: relative; display: flex; min-width: 0; border-radius: var(--r-md); overflow: hidden; }
 
 /* El log: siempre oscuro */
@@ -333,14 +342,14 @@ body.hide-ts .terminal .ln-ts { display: none; }
 
 .serial-input {
     display: flex; align-items: center; gap: 10px; flex-shrink: 0; background: var(--card);
-    border-radius: 999px; padding: 6px 6px 6px 18px; box-shadow: var(--shadow);
+    border-radius: 999px; padding: 4px 4px 4px 16px; box-shadow: var(--shadow);
 }
 .serial-input .prompt { color: var(--accent); font-weight: 800; }
 .serial-input #serial-text { flex: 1; background: none; border: none; outline: none; color: var(--ink); font-family: var(--mono); font-size: 13px; min-width: 0; }
 .serial-input #serial-text::placeholder { color: var(--ink3); font-family: var(--font); }
 .serial-input #serial-text:disabled { opacity: .5; }
 .enter-opt { color: var(--ink2); font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.serial-input .action-btn { background: var(--ink); color: var(--page); border: none; height: 36px; }
+.serial-input .action-btn { background: var(--ink); color: var(--page); border: none; height: 32px; }
 
 .viewer { position: fixed; inset: 0; background: rgba(10,12,20,.55); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 4vh 4vw; }
 .viewer-box { width: 100%; height: 100%; background: var(--card); border-radius: var(--r-lg); display: flex; flex-direction: column; overflow: hidden; }
@@ -379,10 +388,9 @@ body.hide-ts .terminal .ln-ts { display: none; }
     .legend { display: none; }
     .group-sel { order: 4; }
     .boards { grid-template-columns: 1fr; }
-    body.device-page { padding: 8px; gap: 8px; }
+    body.device-page { padding: 6px; gap: 6px; }
     .terminal { padding: 10px 8px 10px 20px; font-size: 11.5px; }
     .side-panel { position: fixed; right: 8px; top: 8px; bottom: 8px; width: calc(100vw - 16px); z-index: 15; }
-    .filter-input { width: 150px; }
 }
 
 /* ══ Nota y propiedades de la placa (card, header del monitor; editores de meta.js) ══ */
@@ -522,14 +530,82 @@ body.hide-ts .terminal .ln-ts { display: none; }
 .prop-edit-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
 .prop-edit-actions .tool-btn { height: 34px; }
 
-/* device.html: barra de nota y propiedades bajo el header */
-.device-meta {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0;
-    background: var(--card); border-radius: var(--r-md); padding: 8px 12px; box-shadow: var(--shadow);
+/* device.html: nota y propiedades como chips en el header (EB.monitorMetaHtml); se editan en un popover */
+.hdr-meta { display: contents; }
+.hdr-meta .prop-chip {
+    height: 24px; gap: 4px; padding: 0 9px 0 7px; border-radius: 7px; font-family: var(--font);
+    font-size: 11.5px; font-weight: 700; background: var(--row); color: var(--ink); border-color: var(--line);
 }
-.device-meta .card-note { padding: 4px 10px; }
-.device-meta .meta-editor { flex-basis: 100%; }
-.device-meta .props-edit { max-width: 720px; }
+.hdr-meta .prop-chip .ti { font-size: 13px; color: var(--ink2); }
+.hdr-meta .prop-chip:hover { border-color: var(--ink3); }
+.hdr-meta .prop-chip.pc-chip { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.hdr-meta .prop-chip.pc-chip .ti { color: inherit; opacity: .7; }
+.hdr-meta .prop-chip.pc-tag, .hdr-meta .prop-chip.pc-estado { border-radius: 999px; font-weight: 600; background: var(--flash-bg); color: var(--flash); border-color: transparent; }
+.hdr-meta .prop-chip.pc-tag .ti { color: inherit; }
+.hdr-meta .prop-chip.pc-estado { background: var(--warn-bg); color: var(--warn); }
+.hdr-meta .prop-chip.pc-estado .ti { color: inherit; }
+.hdr-meta .prop-chip.pc-estado.prop-warn { background: var(--bad); color: #fff; font-weight: 800; }
+.hdr-meta .prop-chip.prop-unknown { background: none; color: var(--ink2); border: 1px dashed var(--line2); }
+.note-chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; max-width: 280px; padding: 0 10px 0 8px;
+    border-radius: 7px; border: none; background: var(--warn-bg); color: var(--warn); box-shadow: inset 3px 0 0 var(--warn);
+    font-size: 12px; font-weight: 600; flex: 0 1 auto; min-width: 0;
+}
+.note-chip .ti { font-size: 13px; flex: none; }
+.note-chip-text { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.note-chip:hover { box-shadow: inset 3px 0 0 var(--warn), inset 0 0 0 1px var(--warn); }
+.hdr-meta .meta-btn.icon {
+    width: 24px; height: 24px; padding: 0; display: inline-grid; place-items: center; border-radius: 7px; flex: none;
+}
+.hdr-meta .meta-btn.icon .ti { font-size: 14px; }
+.meta-off { cursor: help; opacity: .6; }
+.meta-off:hover { color: var(--ink3); border-color: var(--line2); }
+.hdr-meta + .device-badges .dev-badge:first-child { margin-left: 4px; }
+
+.meta-pop {
+    position: fixed; z-index: 25; width: max-content; max-width: min(560px, calc(100vw - 16px));
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 10px; box-shadow: 0 12px 32px rgba(10,12,20,.22);
+}
+.meta-pop .note-edit { width: 380px; max-width: 100%; }
+.meta-pop .props-edit { background: none; padding: 2px; }
+.meta-pop .props-edit select, .meta-pop .prop-new-form input { background: var(--row); }
+.pop-menu { display: flex; flex-direction: column; gap: 2px; min-width: 240px; }
+.pop-menu button {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: none; background: none; border-radius: var(--r-sm);
+    text-align: left; color: var(--ink);
+}
+.pop-menu button:hover, .pop-menu button:focus-visible { background: var(--row); }
+.pop-menu .ti { font-size: 18px; color: var(--ink2); }
+.pop-menu span { display: flex; flex-direction: column; line-height: 1.25; font-size: 13px; }
+.pop-menu .dim { font-size: 12px; }
+
+/* Texto de los botones del monitor solo si entra; si no, ícono con tooltip */
+@media (max-width: 1279px) {
+    .term-toolbar .tool-btn .lbl { display: none; }
+    .term-toolbar .tool-btn { width: 30px; padding: 0; justify-content: center; }
+    .header-actions .lbl { display: none; }
+    .header-actions .action-btn { width: 30px; padding: 0; justify-content: center; }
+}
+@media (max-width: 760px) {
+    .device-header { gap: 6px; padding: 6px; }
+    .device-header .back-link .lbl { display: none; }
+    .device-header .back-link { width: 30px; padding: 0; justify-content: center; }
+    .device-name { flex: 1 1 0; min-width: 0; max-width: none; font-size: 15px; }
+    .device-header .status-label { display: none; }
+    .status-dot { margin-left: 0; }
+    /* chips en una sola línea que se desliza (sin scroll horizontal de la página) */
+    .hdr-chips { order: 10; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+    .hdr-chips::-webkit-scrollbar { display: none; }
+    .hdr-chips > * , .hdr-meta > *, .device-badges > * { flex-shrink: 0; }
+    .note-chip { max-width: 190px; flex-shrink: 0; }
+    .term-toolbar { gap: 3px; }
+    .filter-box { flex: 1 1 auto; width: auto; }
+    .line-count { display: none; }
+    .tool-sep { flex: 0; }
+    .meta-pop { left: 8px !important; right: 8px; top: 56px; width: auto; max-width: none; max-height: calc(100dvh - 72px); overflow-y: auto; }
+    .meta-pop .note-edit { width: auto; }
+}
 
 /* Estado no-tocar / roto (EB.boardStatus → avoid): sana pero no se elige */
 .status.avoid { background: none; color: var(--bad); box-shadow: inset 0 0 0 1.5px var(--bad); }

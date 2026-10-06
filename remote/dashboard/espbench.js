@@ -1275,6 +1275,75 @@
         return {ok: true, text: t, error: null};
     }
 
+    // ── Monitor (device.html): a dónde vuelve y la nota y propiedades en el header ──
+
+    /*
+     * A dónde vuelve "← Placas" del monitor. Abierto por el proxy de bench-master
+     * (/bench/<n>/device.html), al master (`/`); si no, al home del bench (el directorio de la página).
+     * Si la página anterior (referrer, mismo origen) es ese home, se vuelve a esa URL: conserva su
+     * ?q= y ?group=. Por el master, si se vino del dashboard del bench por el proxy (/bench/<n>/), a ese.
+     * → {home, href, master: nombre del bench si es por el master, o null}. `home` es a donde filtran los chips.
+     */
+    function monitorNav(pathname, referrer, origin) {
+        var m = /^(.*?)\/bench\/([^/]+)\/device\.html$/.exec(pathname || '');
+        var home = m ? m[1] + '/' : basePath(pathname || '/');
+        var out = {home: home, href: home, master: null};
+        if (m) { try { out.master = decodeURIComponent(m[2]); } catch (e) { out.master = m[2]; } }
+        var r = null;
+        try { r = referrer ? new URL(referrer) : null; } catch (e) { r = null; }
+        var benchHome = basePath(pathname || '/');
+        var homes = [home, home + 'index.html'].concat(m ? [benchHome, benchHome + 'index.html'] : []);
+        if (r && r.origin === origin && homes.indexOf(r.pathname) >= 0) out.href = r.pathname + r.search;
+        return out;
+    }
+
+    // Home filtrada por una propiedad (click en un chip del monitor): el master o el bench, según nav.
+    function navFilterHref(nav, filter) {
+        return nav.home + '?q=' + encodeURIComponent(filter);
+    }
+
+    /*
+     * ¿El bench guarda nota y propiedades? false si /api/properties dio 404 (catalogStatus) o si
+     * el device no trae `props` ni `note` (un server anterior); null si todavía no se sabe.
+     */
+    function metaSupported(d, catalogStatus) {
+        if (catalogStatus === 404) return false;
+        if (d && d.mac && !('props' in d) && !('note' in d)) return false;
+        return catalogStatus ? true : null;
+    }
+
+    var META_OFF_TITLE = 'Este bench no soporta notas ni propiedades: actualizalo';
+
+    /*
+     * Nota y propiedades en el header del monitor, compactas: los chips (mismo orden y roles que la
+     * card), la nota resumida (texto completo en el tooltip; click: editarla) y los botones de editar.
+     * Sin nada: un solo botón (+) que abre el menú. supported === false: un ícono deshabilitado.
+     * Los botones llevan data-act="add|props|note" (la página abre el popover).
+     */
+    function monitorMetaHtml(d, catalog, supported, now) {
+        if (!d || !d.mac) return '';
+        if (supported === false) {
+            return '<span class="meta-btn icon meta-off" role="img" title="' + META_OFF_TITLE + '" aria-label="' + META_OFF_TITLE + '">' +
+                   '<i class="ti ti-tag-off" aria-hidden="true"></i></span>';
+        }
+        var n = noteInfo(d, now);
+        var cp = cardProps(d.props, catalog);
+        var hard = cp.estado.filter(function (p) { return p.warn; });
+        var soft = cp.estado.filter(function (p) { return !p.warn; });
+        var chips = hard.concat(cp.spec, cp.tag, soft);
+        if (!n && !chips.length) {
+            return '<button class="meta-btn icon" data-act="add" title="Agregar propiedades (chip, conectividad, uso, estado) o una nota" ' +
+                   'aria-label="Agregar propiedades o una nota"><i class="ti ti-plus" aria-hidden="true"></i></button>';
+        }
+        return chips.map(cardPropHtml).join('') +
+            (n ? '<button class="note-chip" data-act="note" title="' + escapeHtml(n.title + '\n(click: editar)') + '">' +
+                 '<i class="ti ti-note" aria-hidden="true"></i><span class="note-chip-text">' + escapeHtml(n.text) + '</span></button>' : '') +
+            '<button class="meta-btn icon" data-act="props" title="' + (chips.length ? 'Editar las propiedades' : 'Agregar propiedades') +
+                '" aria-label="Propiedades"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button>' +
+            (n ? '' : '<button class="meta-btn icon" data-act="note" title="Agregar una nota" aria-label="Agregar una nota">' +
+                      '<i class="ti ti-note" aria-hidden="true"></i></button>');
+    }
+
     // Gráfico de área (SVG) para una serie: curva suave, relleno, marcas en los índices de `marks`.
     function areaChartSvg(values, marks, w, h, opts) {
         opts = opts || {};
@@ -1323,6 +1392,8 @@
         cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
         groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,
         boardFree: boardFree, locationCheck: locationCheck, locationView: locationView, LOCATION_MAX: LOCATION_MAX,
+        monitorNav: monitorNav, navFilterHref: navFilterHref, metaSupported: metaSupported,
+        monitorMetaHtml: monitorMetaHtml, META_OFF_TITLE: META_OFF_TITLE,
         areaChartSvg: areaChartSvg
     };
 });
