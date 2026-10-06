@@ -60,14 +60,14 @@ def _human_lines(r: dict) -> None:
 
 
 def _human_devices(r: dict) -> None:
-    rows = [("KEY", "SN", "MAC", "TTY", "STATE", "LOCK", "FW")]
+    rows = [("KEY", "SN", "MAC", "TTY", "STATE", "LIBRE", "LOCK", "FW")]
     for d in r["devices"]:
         lock = d.get("lock_user") or ""
         if lock and d.get("lock_expires"):
             lock += f" (hasta {d['lock_expires']})"
         fw = " ".join(x for x in (d.get("fw_project"), d.get("fw_version")) if x)
         rows.append(tuple(str(x or "-") for x in (d["key"], d.get("sn"), d.get("mac"), d.get("tty"),
-                                                   d.get("state"), lock, fw)))
+                                                   d.get("state"), "sí" if d.get("available") else "no", lock, fw)))
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     for row in rows:
         print("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
@@ -92,7 +92,7 @@ def _human_kv(r: dict) -> None:
 # ---------- comandos ----------
 
 def cmd_ls(c: lib.Client, a, out: Out) -> int:
-    devs = [lib.summarize_device(d) for d in c.devices() if a.all or d.get("mac")]
+    devs = [lib.summarize_device(d, c.config.lock_user) for d in c.devices() if a.all or d.get("mac")]
     return out.emit({"ok": True, "devices": devs}, _human_devices)
 
 
@@ -100,7 +100,7 @@ def cmd_status(c: lib.Client, a, out: Out) -> int:
     board = c.resolve(a.dev, need_mac=False)
     r = {"ok": True, "board": board.label}
     if board.info:
-        r.update(lib.summarize_device(board.info))
+        r.update(lib.summarize_device(board.info, c.config.lock_user))
         for k in ("last_flash_ts", "last_flash_user", "last_flash_ok"):
             r[k] = board.info.get(k)
         r["health"] = board.info.get("health")

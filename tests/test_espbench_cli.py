@@ -89,6 +89,23 @@ def test_json_contract_over_a_real_process(bench, tmp_path):
     assert code == 8 and json.loads(out)["error"] == "bad_anchor"
 
 
+def test_ls_marks_available_boards(cli, bench, board):
+    """available: monitoring y sin lock, o con lock propio. El lock permanente
+    de un flash ajeno no deja flashear ni reservar: no está disponible."""
+    code, r = cli("ls")
+    assert code == 0 and r["devices"][0]["available"] is True
+    locks.write("ttyUSB0", locks.Lock("juan", "x"))                 # lo dejó el flash de otro
+    assert cli("ls")[1]["devices"][0]["available"] is False
+    assert cli("status", "sim-board")[1]["available"] is False
+    locks.remove("ttyUSB0")
+    assert cli("reserve", "sim-board")[0] == 0
+    assert cli("ls")[1]["devices"][0]["available"] is True          # la reserva es mía
+    assert cli("ls", user="otro")[1]["devices"][0]["available"] is False
+    board.device.start_flash()
+    assert cli("ls")[1]["devices"][0]["available"] is False         # flasheando
+    board.device.finish_flash()
+
+
 def test_common_flags_before_or_after(cli):
     code, r = cli("ls")
     assert code == 0 and r["devices"][0]["key"] == "sim-board"

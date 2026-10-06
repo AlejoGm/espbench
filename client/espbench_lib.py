@@ -285,14 +285,19 @@ class Board:
                    lock_expires=d.get("lock_expires"), hw_model=d.get("hw_model"), info=d)
 
 
-def summarize_device(d: dict) -> dict:
-    """Lo que le sirve a un agente de /api/devices, compacto (tokens)."""
+def summarize_device(d: dict, me: Optional[str] = None) -> dict:
+    """Lo que le sirve a un agente de /api/devices, compacto (tokens).
+    `available`: la placa está en monitoring y sin lock, o el lock es de `me`
+    (un lock ajeno, aunque sea el permanente de un flash, no deja flashear ni
+    reservar)."""
     health = d.get("health") or {}
+    lock_user = d.get("lock_user")
     out = {
         "key": d.get("device_key") or d.get("sn") or d.get("mac") or d.get("tty_name"),
         "device_key": d.get("device_key"), "sn": d.get("sn"), "mac": d.get("mac"),
         "tty": d.get("tty_name"), "state": d.get("state"),
-        "lock_user": d.get("lock_user"), "lock_expires": d.get("lock_expires"),
+        "available": d.get("state") == "monitoring" and (not lock_user or (bool(me) and lock_user == me)),
+        "lock_user": lock_user, "lock_expires": d.get("lock_expires"),
         "hw_model": d.get("hw_model"), "fw_project": d.get("fw_project"), "fw_version": d.get("fw_version"),
     }
     if health:

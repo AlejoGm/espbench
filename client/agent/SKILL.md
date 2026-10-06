@@ -20,7 +20,7 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 
 ## Ciclo
 
-1. `espbench ls --json` → elegí la placa (`key`; `state` tiene que ser `monitoring`).
+1. `espbench ls --json` → elegí una placa con **`available: true`**: en `monitoring` y con `lock_user: null` (libre) o con tu usuario. Una placa con `lock_user` de otro no te sirve aunque no tenga `lock_expires`: es el lock que dejó su último flash, y te va a dar `locked` al reservar o flashear (ver Errores).
 2. `espbench reserve <dev> --ttl 30m --json` → nadie más le escribe mientras trabajás. Desde acá tus escrituras exigen que la reserva siga siendo tuya.
 3. `idf.py build`, después `espbench flash <dev> --verify --json` → flash + espera el primer boot + 10 s de asentamiento sin reboot ni panic. Exit 0 = el firmware nuevo arrancó y se quedó arriba.
 4. `espbench send <dev> "<comando>" --until "<texto esperado>" --json` → `match` trae la línea que lo cumplió; `lines`, lo que salió desde el envío.
@@ -76,7 +76,7 @@ Los logs se comen tokens. Pedí lo justo:
 | 3 | `crashed` | el firmware crasheó: mirá `crash` y `lines`, después `logs --around panic`. Es un bug del firmware, no del banco |
 | 4 | `timeout` | no apareció el `until`: mirá `lines` (¿salió otra cosa?) antes de subir el `--timeout` |
 | 5 | `busy` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos |
-| 6 | `locked`, `reservation_lost`, `token_mismatch` | `locked`: otra persona tiene la placa: pará y avisale al usuario (`espbench who <dev> --json` dice quién). `reservation_lost`: tu reserva venció o la soltaron; `message` dice cuál. Si venció y nadie la tomó, `espbench reserve <dev> --json` y reintentá la escritura una vez; si la tiene otro, pará y avisá |
+| 6 | `locked`, `reservation_lost`, `token_mismatch` | `locked`: otra persona tiene la placa. `espbench who <dev> --json`: con `reservation: true` es una reserva (vence sola: elegí otra placa o esperá); con `reservation: false` es el **lock permanente de su último flash** (no vence): elegí otra placa con `available: true`, o pedile al usuario que el dueño la suelte (`python client/deploy.py --unlock` con su `.flashcfg.json`, o `devremote --unlock <tty>` en la Pi). Nunca reintentes en loop. `reservation_lost`: tu reserva venció o la soltaron; `message` dice cuál. Si venció y nadie la tomó, `espbench reserve <dev> --json` y reintentá la escritura una vez; si la tiene otro, pará y avisá |
 | 7 | `not_found`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |
 | 9 | `session_ended` | la placa se desconectó o su proceso se relanzó: `espbench ls --json`; si volvió, seguí desde `--since session` |
