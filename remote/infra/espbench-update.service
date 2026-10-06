@@ -7,3 +7,7 @@ After=network-online.target time-sync.target dashboard.service devremote.service
 Type=oneshot
 # --auto: no hace nada si el bench está fijo en una rama (PIN) o hay una placa flasheando o reservada.
 ExecStart=/usr/local/bin/espbench-update --auto
+# Lo que quede corriendo al terminar (el tmux server, si el devremote --reset del update
+# lo creó y no pudo ponerlo en su propio scope) no se mata con el unit: son las sesiones
+# de las placas. Igual que espbench-attach@.
+KillMode=process

@@ -53,5 +53,21 @@ if [ -f "$LOCK" ]; then
   fi
 fi
 
-tmux new-session -d -s "$SESSION" \
-  "sudo $BASE/venv/bin/python3 $BASE/server/remote_esp32.py -p $PORT_TTY -tcp $PORT --base $BASE"
+CMD="sudo $BASE/venv/bin/python3 $BASE/server/remote_esp32.py -p $PORT_TTY -tcp $PORT --base $BASE"
+
+# Sin tmux server corriendo, este new-session lo crea, y el server (con todas las
+# sesiones que vengan después) queda en el cgroup de quien llamó. Si es un unit de
+# systemd que al terminar mata su cgroup, mueren todas las placas: le pasó al update
+# (`devremote --reset` dentro del systemd-run de POST /api/update: el reset deja sin
+# sesiones, el server sale, el nuevo nace en el unit del update y systemd lo mata al
+# terminar el update) y le pasa al api (`devremote-reset` desde dashboard.service:
+# el próximo restart del dashboard se lleva las sesiones). En un scope propio el
+# server vive hasta que se cierre su última sesión, lo haya lanzado quien sea.
+if ! tmux ls >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
+  if sudo -n systemd-run --scope --quiet --collect --unit="espbench-tmux-${NAME}-$$" \
+       --uid="$(id -u)" --gid="$(id -g)" -- tmux new-session -d -s "$SESSION" "$CMD"; then
+    exit 0
+  fi
+  echo "esp32_tmux: systemd-run --scope falló: el tmux server queda en el cgroup de quien llamó" >&2
+fi
+tmux new-session -d -s "$SESSION" "$CMD"

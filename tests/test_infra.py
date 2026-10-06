@@ -24,15 +24,32 @@ case "$1" in
   has-session)  [ -f "$FAKE/sessions/$3" ] ;;
   new-session)  touch "$FAKE/sessions/$4"; echo "${@: -1}" > "$FAKE/sessions/$4" ;;
   kill-session) rm -f "$FAKE/sessions/$3" ;;
-  ls)           for s in "$FAKE"/sessions/*; do
+  ls)           n=0                      # sin sesiones no hay server: tmux ls sale con 1
+                for s in "$FAKE"/sessions/*; do
                   [ -e "$s" ] || continue
+                  n=$((n + 1))
                   if [ "${2:-}" = "-F" ]; then basename "$s"; else echo "$(basename "$s"): 1 windows"; fi
-                done ;;
+                done
+                [ "$n" -gt 0 ] ;;
   list-panes)   echo 4242 ;;
 esac
 ''',
     "pkill": '#!/bin/bash\necho "$*" >> "$FAKE/pkill.log"\nexit 0\n',
-    "sudo": '#!/bin/bash\n"$@"\n',
+    # sudo [-n] [-u user] cmd...: exec, así `sudo kill` usa el kill falso y no el builtin
+    "sudo": r'''#!/bin/bash
+while [ $# -gt 0 ]; do
+  case "$1" in -u) shift 2 ;; -*) shift ;; *) break ;; esac
+done
+exec "$@"
+''',
+    # systemd-run --scope ... -- cmd: anota los argumentos y corre cmd (FAKE_SYSTEMD_RUN_FAIL: falla)
+    "systemd-run": r'''#!/bin/bash
+echo "$*" >> "$FAKE/systemd-run.log"
+[ -f "$FAKE/systemd-run.fail" ] && exit 1
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+exec "$@"
+''',
     "sleep": "#!/bin/bash\nexit 0\n",
 }
 
@@ -166,6 +183,42 @@ def test_tmux_recreates_session_of_disconnected_device(infra):
     infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
     assert "kill-session -t esp32_ttyUSB3" in infra.log("tmux")
     assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB3")
+
+
+def test_tmux_first_session_starts_the_server_in_its_own_scope(infra):
+    """Sin tmux server, el new-session lo crea en el cgroup de quien llama. Desde el unit
+    del update (systemd-run) o desde dashboard.service, systemd lo mataba con todas las
+    sesiones al terminar el update o reiniciar el dashboard. Va en un scope propio."""
+    infra.plug("ttyUSB3")
+    infra.plug("ttyUSB4")
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    scope = infra.log("systemd-run")
+    assert "--scope" in scope and f"--uid={os.getuid()}" in scope
+    assert "-- tmux new-session -d -s esp32_ttyUSB3" in scope
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB3")
+    # con el server ya corriendo, las sesiones siguientes van a ese server: sin scope
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB4"))
+    assert infra.log("systemd-run").count("--scope") == 1
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB4")
+
+
+def test_tmux_without_scope_still_starts_the_session(infra):
+    infra.plug("ttyUSB3")
+    (infra.fake / "systemd-run.fail").touch()
+    r = infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    assert "scope falló" in r.stderr
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB3")
+
+
+def test_update_units_do_not_kill_the_sessions_they_leave():
+    """Red de seguridad si el scope falla: el unit del update no mata lo que deja corriendo."""
+    unit = (INFRA / "espbench-update.service").read_text().splitlines()
+    assert "KillMode=process" in unit
+    import sys
+    sys.path.insert(0, str(INFRA.parent))
+    from server import update
+    cmd = update.start_command("feat/x", unit="u")
+    assert cmd[cmd.index("-p") + 1] == "KillMode=process" and cmd.index("-p") < cmd.index(update.UPDATE_BIN)
 
 
 def test_tmux_releases_lock_on_new_session(infra):

@@ -49,8 +49,12 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 
 udev → `espbench-attach@<tty>.service` → `devremote --start`. **No** usar `RUN+=` desde udev para lanzar tmux: corre en el tmux server de root y lo mata el fin del evento. La regla anterior hacía exactamente eso, y por eso el hotplug nunca funcionó.
 
+## El tmux server y los cgroups de systemd
+
+El tmux server nace en el cgroup de quien crea la primera sesión. Si es un unit que mata su cgroup al terminar (el `systemd-run` del update, `dashboard.service` en un restart), mueren todas las placas. Por eso `esp32_tmux.sh`, cuando no hay server, crea la sesión con `sudo systemd-run --scope --uid=sfypi`. Cualquier unit nuevo que lance `devremote` y no sea `RemainAfterExit` va con `KillMode=process` (como `espbench-attach@` y `espbench-update.service`).
+
 ## Tests
 
 `tests/test_update.py` corre `espbench-update` con git de verdad (origin bare con releases y ramas) y `install.sh`/`systemctl`/`devremote`/`curl` falsos: releases por versión, PIN, ocupado, rollback, lock.
 
-`tests/test_infra.py` corre estos scripts reales con `tmux`/`udevadm`/`pkill`/`sudo` falsos en el `PATH`. Para eso existen `ESPBENCH_DEV_DIR` y `DEVREMOTE_NO_REEXEC`, que **son solo para tests**. La regla udev y los units de systemd solo se verifican en la Pi.
+`tests/test_infra.py` corre estos scripts reales con `tmux`/`udevadm`/`pkill`/`sudo`/`systemd-run` falsos en el `PATH`. Para eso existen `ESPBENCH_DEV_DIR` y `DEVREMOTE_NO_REEXEC`, que **son solo para tests**. La regla udev y los units de systemd solo se verifican en la Pi.

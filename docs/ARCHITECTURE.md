@@ -342,6 +342,15 @@ boot ─────► devremote.service ────────────�
 - El hotplug pasa por systemd y no por `RUN+=` de udev. Lo que udev lanza corre
   en el tmux server de root y se mata al terminar el evento. La regla anterior
   hacía eso, y en la práctica el hotplug no funcionaba.
+- **El tmux server vive en su propio scope** (`esp32_tmux.sh`: si no hay server, el
+  `new-session` va con `sudo systemd-run --scope --uid=sfypi`). Si no, nace en el
+  cgroup de quien creó la primera sesión, y cuando ese unit termina systemd mata el
+  server con todas las placas. Pasó en un update (2026-10-06): `devremote --reset`
+  dentro del `systemd-run` de `POST /api/update` dejó sin sesiones al server viejo,
+  el nuevo nació en el unit del update y al terminar el update (`ok`) las 3 placas
+  recibieron SIGTERM + SIGHUP y quedaron DOWN. Lo mismo con `devremote-reset` del
+  api (unit `dashboard.service`) y el siguiente restart del dashboard. Red de
+  seguridad: los units del update tienen `KillMode=process`, como `espbench-attach@`.
 - `devremote`: `--status`, `--reset [<dev>]`, `--unlock <dev>`, `--slots`,
   `--cleanup`, `<dev>` (attach). `<dev>` acepta `N`, `ttyUSBN`, `esp-slotK` o
   `slotK`.

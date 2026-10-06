@@ -55,7 +55,10 @@ def valid_ref(ref: str) -> bool:
 def start_command(ref: Optional[str], force: bool = False, unit: str = "espbench-update-manual") -> List[str]:
     """espbench-update en su propio unit de systemd: reinicia el dashboard, así que
     no puede ser un hijo de este proceso (moriría con él)."""
-    cmd = ["sudo", "-n", "systemd-run", f"--unit={unit}", "--no-block", "--collect", UPDATE_BIN]
+    # KillMode=process: al terminar el update, systemd no mata lo que quedó en el unit. Si el
+    # `devremote --reset` del update creó el tmux server ahí (sin scope propio), son todas las placas.
+    cmd = ["sudo", "-n", "systemd-run", f"--unit={unit}", "--no-block", "--collect",
+           "-p", "KillMode=process", UPDATE_BIN]
     cmd += ["--ref", ref] if ref else ["--release"]
     if force:
         cmd.append("--force")
