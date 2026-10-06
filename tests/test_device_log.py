@@ -432,3 +432,101 @@ def test_concurrent_serial_and_taglog_never_mix(monkeypatch, tmp_path):
             cur += b
     serial_lines.append(cur)
     assert serial_lines == [f"I ({i}) app: linea serial numero {i}" for i in range(300)]
+
+
+# ---------------------------------------------------------------------------
+# Eventos (events.jsonl)
+# ---------------------------------------------------------------------------
+
+from server import events  # noqa: E402
+
+
+def _line_at(path, cursor):
+    """El texto de la línea que empieza en el cursor (sin prefijo)."""
+    _, offset = parse_cursor(cursor)
+    data = path.read_bytes()
+    assert offset == 0 or data[offset - 1:offset] == b"\n"
+    return data[offset:].split(b"\n")[0].decode()[26:]
+
+
+def test_session_event_on_adopt(monkeypatch, tmp_path):
+    log = make_log(monkeypatch, tmp_path, tcp_port=5003)
+    log.adopt(MAC)
+    (ev,) = events.read(paths.device_events_file(MAC))
+    assert ev["type"] == "session" and ev["cursor"] == f"c:{log.session_id}:0"
+    assert ev["detail"]["tty"] == "ttyUSB0" and ev["detail"]["tcp_port"] == 5003 and ev["detail"]["pid"] > 0
+    log.close()
+
+
+def test_event_cursor_defaults_to_end_of_last_line(monkeypatch, tmp_path):
+    log = make_log(monkeypatch, tmp_path)
+    log.adopt(MAC)
+    log.write_serial(b"uno\n")
+    log.write_serial(b"parcial")            # retenida: no cuenta
+    log.event("state", {"from": "a", "to": "b"})
+    ev = events.read(paths.device_events_file(MAC))[-1]
+    assert ev["cursor"] == log.end_cursor()
+    log.close()
+
+
+def test_premac_events_are_recalculated_on_adopt(monkeypatch, tmp_path):
+    """Un evento de una línea vista antes de la MAC queda apuntando a esa
+    línea en el archivo (offset del buffer + header)."""
+    log = make_log(monkeypatch, tmp_path)
+    log.line_sink = lambda text, cursor, ts: log.event("boot", {"line": text}, cursor, ts)
+    log.write_serial(b"cero\n")
+    log.write_serial(b"rst:0x1 (POWERON_RESET)\n")
+    log.event("state", {"to": "x"})              # sin cursor: fin del buffer
+    assert not paths.device_events_file(MAC).exists()
+    log.adopt(MAC)
+    evs = events.read(paths.device_events_file(MAC))
+    assert [e["type"] for e in evs] == ["session", "boot", "boot", "state"]
+    out = _out_path(tmp_path)
+    assert _line_at(out, evs[1]["cursor"]) == "cero"
+    assert _line_at(out, evs[2]["cursor"]) == "rst:0x1 (POWERON_RESET)"
+    assert "adoptado" in _line_at(out, evs[3]["cursor"])    # el marcador va después del buffer
+    log.close()
+
+
+def test_premac_event_of_a_dropped_line_points_to_buffer_start(monkeypatch, tmp_path):
+    log = make_log(monkeypatch, tmp_path, buffer_limit=100)
+    log.line_sink = lambda text, cursor, ts: log.event("boot", {}, cursor, ts)
+    for i in range(10):
+        log.write_serial(f"linea {i}\n".encode())
+    log.adopt(MAC)
+    evs = events.read(paths.device_events_file(MAC))
+    header_end = len(_out_path(tmp_path).read_bytes().split(b"\n")[0]) + 1
+    assert evs[1]["cursor"] == f"c:{log.session_id}:{header_end}"   # la línea 0 se descartó
+    assert _line_at(_out_path(tmp_path), evs[-1]["cursor"]) == "linea 9"
+    log.close()
+
+
+def test_event_racing_with_adopt_still_resolves(monkeypatch, tmp_path):
+    """El cursor de una línea pre-MAC que llega a event() después del adopt."""
+    log = make_log(monkeypatch, tmp_path)
+    seen = []
+    log.line_sink = lambda text, cursor, ts: seen.append(cursor)
+    log.write_serial(b"rst:0x1 (POWERON_RESET)\n")
+    log.adopt(MAC)
+    log.event("boot", {}, seen[0])
+    assert _line_at(_out_path(tmp_path), events.read(paths.device_events_file(MAC))[-1]["cursor"]) \
+        == "rst:0x1 (POWERON_RESET)"
+    log.close()
+
+
+def test_late_mac_migrates_only_events_of_this_session(monkeypatch, tmp_path):
+    log = make_log(monkeypatch, tmp_path)
+    old = paths.unknown_events_file("ttyUSB0")
+    events.append(old, events.make("boot", "c:20200101_000000_1:5"))   # otra placa en el mismo tty
+    log.line_sink = lambda text, cursor, ts: log.event("boot", {}, cursor, ts)
+    log.adopt_unknown()
+    log.write_serial(b"rst:0x1 (POWERON_RESET)\n")
+    log.adopt(MAC)
+    log.write_serial(b"rst:0xc (SW_CPU_RESET)\n")
+    mine = events.read(paths.device_events_file(MAC))
+    assert [e["type"] for e in mine] == ["session", "boot", "boot"]
+    assert all(e["cursor"].startswith(f"c:{log.session_id}:") for e in mine)
+    assert [_line_at(_out_path(tmp_path), e["cursor"]) for e in mine[1:]] == \
+        ["rst:0x1 (POWERON_RESET)", "rst:0xc (SW_CPU_RESET)"]
+    assert [e["cursor"] for e in events.read(old)] == ["c:20200101_000000_1:5"]
+    log.close()

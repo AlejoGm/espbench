@@ -348,3 +348,35 @@ def test_result_json_on_bad_artifact(esp_base):
     request(flash_header(payload, artifact_sha256="00" * 32), payload)
     r = _result(esp_base)
     assert not r["ok"] and r["error"] == "exception" and "SHA256" in r["message"]
+
+
+# ---------- evento flash (events.jsonl) ----------
+
+def _flash_events(esp_base):
+    from server import events
+    return [e for e in events.read(esp_base / "devices" / "AABBCCDDEEFF" / "events.jsonl")
+            if e["type"] == "flash"]
+
+
+def test_flash_event_on_success(esp_base):
+    payload = make_artifact()
+    device = make_device()
+    request(flash_header(payload), payload, device=device)
+    (ev,) = _flash_events(esp_base)
+    assert ev["detail"] == {"job_id": "job_20261005_120000_board1", "ok": True, "status": "exitoso",
+                            "error": None, "user": "alejo"}
+    assert ev["by"] == "device" and ev["cursor"].startswith(f"c:{device.device_log.session_id}:")
+
+
+def test_flash_event_on_failure(esp_base):
+    payload = make_artifact()
+    request(flash_header(payload), payload, FakeTools(mac="11:22:33:44:55:66"))
+    request(flash_header(payload, artifact_sha256="00" * 32), payload)
+    evs = _flash_events(esp_base)
+    assert [(e["detail"]["ok"], e["detail"]["error"], e["detail"]["status"]) for e in evs] == \
+        [(False, "device_changed", "fallido"), (False, "exception", "fallido")]
+
+
+def test_rejected_request_is_not_a_flash_event(esp_base):
+    request({"action": "upload_and_flash", "lock_user": "", "lock_token": ""})
+    assert _flash_events(esp_base) == []

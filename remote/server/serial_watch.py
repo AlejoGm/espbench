@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 serial_watch.py — SerialWatch: lee el serial del device línea a línea y saca
-de ahí la salud del firmware y su identificación.
+de ahí la salud del firmware, su identificación y los eventos de la placa.
+
+Las líneas las corta DeviceLog (una sola tubería: las mismas líneas que van al
+archivo, con su cursor): on_line(texto, cursor, ts). Acá se aplica el \r (queda
+el último segmento) y se saca el ANSI.
 
 Detecta:
 - reinicios, con el motivo que imprime la ROM (rst:0xc (SW_CPU_RESET), ...)
@@ -16,8 +20,15 @@ tiempo real. Antes la info de firmware la parseaba el dashboard, solo mientras
 alguien tenía abierta la página del device, así que la card mostraba la
 versión vieja después de un flash. El resultado lo publica el Device en
 run/<tty>.json (ver device.py), y de ahí lo lee el dashboard.
+
+Eventos (on_event(type, detail, cursor, ts), van a events.jsonl):
+- boot: cada línea rst: (la ROM la imprime siempre, es el inicio del arranque)
+- boot_loop: start al detectarlo / end cuando se estabiliza. Mientras está
+  activo, los boot sueltos no se registran (un loop escribiría miles por hora).
+- panic
+- fw: solo si cambió (proyecto, versión o IDF), al ver la línea ESP-IDF del
+  arranque o, si no aparece, en el siguiente rst:.
 """
-import codecs
 import collections
 import datetime as dt
 import re
@@ -58,14 +69,19 @@ class SerialWatch:
     def __init__(self, on_change: Optional[Callable[[], None]] = None,
                  clock: Callable[[], float] = time.time,
                  boot_loop_count: int = BOOT_LOOP_COUNT,
-                 boot_loop_window: float = BOOT_LOOP_WINDOW):
+                 boot_loop_window: float = BOOT_LOOP_WINDOW,
+                 on_event: Optional[Callable] = None):
+        """on_event(type, detail, cursor, ts): DeviceLog.event en producción."""
         self._on_change = on_change
+        self._on_event = on_event
         self._clock = clock
         self._loop_count = boot_loop_count
         self._loop_window = boot_loop_window
         self._lock = threading.Lock()
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._partial = ""
+        self._loop_active = False
+        self._loop_boots = 0
+        self._fw_dirty = False
+        self._fw_at = (None, None)        # (cursor, ts) de la primera línea que cambió el fw
         self.boots = 0
         self.panics = 0
         self.last_reset: Optional[dict] = None
@@ -76,27 +92,30 @@ class SerialWatch:
 
     def reset_counters(self) -> None:
         """Antes de un flash o un erase: los dos reinician el chip a propósito, y
-        no tienen que contar como problema. La info de firmware se conserva."""
+        no tienen que contar como problema. La info de firmware se conserva. Un
+        boot loop en curso se da por terminado."""
+        evs = []
         with self._lock:
+            if self._loop_active:
+                evs.append(self._end_loop(None, None))
             self.boots = self.panics = 0
             self.last_reset = self.last_panic = None
             self._boot_times.clear()
             self.since = _now_iso(self._clock)
+        self._emit(evs)
 
     # ---------- entrada ----------
 
-    def feed(self, data: bytes) -> None:
-        """Bytes crudos del PTY, en pedazos arbitrarios."""
-        text = self._partial + self._decoder.decode(data)
-        lines = text.replace("\r", "\n").split("\n")
-        self._partial = lines.pop()
-        if len(self._partial) > MAX_LINE:     # basura sin fin de línea: no acumular
-            lines.append(self._partial)
-            self._partial = ""
-        changed = False
-        for line in lines:
-            if line:
-                changed |= self._line(_ANSI_RE.sub("", line))
+    def on_line(self, text: str, cursor=None, ts: Optional[float] = None) -> None:
+        """Una línea serial completa (sin \n), con el cursor de su inicio en el
+        log y la hora en que llegó."""
+        line = _ANSI_RE.sub("", text.rstrip("\r").rsplit("\r", 1)[-1])[:MAX_LINE]
+        evs = []
+        with self._lock:
+            changed = self._line(line, cursor, ts, evs) if line else False
+            if self._loop_active and not self._in_loop():
+                evs.append(self._end_loop(cursor, ts))
+        self._emit(evs)
         if changed and self._on_change:
             self._on_change()
 
@@ -105,8 +124,7 @@ class SerialWatch:
     @property
     def boot_loop(self) -> bool:
         with self._lock:
-            self._expire_boots()
-            return len(self._boot_times) >= self._loop_count
+            return self._in_loop()
 
     def health(self) -> dict:
         loop = self.boot_loop
@@ -126,33 +144,73 @@ class SerialWatch:
 
     # ---------- internos ----------
 
+    def _emit(self, evs: list) -> None:
+        """Fuera del lock: on_event escribe a disco (DeviceLog.event)."""
+        if self._on_event is None:
+            return
+        for type_, detail, cursor, ts in evs:
+            try:
+                self._on_event(type_, detail, cursor, ts)
+            except Exception:
+                pass    # un evento que no se pudo escribir no corta la lectura del serial
+
     def _expire_boots(self) -> None:
         now = self._clock()
         while self._boot_times and now - self._boot_times[0] > self._loop_window:
             self._boot_times.popleft()
 
-    def _line(self, line: str) -> bool:
-        with self._lock:
-            m = _RESET_RE.search(line)
+    def _in_loop(self) -> bool:
+        self._expire_boots()
+        return len(self._boot_times) >= self._loop_count
+
+    def _end_loop(self, cursor, ts) -> tuple:
+        self._loop_active = False
+        return ("boot_loop", {"phase": "end", "boots": self._loop_boots}, cursor, ts)
+
+    def _fw_event(self) -> tuple:
+        self._fw_dirty = False
+        cursor, ts = self._fw_at
+        return ("fw", dict(self.fw), cursor, ts)
+
+    def _line(self, line: str, cursor, ts, evs: list) -> bool:
+        m = _RESET_RE.search(line)
+        if m:
+            if self._fw_dirty:              # firmware sin línea ESP-IDF: el fw sale antes del boot
+                evs.append(self._fw_event())
+            reason = m.group(1)
+            self.boots += 1
+            self._boot_times.append(self._clock())
+            bare = reason.replace("_", "")      # RTCWDT_BROWN_OUT_RESET → ...BROWNOUT...
+            abnormal = any(k in bare for k in _ABNORMAL_RESET)
+            self.last_reset = {"ts": _now_iso(self._clock), "reason": reason, "abnormal": abnormal}
+            if self._loop_active:
+                self._loop_boots += 1
+            elif self._in_loop():
+                self._loop_active = True
+                self._loop_boots = len(self._boot_times)
+                evs.append(("boot_loop", {"phase": "start", "boots": self._loop_boots}, cursor, ts))
+            else:
+                evs.append(("boot", {"reason": reason, "abnormal": abnormal}, cursor, ts))
+            return True
+        for rx, kind in _PANIC_RES:
+            m = rx.search(line)
             if m:
-                reason = m.group(1)
-                self.boots += 1
-                self._boot_times.append(self._clock())
-                bare = reason.replace("_", "")      # RTCWDT_BROWN_OUT_RESET → ...BROWNOUT...
-                self.last_reset = {"ts": _now_iso(self._clock), "reason": reason,
-                                   "abnormal": any(k in bare for k in _ABNORMAL_RESET)}
+                detail = m.group(1) if m.groups() else None
+                self.panics += 1
+                self.last_panic = {"ts": _now_iso(self._clock), "kind": kind,
+                                   "detail": detail, "line": line.strip()[:200]}
+                evs.append(("panic", {"kind": kind, "reason": detail, "line": line.strip()[:200]}, cursor, ts))
                 return True
-            for rx, kind in _PANIC_RES:
-                m = rx.search(line)
-                if m:
-                    self.panics += 1
-                    self.last_panic = {"ts": _now_iso(self._clock), "kind": kind,
-                                       "detail": m.group(1) if m.groups() else None,
-                                       "line": line.strip()[:200]}
-                    return True
-            for key, rx in _FW_RES.items():
-                m = rx.search(line)
-                if m and self.fw.get(key) != m.group(1):
-                    self.fw[key] = m.group(1)
-                    return True
+        for key, rx in _FW_RES.items():
+            m = rx.search(line)
+            if not m:
+                continue
+            changed = self.fw.get(key) != m.group(1)
+            if changed:
+                self.fw[key] = m.group(1)
+                if not self._fw_dirty:
+                    self._fw_dirty, self._fw_at = True, (cursor, ts)
+            if key == "idf" and self._fw_dirty:
+                evs.append(self._fw_event())
+            return changed
         return False

@@ -68,3 +68,11 @@ def test_runtime_and_unknown_paths(monkeypatch, tmp_path):
     assert paths.tty_state_file("esp-slot3") == tmp_path / "run" / "esp-slot3.json"
     assert paths.device_unknown_home("ttyUSB0") == tmp_path / "devices" / "unknown-ttyUSB0"
     assert paths.slots_file() == tmp_path / "slots.conf"
+
+
+def test_events_files_live_beside_the_log(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    assert paths.device_events_file("aa:bb:cc:dd:ee:ff") == tmp_path / "devices" / "AABBCCDDEEFF" / "events.jsonl"
+    assert paths.unknown_output_log("ttyUSB0") == tmp_path / "devices" / "unknown-ttyUSB0" / "output.log"
+    assert paths.unknown_events_file("ttyUSB0") == tmp_path / "devices" / "unknown-ttyUSB0" / "events.jsonl"
+    assert paths.events_file_beside(paths.device_output_log("AABBCCDDEEFF")) == paths.device_events_file("AABBCCDDEEFF")

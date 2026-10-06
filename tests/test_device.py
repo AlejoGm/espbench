@@ -425,3 +425,65 @@ def test_flash_resets_health_counters_but_keeps_fw(monkeypatch, tmp_path):
 def test_device_without_watch_has_no_health(monkeypatch, tmp_path):
     device = make_device(monkeypatch, tmp_path)
     assert "health" not in device.snapshot()
+
+
+# ---------------------------------------------------------------------------
+# Eventos: state (FSM) y los del serial por la tubería del DeviceLog
+# ---------------------------------------------------------------------------
+
+def _events(tmp_path, mac_dir="AABBCCDDEEFF"):
+    from server import events
+    return events.read(tmp_path / "devices" / mac_dir / "events.jsonl")
+
+
+def test_transitions_are_state_events(monkeypatch, tmp_path):
+    from server import taglog
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    taglog.add_sink(manager.device.device_log.taglog_sink)
+    try:
+        manager.discover()
+        device = manager.device
+        device.start_flash()
+    finally:
+        taglog.reset_default_sinks()
+    device.finish_flash()
+    device.disconnect()
+    states = [(e["detail"]["from"], e["detail"]["to"]) for e in _events(tmp_path) if e["type"] == "state"]
+    assert states == [("discovering", "monitoring"), ("monitoring", "flashing"),
+                      ("flashing", "monitoring"), ("monitoring", "disconnected")]
+    # el cursor apunta a la línea taglog de la transición
+    from server.events import parse_cursor
+    log = (tmp_path / "devices" / "AABBCCDDEEFF" / "output.log").read_bytes()
+    ev = [e for e in _events(tmp_path) if e["type"] == "state"][1]
+    _, off = parse_cursor(ev["cursor"])
+    assert log[off:].split(b"\n")[0].endswith(b"monitoring -> flashing")
+
+
+def test_unknown_device_state_events_go_to_provisional_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: None, publish_state=False)
+    manager.discover()
+    evs = _events(tmp_path, "unknown-ttyUSB0")
+    assert [e["type"] for e in evs] == ["session", "state"]
+    assert evs[1]["detail"] == {"from": "discovering", "to": "unknown"}
+
+
+def test_serial_events_point_to_their_line(monkeypatch, tmp_path):
+    """on_serial → DeviceLog → SerialWatch → events.jsonl: el cursor del boot y
+    del panic es el inicio de su línea en output.log."""
+    from server.events import parse_cursor
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    manager.discover()
+    data = BOOT + PANIC
+    for i in range(0, len(data), 5):
+        manager.on_serial(data[i:i + 5])
+    log = (tmp_path / "devices" / "AABBCCDDEEFF" / "output.log").read_bytes()
+    found = {}
+    for e in _events(tmp_path):
+        if e["type"] in ("boot", "panic"):
+            _, off = parse_cursor(e["cursor"])
+            found[e["type"]] = log[off:].split(b"\n")[0].decode()[26:]
+    assert found["boot"].startswith("rst:0x1 (POWERON_RESET)")
+    assert found["panic"].startswith("Guru Meditation Error")

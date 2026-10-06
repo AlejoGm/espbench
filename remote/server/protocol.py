@@ -346,6 +346,18 @@ def write_result(jobdir: pathlib.Path, meta: dict, resp: dict) -> None:
         taglog.warn(TAG, f"no se pudo escribir result.json: {e}")
 
 
+def record_flash_event(device: Device, job_id: str, user: str, resp: dict) -> None:
+    """Evento `flash` en events.jsonl, con la respuesta final (éxito o fallo)."""
+    ok = bool(resp.get("ok"))
+    try:
+        device.device_log.event("flash", {
+            "job_id": job_id, "ok": ok,
+            "status": resp.get("status") or ("exitoso" if ok else "fallido"),
+            "error": resp.get("error"), "user": user})
+    except Exception as e:
+        taglog.warn(TAG, f"no se pudo registrar el evento flash: {e}")
+
+
 # ---------- rutas y estado del device ----------
 
 def check_flashable(device: Device) -> None:
@@ -414,6 +426,7 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
 
     def reply(resp: dict) -> None:
         write_result(jobdir, meta, resp)
+        record_flash_event(device, job_id, user, resp)
         send_msg(sock, resp)
 
     artifact = jobdir / "artifact.zip"
@@ -421,7 +434,9 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
         receive_artifact(sock, header, action, artifact)   # errores -> control_server responde "exception"
         extract_artifact(artifact, jobdir)
     except Exception as e:
-        write_result(jobdir, meta, {"ok": False, "error": "exception", "message": str(e)})
+        failed = {"ok": False, "error": "exception", "message": str(e)}
+        write_result(jobdir, meta, failed)
+        record_flash_event(device, job_id, user, failed)
         raise
     params = flash_params(header, cfg)
     taglog.info(TAG, f"parámetros: chip={params['chip']} baud={params['baud']} "

@@ -25,17 +25,21 @@ Una sola tubería de líneas (docs/specs/agents-cli.md §3):
 - line_sink(texto, cursor, ts) recibe cada línea serial completa (la lógica:
   segmento + continuaciones), con el cursor del inicio de la línea. Es el
   SerialWatch.
+- event(...) escribe en events.jsonl (events.py) con el cursor exacto. Antes
+  de la MAC los eventos se retienen con su posición en el buffer y se
+  recalculan al volcarlo.
 
 Ciclo de vida:
 - Sesión = una ejecución del proceso: session_id = YYYYMMDD_HHMMSS_<pid>.
 - Antes de conocer la MAC, bufferea líneas en memoria (con tope).
-- adopt(mac): abre devices/<mac>/output.log, escribe el header de sesión y
-  vuelca el buffer. El header va fuera del buffer (el buffer descarta desde
+- adopt(mac): abre devices/<mac>/output.log, escribe el header de sesión (y
+  el evento `session`) y vuelca el buffer. El header va fuera del buffer (el buffer descarta desde
   el principio cuando se llena).
 - adopt_unknown(): si la MAC no se pudo leer, abre devices/unknown-<tty>/
   output.log para no bufferear para siempre. Si la MAC aparece después
   (fallback por serial), adopt(mac) migra el contenido al archivo de la MAC
-  (al principio, así los offsets no cambian) y borra el provisorio.
+  (al principio, así los offsets no cambian) y borra el provisorio. De
+  events.jsonl migran solo los eventos de esta sesión.
 
 Un archivo por sesión: al abrir, si ya hay un output.log con contenido de
 una sesión anterior, se rota a output_<session_id>.log (el id sale de su
@@ -50,7 +54,8 @@ import threading
 import time
 from typing import Callable, Optional
 
-from server import paths, taglog
+from server import events, paths, taglog
+from server.events import format_cursor, parse_cursor, read_session_id  # noqa: F401 (API del módulo)
 
 TAG = "devicelog"
 
@@ -63,7 +68,6 @@ ORIGIN_TAGLOG = "|"
 ORIGIN_CONT = "↪"
 
 PREFIX_RE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} [>|↪] ")
-_SESSION_RE = re.compile(r"sesi[oó]n (\d{8}_\d{6}_\d+)")
 
 
 def format_ts(epoch: float) -> str:
@@ -74,27 +78,6 @@ def format_ts(epoch: float) -> str:
 
 def make_session_id(epoch: float, pid: int) -> str:
     return time.strftime("%Y%m%d_%H%M%S", time.localtime(epoch)) + f"_{pid}"
-
-
-def format_cursor(session_id: str, offset: int) -> str:
-    return f"c:{session_id}:{offset}"
-
-
-def parse_cursor(cursor: str):
-    """c:<sesión>:<offset> → (sesión, offset), o None si no es un cursor."""
-    m = re.fullmatch(r"c:(\d{8}_\d{6}_\d+):(\d+)", cursor or "")
-    return (m.group(1), int(m.group(2))) if m else None
-
-
-def read_session_id(log_path: pathlib.Path) -> Optional[str]:
-    """El session_id del header de un output.log, o None (log viejo o vacío)."""
-    try:
-        with open(log_path, "rb") as f:
-            first = f.readline(1024).decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    m = _SESSION_RE.search(first)
-    return m.group(1) if m else None
 
 
 class _BufPos:
@@ -128,7 +111,9 @@ class DeviceLog:
         self.session_id = make_session_id(self.started_at, os.getpid())
         self.line_sink: Optional[Callable[[str, object, float], None]] = None
 
-        self._lock = threading.Lock()
+        # RLock: un taglog emitido con el lock tomado (error al escribir un
+        # evento) vuelve a entrar por taglog_sink en el mismo hilo.
+        self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._flusher: Optional[threading.Thread] = None
         self._closed = False
@@ -143,6 +128,7 @@ class DeviceLog:
         self._buf_stream = 0                 # bytes que entraron al buffer (incluye descartados)
         self._dropped = 0                    # bytes descartados por tope
         self._buf_base: Optional[tuple] = None   # (offset del buffer en el archivo, descartados)
+        self._pending_events: list = []      # eventos pre-MAC: (type, detail, _BufPos, ts, by)
         # serial
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pend: Optional[str] = None     # segmento serial retenido (sin \n todavía)
@@ -162,6 +148,10 @@ class DeviceLog:
     def path(self) -> Optional[pathlib.Path]:
         """Archivo actual, o None si todavía está buffereando."""
         return self._path
+
+    @property
+    def events_path(self) -> Optional[pathlib.Path]:
+        return paths.events_file_beside(self._path) if self._path is not None else None
 
     def end_cursor(self) -> Optional[str]:
         """Cursor del fin de la última línea completa escrita (None antes de adoptar)."""
@@ -229,6 +219,22 @@ class DeviceLog:
             if self._pend is not None and self._mono() - self._pend_last >= self._partial_timeout:
                 self._write_pending()
 
+    def event(self, type_: str, detail: Optional[dict] = None, cursor=None,
+              ts: Optional[float] = None, by: str = "device") -> None:
+        """Registra un evento en events.jsonl. cursor: el que recibió line_sink
+        (str o posición del buffer), o None = fin de la última línea escrita."""
+        ts = self._clock() if ts is None else ts
+        with self._lock:
+            pos = self._pos() if cursor is None else cursor
+            if isinstance(pos, _BufPos):
+                if self._buf_base is None:          # todavía en el buffer pre-MAC
+                    self._pending_events.append((type_, detail, pos, ts, by))
+                    return
+                pos = self._buf_to_offset(pos)
+            if isinstance(pos, int):
+                pos = format_cursor(self.session_id, pos)
+            self._append_event(events.make(type_, pos, detail, by=by, ts=ts))
+
     # ---------- adopción ----------
 
     def adopt(self, mac: str) -> None:
@@ -251,7 +257,7 @@ class DeviceLog:
         with self._lock:
             if self._path is not None:
                 return
-            self._open(paths.device_unknown_home(self.tty_name) / "output.log")
+            self._open(paths.unknown_output_log(self.tty_name))
             self._flush_buffer()
 
     def close(self) -> None:
@@ -268,7 +274,7 @@ class DeviceLog:
 
     def _pos(self):
         """Dónde va a caer la próxima línea: offset de archivo o _BufPos."""
-        if self._fh is not None:
+        if self._path is not None:
             return self._offset
         return _BufPos(self._buf_stream)
 
@@ -277,6 +283,8 @@ class DeviceLog:
         if self._fh is not None:
             self._fh.write(data)       # sin buffer: un write() por línea
             self._offset += len(data)
+            return
+        if self._path is not None:     # cerrado (desconexión): no hay dónde escribir
             return
         self._buffer.append(data)
         self._buffered += len(data)
@@ -340,6 +348,12 @@ class DeviceLog:
                     self._pend = None
                     taglog.debug(TAG, f"flush de línea parcial: {e}")
 
+    def _append_event(self, ev: dict) -> None:
+        try:
+            events.append(self.events_path, ev)
+        except OSError as e:
+            taglog.warn(TAG, f"no se pudo registrar el evento {ev['type']}: {e}")
+
     def _open(self, target: pathlib.Path, header: bool = True) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         if header:
@@ -350,16 +364,23 @@ class DeviceLog:
         if header:
             self._emit(ORIGIN_TAGLOG, self.started_at, taglog.format_body(
                 "INFO", TAG, f"sesión {self.session_id} tty={self.tty_name}"))
+            self._append_event(events.make(
+                "session", format_cursor(self.session_id, 0),
+                {"tty": self.tty_name, "tcp_port": self.tcp_port, "pid": os.getpid()}, ts=self.started_at))
 
     def _flush_buffer(self) -> None:
         """Vuelca el buffer pre-MAC después del header. Los marcadores van después
         del buffer: así los offsets relativos al buffer siguen valiendo."""
         self._buf_base = (self._offset, self._dropped)
-        if not self._buffer and not self._dropped:
-            return
         for chunk in self._buffer:
             self._fh.write(chunk)
             self._offset += len(chunk)
+        for type_, detail, pos, ts, by in self._pending_events:
+            self._append_event(events.make(type_, format_cursor(self.session_id, self._buf_to_offset(pos)),
+                                           detail, by=by, ts=ts))
+        self._pending_events.clear()
+        if not self._buffer and not self._dropped:
+            return
         now = self._clock()
         self._emit(ORIGIN_TAGLOG, now, taglog.format_body(
             "INFO", TAG, f"--- adoptado desde tty={self.tty_name} @ {format_ts(now)} ---"))
@@ -377,8 +398,10 @@ class DeviceLog:
 
     def _migrate(self, target: pathlib.Path) -> None:
         """Provisorio → archivo de la MAC. El contenido va al principio (después
-        de rotar la sesión anterior de esa MAC): los offsets no cambian."""
+        de rotar la sesión anterior de esa MAC): los offsets no cambian. Los
+        eventos de esta sesión pasan al events.jsonl de la MAC."""
         prev = self._path
+        prev_events = self.events_path
         self._fh.close()
         try:
             content = prev.read_bytes()
@@ -389,6 +412,10 @@ class DeviceLog:
         with open(target, "wb") as f:
             f.write(content)
         self._open(target, header=False)
+        try:
+            events.migrate_session(prev_events, self.events_path, self.session_id)
+        except OSError as e:
+            taglog.warn(TAG, f"no se pudieron migrar los eventos de {prev_events}: {e}")
         try:
             prev.unlink()
             prev.parent.rmdir()

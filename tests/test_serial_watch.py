@@ -1,12 +1,13 @@
 """
-Tests para SerialWatch: salud del firmware a partir del serial, con logs con
-el formato real de la ROM y del IDF.
+Tests para SerialWatch: salud del firmware y eventos a partir de las líneas
+del serial, con logs con el formato real de la ROM y del IDF.
 """
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
+from server.device_log import DeviceLog
 from server.serial_watch import SerialWatch
 
 BOOT = (
@@ -25,6 +26,7 @@ PANIC = (
     "ets Jun  8 2016 00:22:57\r\n"
     "rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n"
 )
+RST = "rst:0xc (SW_CPU_RESET),boot:0x13\r\n"
 
 
 class Clock:
@@ -35,9 +37,26 @@ class Clock:
         return self.t
 
 
+def feed(w, text, start=0):
+    """Como DeviceLog: una llamada por línea terminada en \\n, con un cursor por
+    línea (acá, el número de línea)."""
+    for i, line in enumerate(text.split("\n")[:-1]):
+        w.on_line(line, f"c:20261005_160000_1:{start + i}", 1000.0 + start + i)
+
+
+def watch_with_events(**kw):
+    evs = []
+    w = SerialWatch(on_event=lambda t, d, c, ts: evs.append((t, d, c, ts)), **kw)
+    return w, evs
+
+
+# ---------------------------------------------------------------------------
+# Salud y firmware (los de siempre, por líneas)
+# ---------------------------------------------------------------------------
+
 def test_boot_reads_reset_and_firmware():
     w = SerialWatch()
-    w.feed(BOOT.encode())
+    feed(w, BOOT)
     assert w.boots == 1
     assert w.last_reset["reason"] == "POWERON_RESET" and not w.last_reset["abnormal"]
     assert w.firmware() == {"project": "SFY1-56_1", "version": "1.2.3", "idf": "v5.3.2"}
@@ -46,7 +65,7 @@ def test_boot_reads_reset_and_firmware():
 
 def test_panic_is_detected_with_kind_and_detail():
     w = SerialWatch()
-    w.feed((BOOT + PANIC).encode())
+    feed(w, BOOT + PANIC)
     h = w.health()
     assert h["panics"] == 1 and h["boots"] == 2
     assert h["last_panic"]["kind"] == "panic" and h["last_panic"]["detail"] == "LoadProhibited"
@@ -63,14 +82,14 @@ def test_other_panic_kinds():
         ("assert failed: xQueueGenericSend queue.c:832", "assert"),
     ]:
         w = SerialWatch()
-        w.feed((text + "\r\n").encode())
+        feed(w, text + "\r\n")
         assert w.last_panic["kind"] == kind, text
 
 
 def test_watchdog_and_brownout_resets_are_abnormal():
     for reason in ("TG0WDT_SYS_RESET", "RTCWDT_BROWN_OUT_RESET", "TG1WDT_SYS_RST"):
         w = SerialWatch()
-        w.feed(f"rst:0x7 ({reason}),boot:0x13\r\n".encode())
+        feed(w, f"rst:0x7 ({reason}),boot:0x13\r\n")
         assert w.last_reset["abnormal"], reason
 
 
@@ -78,40 +97,125 @@ def test_boot_loop_within_window_and_expiry():
     clock = Clock()
     w = SerialWatch(clock=clock)
     for _ in range(3):
-        w.feed(b"rst:0xc (SW_CPU_RESET),boot:0x13\r\n")
+        feed(w, RST)
         clock.t += 10
     assert w.boot_loop
     clock.t += 300                      # el device se estabilizó
     assert not w.boot_loop
 
 
-def test_lines_split_across_chunks_and_utf8():
+def test_carriage_return_keeps_last_segment_and_strips_ansi():
+    """La regla del \\r ahora la aplica SerialWatch (DeviceLog corta solo en \\n)."""
     w = SerialWatch()
-    data = BOOT.encode()
-    for i in range(0, len(data), 7):    # el PTY entrega pedazos arbitrarios
-        w.feed(data[i:i + 7])
+    w.on_line("basura 10%\r\x1b[0;32mI (318) app_init: App version:      9.9.9\x1b[0m\r")
+    assert w.firmware()["version"] == "9.9.9"
+
+
+def test_lines_split_across_chunks_and_utf8_through_devicelog(monkeypatch, tmp_path):
+    """Integración con la tubería real: el PTY entrega pedazos arbitrarios y
+    DeviceLog arma las líneas que recibe SerialWatch."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    log = DeviceLog("ttyUSB0", autoflush=False)
+    w = SerialWatch()
+    log.line_sink = w.on_line
+    data = ("I (1) app: ñandú °C\r\n" + BOOT).encode()
+    for i in range(0, len(data), 7):
+        log.write_serial(data[i:i + 7])
     assert w.firmware()["project"] == "SFY1-56_1" and w.boots == 1
 
 
 def test_on_change_only_when_something_changes():
     calls = []
     w = SerialWatch(on_change=lambda: calls.append(1))
-    w.feed(b"I (100) app: nada importante\r\n")
+    feed(w, "I (100) app: nada importante\r\n")
     assert calls == []
-    w.feed(BOOT.encode())
-    assert len(calls) == 1               # un feed con varios cambios = una notificación
-    w.feed(BOOT.replace("rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n", "").encode())
-    assert len(calls) == 1               # misma versión de firmware: no hay cambio
+    feed(w, BOOT)
+    assert len(calls) == 4               # rst + proyecto + versión + IDF
+    feed(w, BOOT.replace("rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n", ""))
+    assert len(calls) == 4               # misma versión de firmware: no hay cambio
 
 
 def test_new_firmware_version_after_flash_is_picked_up():
     w = SerialWatch()
-    w.feed(BOOT.encode())
-    w.feed(BOOT.replace("1.2.3", "1.2.4").encode())
+    feed(w, BOOT)
+    feed(w, BOOT.replace("1.2.3", "1.2.4"))
     assert w.firmware()["version"] == "1.2.4"
 
 
-def test_garbage_without_newline_does_not_grow_forever():
+def test_garbage_line_is_ignored():
     w = SerialWatch()
-    w.feed(b"x" * 10000)
-    assert len(w._partial) <= 4096
+    w.on_line("x" * 10000)
+    assert w.boots == 0 and w.panics == 0 and w.firmware() == {}
+
+
+# ---------------------------------------------------------------------------
+# Eventos
+# ---------------------------------------------------------------------------
+
+def test_boot_event_on_every_rst_with_cursor_and_ts():
+    w, evs = watch_with_events()
+    feed(w, BOOT)
+    feed(w, RST, start=100)
+    boots = [e for e in evs if e[0] == "boot"]
+    assert [b[1] for b in boots] == [{"reason": "POWERON_RESET", "abnormal": False},
+                                     {"reason": "SW_CPU_RESET", "abnormal": False}]
+    assert boots[0][2] == "c:20261005_160000_1:2" and boots[0][3] == 1002.0   # la línea del rst:
+    assert boots[1][2] == "c:20261005_160000_1:100"
+
+
+def test_panic_event():
+    w, evs = watch_with_events()
+    feed(w, PANIC)
+    (panic,) = [e for e in evs if e[0] == "panic"]
+    assert panic[1]["kind"] == "panic" and panic[1]["reason"] == "LoadProhibited"
+    assert panic[1]["line"].startswith("Guru Meditation Error")
+    assert panic[2] == "c:20261005_160000_1:0"
+
+
+def test_fw_event_only_when_it_changes():
+    w, evs = watch_with_events()
+    feed(w, BOOT)
+    feed(w, BOOT, start=100)                              # mismo firmware
+    feed(w, BOOT.replace("1.2.3", "1.2.4"), start=200)    # flash nuevo
+    fws = [e for e in evs if e[0] == "fw"]
+    assert [f[1]["version"] for f in fws] == ["1.2.3", "1.2.4"]
+    assert fws[0][1] == {"project": "SFY1-56_1", "version": "1.2.3", "idf": "v5.3.2"}
+    assert fws[0][2] == "c:20261005_160000_1:5"           # primera línea que cambió (Project name)
+    assert fws[1][2] == "c:20261005_160000_1:206"         # App version del segundo flash
+
+
+def test_fw_event_without_idf_line_goes_out_at_next_boot():
+    w, evs = watch_with_events()
+    feed(w, "I (318) app_init: App version:      3.0\r\n")
+    assert [e[0] for e in evs] == []
+    feed(w, RST, start=10)
+    assert [e[0] for e in evs] == ["fw", "boot"]
+
+
+def test_boot_loop_groups_boots_into_start_and_end():
+    """Mientras dura el boot loop no se registran boots sueltos."""
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock)
+    for i in range(10):
+        feed(w, RST, start=i)
+        clock.t += 5
+    types = [e[0] for e in evs]
+    assert types == ["boot", "boot", "boot_loop"]
+    assert evs[2][1] == {"phase": "start", "boots": 3}
+    clock.t += 300                                        # se estabilizó
+    feed(w, "I (100) app: andando\r\n", start=50)
+    assert evs[-1][0] == "boot_loop" and evs[-1][1] == {"phase": "end", "boots": 10}
+    assert evs[-1][2] == "c:20261005_160000_1:50"
+    feed(w, RST, start=60)
+    assert evs[-1][0] == "boot"                           # vuelve a registrar boots
+
+
+def test_flash_ends_an_active_boot_loop():
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock)
+    for i in range(3):
+        feed(w, RST, start=i)
+    w.reset_counters()
+    assert evs[-1][0] == "boot_loop" and evs[-1][1]["phase"] == "end" and evs[-1][2] is None
+    feed(w, RST, start=10)
+    assert evs[-1][0] == "boot"

@@ -26,8 +26,9 @@ del proceso. No se consolida en un servicio único (ver docs/ARCHITECTURE.md):
 tmux por proceso da aislamiento de crash, limpieza de recursos al morir y
 reset por device sin costo.
 
-Cada transición se loguea por taglog y se publica en run/<tty>.json
-(runstate.py), que es como el dashboard — otro proceso — se entera del estado.
+Cada transición se loguea por taglog, se publica en run/<tty>.json
+(runstate.py), que es como el dashboard — otro proceso — se entera del estado,
+y queda como evento `state` en events.jsonl.
 """
 import dataclasses
 import datetime as dt
@@ -147,6 +148,8 @@ class Device:
     def _set_state(self, new: DeviceState) -> None:
         old = self.state
         self.state = new
+        # El evento antes que el taglog: su cursor queda al inicio de la línea "a -> b".
+        self.device_log.event("state", {"from": old.value, "to": new.value})
         taglog.info(TAG, f"{self._who()}: {old.value} -> {new.value}")
         self._publish()
 
@@ -244,16 +247,17 @@ class DeviceManager:
         if state_sink is None and publish_state:
             tty_name = self.tty_port.tty_name
             state_sink = lambda snap: runstate.write(tty_name, snap)  # noqa: E731
-        self.watch = SerialWatch()
-        self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name, tcp_port=self.tty_port.tcp_port),
-                             state_sink=state_sink, watch=self.watch)
+        log = DeviceLog(self.tty_port.tty_name, tcp_port=self.tty_port.tcp_port)
+        self.watch = SerialWatch(on_event=log.event)
+        log.line_sink = self.watch.on_line       # una sola tubería: las líneas del log, con su cursor
+        self.device = Device(self.tty_port, log, state_sink=state_sink, watch=self.watch)
         self.watch._on_change = self.device.publish
         self._mac_reader = mac_reader
 
     def on_serial(self, data: bytes) -> None:
-        """Sink del EspMonitor: el serial va al log del device y al SerialWatch."""
+        """Sink del EspMonitor: el serial va al log del device, que le pasa cada
+        línea completa al SerialWatch."""
         self.device.device_log.write_serial(data)
-        self.watch.feed(data)
 
     def discover(self, attempts: int = 1, delay: float = 0.0,
                  sleep: Callable[[float], None] = time.sleep) -> bool:

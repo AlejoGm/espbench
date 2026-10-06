@@ -105,6 +105,18 @@ def device_output_log(mac: str) -> pathlib.Path:
     return device_home(mac) / "output.log"
 
 
+def events_file_beside(log_path) -> pathlib.Path:
+    """events.jsonl vive en el mismo directorio que el output.log de la placa
+    (devices/<mac>/ o devices/unknown-<tty>/). El proceso del api llega acá
+    desde el log_path de run/<tty>.json."""
+    return pathlib.Path(log_path).parent / "events.jsonl"
+
+
+def device_events_file(mac: str) -> pathlib.Path:
+    """Registro de eventos de la placa (boot, panic, flash, state...)."""
+    return events_file_beside(device_output_log(mac))
+
+
 def device_current_elf(mac: str) -> pathlib.Path:
     return device_home(mac) / "current.elf"
 
@@ -120,3 +132,11 @@ def device_last_user(mac: str) -> pathlib.Path:
 def device_unknown_home(tty_name: str) -> pathlib.Path:
     """Hogar provisorio de un device cuya MAC nunca se pudo leer."""
     return devices_dir() / f"unknown-{tty_name}"
+
+
+def unknown_output_log(tty_name: str) -> pathlib.Path:
+    return device_unknown_home(tty_name) / "output.log"
+
+
+def unknown_events_file(tty_name: str) -> pathlib.Path:
+    return events_file_beside(unknown_output_log(tty_name))
