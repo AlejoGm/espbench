@@ -288,8 +288,10 @@ una **reserva** (`POST /api/device/{tty}/reserve`, §8), con la MAC de la placa
   token es permanente). Una reserva vigente sobrevive el replug; al arrancar,
   `remote_esp32.py` la borra si su MAC no es la de la placa que encontró (los
   `ttyUSB` se renumeraron).
-- Ni `user` ni `token` pueden tener `:` (el flash lo rechaza con
-  `lock_credentials_required`).
+- `user` y `token` pueden tener `:` (había `.flashcfg.json` así): en el archivo van
+  escapados (`:` → `%3A`, `%` → `%25`), así `:` sigue siendo solo el separador. Un
+  par sin `:` ni `%` se escribe igual que siempre, y un lock viejo con `:` literal en
+  el token se lee como permanente. Solo se rechazan vacíos o con saltos de línea.
 - La escritura es atómica (temp + `os.replace`) y el archivo queda 666: lo escribe
   root (device) y lo borra sfypi (api); `locks/` es 777.
 

@@ -155,7 +155,7 @@ class LockStore:
                                    "message": "Configurá 'lock_user' y 'lock_token' en .flashcfg.json > remote"})
         if not locks.valid_credential(user) or not locks.valid_credential(token):
             raise RequestRejected({"ok": False, "error": "lock_credentials_required",
-                                   "message": "lock_user y lock_token no pueden tener ':'"})
+                                   "message": "lock_user y lock_token no pueden tener saltos de línea"})
         with locks.exclusive(self.tty_name):
             lock = locks.read(self.tty_name)
             if lock is not None:

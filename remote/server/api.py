@@ -106,7 +106,7 @@ def _creds(body: dict, required: bool = True):
     if required and (not user or not token):
         _fail(400, "bad_request", "lock_user y lock_token requeridos")
     if any(v and not locks.valid_credential(v) for v in (user, token)):
-        _fail(400, "bad_request", "lock_user y lock_token no pueden tener ':'")
+        _fail(400, "bad_request", "lock_user y lock_token no pueden tener saltos de línea")
     return user, token
 
 

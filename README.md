@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.31.5
+**Version:** 0.31.6
 
 ---
 
@@ -269,7 +269,7 @@ Para volver a sin auth: borrar el archivo (o dejarlo vacío).
 | `remote.port` | TCP port (`5000 + device index`) |
 | `remote.token` | Server auth token (= `/opt/esp/api_token` on the Pi, if it exists) |
 | `remote.lock_user` | Username for device locking |
-| `remote.lock_token` | Token for device locking |
+| `remote.lock_token` | Token for device locking (may contain `:` again: it is escaped in the lock file) |
 | `chip` | ESP chip model (`esp32`, `esp32s3`, etc.) |
 | `flash_baud` | Flash baud rate |
 | `encrypt` | Flash encryption enabled |

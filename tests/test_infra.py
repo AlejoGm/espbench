@@ -195,6 +195,8 @@ def test_tmux_keeps_reservation_on_new_session(infra):
     ("alejo:a:b", False),                 # token viejo con ':': permanente (locks.parse igual)
     ("alejo:a:b:4102444800", False),
     ("alejo:t0k:4102444800:xyz", False),
+    ("alejo:a%3A1", False),               # token con ':' escapado (flash): permanente
+    ("alejo:a%3A1:4102444800:aabbccddeeff", True),
 ])
 def test_tmux_lock_rule_matches_locks_parse(infra, content, kept):
     import sys

@@ -14,8 +14,12 @@ Formato: "user:token[:expires[:mac]]".
 Vencido = inexistente en todos lados (LockStore del flash, DeviceRegistry, api):
 read() lo ignora, y la próxima escritura lo pisa. No se borra al leerlo: entre
 la lectura y el borrado otro proceso podía escribir una reserva nueva, y se
-perdía. Ni user ni token pueden tener ':' (el formato no tendría cómo
-separarlos).
+perdía.
+
+User y token pueden tener ':' (los .flashcfg.json viejos los tenían): en el
+archivo van escapados, ':' → %3A y '%' → %25, así ':' sigue siendo solo el
+separador. Un par sin ':' ni '%' queda igual que siempre. Un lock viejo con ':'
+literal en el token se sigue leyendo como permanente (token = el resto).
 
 Lo usan los dos procesos: el del device (protocol.LockStore, remote_esp32 al
 arrancar) y el del api. Todo leer-decidir-escribir va dentro de exclusive(tty):
@@ -76,7 +80,19 @@ def normalize_mac(mac: Optional[str]) -> Optional[str]:
 
 
 def valid_credential(value: str) -> bool:
-    return bool(value) and ":" not in value and "\n" not in value
+    """No vacío y sin saltos de línea (el archivo es una línea). ':' sí: se escapa."""
+    return bool(value) and "\n" not in value and "\r" not in value
+
+
+_UNESC_RE = re.compile(r"%(25|3[Aa])")
+
+
+def _esc(value: str) -> str:
+    return value.replace("%", "%25").replace(":", "%3A")
+
+
+def _unesc(value: str) -> str:
+    return _UNESC_RE.sub(lambda m: "%" if m.group(1) == "25" else ":", value)
 
 
 def parse(text: str) -> Optional[Lock]:
@@ -86,12 +102,12 @@ def parse(text: str) -> Optional[Lock]:
     user, _, rest = text.partition(":")
     m = _EXT_RE.fullmatch(rest)
     if m:
-        return Lock(user, m.group("token"), int(m.group("expires")), normalize_mac(m.group("mac")))
-    return Lock(user, rest)
+        return Lock(_unesc(user), _unesc(m.group("token")), int(m.group("expires")), normalize_mac(m.group("mac")))
+    return Lock(_unesc(user), _unesc(rest))
 
 
 def format_lock(lock: Lock) -> str:
-    out = f"{lock.user}:{lock.token}"
+    out = f"{_esc(lock.user)}:{_esc(lock.token)}"
     if lock.expires is not None:
         out += f":{int(lock.expires)}"
         if lock.mac:

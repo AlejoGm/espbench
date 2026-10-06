@@ -208,6 +208,14 @@ def test_reserve_conflicts():
     assert err(e) == (409, "device_changed")
 
 
+def test_reserve_and_release_with_colon_in_token():
+    from server import locks
+    board()
+    reserve(token="a:123")
+    assert locks.read("ttyUSB0") == locks.Lock("alejo", "a:123", locks.read("ttyUSB0").expires, "AABBCCDDEEFF")
+    assert run(api.device_release("ttyUSB0", {"lock_user": "alejo", "lock_token": "a:123"}))["message"] == "liberado"
+
+
 def test_reserve_max_is_24h():
     board()
     assert api.RESERVE_MAX_S == 24 * 3600
@@ -233,7 +241,7 @@ def test_reserve_blocked_by_flash_lock_of_other_user():
 
 @pytest.mark.parametrize("body", [
     {"lock_user": "alejo"},
-    {"lock_user": "alejo", "lock_token": "a:b"},
+    {"lock_user": "alejo", "lock_token": "a\nb"},
     {"lock_user": "alejo", "lock_token": "t", "ttl_s": 0},
     {"lock_user": "alejo", "lock_token": "t", "ttl_s": "x"},
     {"lock_user": "alejo", "lock_token": "t", "ttl_s": 24 * 3600 + 1},      # tope 24 h (antes 7 días)

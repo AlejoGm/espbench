@@ -27,6 +27,21 @@ def test_parse_and_format_reservation():
     assert locks.format_lock(locks.Lock("a", "b", None, "AABBCCDDEEFF")) == "a:b"
 
 
+def test_credentials_with_colon_round_trip():
+    """Un lock_token con ':' (.flashcfg.json viejos) va escapado: antes "a:1"
+    como token de un flash quedaba "user:a:1" = una reserva vencida en 1970, o
+    sea ningún lock. Un par sin ':' ni '%' queda igual que siempre."""
+    for user, token in (("alejo", "a:1"), ("alejo", "x:123:AABBCCDDEEFF"), ("a:b", "t0k"), ("al", "50%"),
+                        ("al", "%3A"), ("al", "%25:%"), ("alejo", "t0k")):
+        for lock in (locks.Lock(user, token), locks.Lock(user, token, FUTURE, "AABBCCDDEEFF")):
+            text = locks.format_lock(lock)
+            assert text.count(":") == (1 if lock.expires is None else 3), text
+            assert locks.parse(text) == lock, text
+    assert locks.format_lock(locks.Lock("alejo", "t0k")) == "alejo:t0k"
+    assert locks.parse("alejo:a:b") == locks.Lock("alejo", "a:b")            # lock viejo con ':' literal
+    assert locks.valid_credential("a:b") and not locks.valid_credential("a\nb") and not locks.valid_credential("")
+
+
 def test_read_ignores_expired_without_deleting():
     """Borrarlo al leer era una carrera: entre la lectura y el borrado otro
     proceso escribía una reserva nueva, y se perdía."""

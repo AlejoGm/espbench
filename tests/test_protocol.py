@@ -213,9 +213,15 @@ def test_valid_reservation_of_other_user_blocks(esp_base):
     assert request(flash_header(b"x"))[0]["error"] == "device_locked"
 
 
-def test_lock_token_with_colon_is_rejected():
-    msgs = request(flash_header(b"x", lock_token="a:1"))
-    assert msgs[0]["error"] == "lock_credentials_required" and "':'" in msgs[0]["message"]
+def test_lock_token_with_colon_is_accepted_again(esp_base):
+    """Los .flashcfg.json viejos con ':' en lock_token vuelven a flashear (en el
+    archivo del lock va escapado). Antes: lock_credentials_required."""
+    payload = make_artifact()
+    assert final(request(flash_header(payload, lock_token="a:1"), payload))["ok"]
+    assert (esp_base / "locks" / "ttyUSB0").read_text() == "alejo:a%3A1"
+    assert final(request(flash_header(payload, lock_token="a:1"), payload))["ok"]      # el mismo par pasa
+    assert request(flash_header(b"x", lock_token="a:2"))[0]["error"] == "token_mismatch"
+    assert request(flash_header(b"x", lock_token="a\n1"))[0]["error"] == "lock_credentials_required"
 
 
 # ---------- flash ----------
