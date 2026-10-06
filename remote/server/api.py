@@ -289,14 +289,15 @@ async def device_reserve(tty: str, body: dict = Body(...), authorization: Option
         _fail(400, "bad_request", f"ttl_s entre 1 y {RESERVE_MAX_S}")
     state = runstate.read(tty) or {}
     _check_expect_mac(state, body.get("expect_mac"))
-    lock = locks.read(tty)
-    if lock is not None and lock.user != user:
-        detail = f" hasta {lock.expires_iso()}" if lock.reservation else ""
-        _fail(409, "locked", f"la tiene '{lock.user}'{detail}")
-    if lock is not None and lock.token != token:
-        _fail(403, "token_mismatch", "par user/token incorrecto")
-    new = locks.Lock(user, token, int(time.time()) + ttl, locks.normalize_mac(state.get("mac")))
-    locks.write(tty, new)
+    with locks.exclusive(tty):
+        lock = locks.read(tty)
+        if lock is not None and lock.user != user:
+            detail = f" hasta {lock.expires_iso()}" if lock.reservation else ""
+            _fail(409, "locked", f"la tiene '{lock.user}'{detail}")
+        if lock is not None and lock.token != token:
+            _fail(403, "token_mismatch", "par user/token incorrecto")
+        new = locks.Lock(user, token, int(time.time()) + ttl, locks.normalize_mac(state.get("mac")))
+        locks.write(tty, new)
     _record(state, "reserve", {"user": user, "expires": new.expires_iso()})
     return {"ok": True, "tty": tty, "user": user, "expires": new.expires_iso(), "mac": state.get("mac")}
 
@@ -307,14 +308,23 @@ async def device_release(tty: str, body: dict = Body(...), authorization: Option
     _require_auth(authorization)
     _check_tty(tty)
     user, token = _creds(body)
-    lock = locks.read(tty)
+    lock = _drop_lock(tty, user, token)
     if lock is None:
         return {"ok": True, "message": "no estaba bloqueado"}
-    if not lock.owned_by(user, token):
-        _fail(403, "token_mismatch", "par user/token incorrecto")
-    locks.remove(tty)
     _record(runstate.read(tty) or {}, "release", {"user": user, "expires": lock.expires_iso()})
     return {"ok": True, "message": "liberado"}
+
+
+def _drop_lock(tty: str, user: str, token: str) -> Optional[locks.Lock]:
+    """Borra el lock vigente si es del par (403 si no). None si no había."""
+    with locks.exclusive(tty):
+        lock = locks.read(tty)          # uno vencido no existe
+        if lock is None:
+            return None
+        if not lock.owned_by(user, token):
+            _fail(403, "token_mismatch", "par user/token incorrecto")
+        locks.remove(tty)
+        return lock
 
 
 @app.get("/api/device/{tty:path}")
@@ -346,16 +356,9 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
 async def device_unlock(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
     _require_auth(authorization)
     _check_tty(tty)
-    lock_user = body.get("lock_user", "").strip()
-    lock_token = body.get("lock_token", "").strip()
-    if not lock_user or not lock_token:
-        raise HTTPException(status_code=400, detail="lock_user y lock_token requeridos")
-    lock = locks.read(tty)          # uno vencido ya no existe
-    if lock is None:
+    user, token = _creds(body)
+    if _drop_lock(tty, user, token) is None:
         return {"ok": True, "message": "no estaba bloqueado"}
-    if not lock.owned_by(lock_user, lock_token):
-        raise HTTPException(status_code=403, detail="par user/token incorrecto")
-    locks.remove(tty)
     return {"ok": True, "message": "desbloqueado"}
 
 

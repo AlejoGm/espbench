@@ -27,10 +27,47 @@ def test_parse_and_format_reservation():
     assert locks.format_lock(locks.Lock("a", "b", None, "AABBCCDDEEFF")) == "a:b"
 
 
-def test_read_deletes_expired():
+def test_read_ignores_expired_without_deleting():
+    """Borrarlo al leer era una carrera: entre la lectura y el borrado otro
+    proceso escribía una reserva nueva, y se perdía."""
     locks.write("ttyUSB0", locks.Lock("alejo", "t0k", PAST))
     assert locks.read("ttyUSB0") is None
-    assert not paths.lock_file("ttyUSB0").exists()
+    assert paths.lock_file("ttyUSB0").exists()
+
+
+def test_read_expired_does_not_delete_a_fresh_lock(monkeypatch):
+    locks.write("ttyUSB0", locks.Lock("viejo", "t", PAST))
+    real_parse = locks.parse
+
+    def racing_parse(text):        # el otro proceso escribe justo después de que leímos
+        lock = real_parse(text)
+        locks.write("ttyUSB0", locks.Lock("nuevo", "t2", FUTURE))
+        return lock
+    monkeypatch.setattr(locks, "parse", racing_parse)
+    assert locks.read("ttyUSB0") is None
+    monkeypatch.setattr(locks, "parse", real_parse)
+    assert locks.read("ttyUSB0").user == "nuevo"
+
+
+def test_exclusive_serializes_between_holders():
+    import threading
+    order = []
+    inside = threading.Event()
+
+    def holder():
+        with locks.exclusive("ttyUSB0"):
+            inside.set()
+            time.sleep(0.2)
+            order.append("primero")
+    t = threading.Thread(target=holder)
+    t.start()
+    inside.wait(2)
+    with locks.exclusive("ttyUSB0"):           # otro fd: flock lo bloquea hasta que suelte
+        order.append("segundo")
+    t.join()
+    assert order == ["primero", "segundo"]
+    lck = paths.lock_file("ttyUSB0").with_name("ttyUSB0.lck")
+    assert lck.stat().st_mode & 0o777 == 0o666
 
 
 def test_read_keeps_valid_and_permanent():

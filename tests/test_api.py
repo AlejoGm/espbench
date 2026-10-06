@@ -110,7 +110,7 @@ def test_unlock_expired_reservation_is_like_no_lock():
     paths.lock_file("ttyUSB0").parent.mkdir(parents=True)
     paths.lock_file("ttyUSB0").write_text("alejo:t0k:1000")
     r = run(api.device_unlock("ttyUSB0", {"lock_user": "juan", "lock_token": "x"}))
-    assert r["message"] == "no estaba bloqueado" and not paths.lock_file("ttyUSB0").exists()
+    assert r["message"] == "no estaba bloqueado"
 
 
 # ---------- escrituras: reservas, expect_mac, evento send (fase 2) ----------
@@ -396,3 +396,25 @@ def test_non_ascii_bearer_is_401_not_500(tmux):
     with pytest.raises(HTTPException) as e:
         run(api.device_send("ttyUSB0", {"text": "x"}, authorization="Bearer ñandú"))
     assert err(e) == (401, "auth")
+
+
+def test_reserve_waits_for_the_lock_of_another_process(monkeypatch):
+    """reserve lee-decide-escribe dentro de locks.exclusive: un flash que toma el
+    lock en el medio no se pisa."""
+    import threading, time as _t
+    from server import locks, protocol
+    board()
+    inside, results = threading.Event(), []
+
+    def flash_in_other_process():
+        with locks.exclusive("ttyUSB0"):
+            inside.set()
+            _t.sleep(0.2)
+            locks.write("ttyUSB0", locks.Lock("juan", "x"))      # LockStore.acquire de juan
+    t = threading.Thread(target=flash_in_other_process)
+    t.start()
+    inside.wait(2)
+    with pytest.raises(HTTPException) as e:
+        reserve()
+    t.join()
+    assert err(e) == (409, "locked") and locks.read("ttyUSB0").user == "juan"

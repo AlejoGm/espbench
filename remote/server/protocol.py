@@ -140,11 +140,12 @@ class LockStore:
     def unlock(self, user: str, token: str) -> dict:
         if not user or not token:
             return {"ok": False, "error": "lock_credentials_required"}
-        lock = locks.read(self.tty_name)
-        if lock is not None:
-            if not lock.owned_by(user, token):
-                return {"ok": False, "error": "token_mismatch", "message": "Par user/token incorrecto"}
-            locks.remove(self.tty_name)
+        with locks.exclusive(self.tty_name):
+            lock = locks.read(self.tty_name)
+            if lock is not None:
+                if not lock.owned_by(user, token):
+                    return {"ok": False, "error": "token_mismatch", "message": "Par user/token incorrecto"}
+                locks.remove(self.tty_name)
         return {"ok": True, "message": "desbloqueado"}
 
     def acquire(self, user: str, token: str) -> None:
@@ -155,19 +156,20 @@ class LockStore:
         if not locks.valid_credential(user) or not locks.valid_credential(token):
             raise RequestRejected({"ok": False, "error": "lock_credentials_required",
                                    "message": "lock_user y lock_token no pueden tener ':'"})
-        lock = locks.read(self.tty_name)
-        if lock is not None:
-            if lock.user != user:
-                taglog.warn(TAG, f"device bloqueado por '{lock.user}', rechazando '{user}'")
-                raise RequestRejected({"ok": False, "error": "device_locked",
-                                       "message": f"Dispositivo bloqueado por '{lock.user}'"})
-            if lock.token != token:
-                taglog.warn(TAG, f"token incorrecto para '{user}'")
-                raise RequestRejected({"ok": False, "error": "token_mismatch", "message": "Token incorrecto"})
-            if lock.reservation:
-                taglog.info(TAG, f"lock de '{user}': su reserva sigue (vence {lock.expires_iso()})")
-                return
-        locks.write(self.tty_name, locks.Lock(user, token))
+        with locks.exclusive(self.tty_name):
+            lock = locks.read(self.tty_name)
+            if lock is not None:
+                if lock.user != user:
+                    taglog.warn(TAG, f"device bloqueado por '{lock.user}', rechazando '{user}'")
+                    raise RequestRejected({"ok": False, "error": "device_locked",
+                                           "message": f"Dispositivo bloqueado por '{lock.user}'"})
+                if lock.token != token:
+                    taglog.warn(TAG, f"token incorrecto para '{user}'")
+                    raise RequestRejected({"ok": False, "error": "token_mismatch", "message": "Token incorrecto"})
+                if lock.reservation:
+                    taglog.info(TAG, f"lock de '{user}': su reserva sigue (vence {lock.expires_iso()})")
+                    return
+            locks.write(self.tty_name, locks.Lock(user, token))
         taglog.info(TAG, f"lock adquirido por '{user}'")
 
 

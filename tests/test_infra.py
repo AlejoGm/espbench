@@ -188,6 +188,25 @@ def test_tmux_keeps_reservation_on_new_session(infra):
     assert (infra.base / "locks" / "ttyUSB4").exists()
 
 
+@pytest.mark.parametrize("content,kept", [
+    ("alejo:t0k", False),
+    ("alejo:t0k:4102444800", True),
+    ("alejo:t0k:4102444800:aabbccddeeff\n", True),
+    ("alejo:a:b", False),                 # token viejo con ':': permanente (locks.parse igual)
+    ("alejo:a:b:4102444800", False),
+    ("alejo:t0k:4102444800:xyz", False),
+])
+def test_tmux_lock_rule_matches_locks_parse(infra, content, kept):
+    import sys
+    sys.path.insert(0, str(INFRA.parent))
+    from server import locks
+    infra.plug("ttyUSB3")
+    (infra.base / "locks" / "ttyUSB3").write_text(content)
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    assert (infra.base / "locks" / "ttyUSB3").exists() == kept
+    assert locks.parse(content).reservation == kept
+
+
 # ---------- devremote ----------
 
 def test_devremote_scan_starts_missing(infra):

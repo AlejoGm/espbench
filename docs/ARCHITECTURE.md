@@ -276,9 +276,14 @@ una **reserva** (`POST /api/device/{tty}/reserve`, §8), con la MAC de la placa
   dueño de la reserva pasa, y `LockStore.acquire` conserva el vencimiento y la MAC
   (no la convierte en un lock permanente).
 - **Vencido = inexistente** en todos lados (`LockStore`, `DeviceRegistry`, api):
-  `locks.read()` lo borra al leerlo.
+  `locks.read()` lo ignora y la próxima escritura lo pisa. No se borra al leerlo
+  (entre la lectura y el borrado otro proceso podía escribir una reserva nueva).
+- **Exclusión**: todo leer-decidir-escribir (`LockStore.acquire`/`unlock`,
+  `/reserve`, `/release`, `/unlock`, la limpieza al arrancar) va dentro de
+  `locks.exclusive(tty)`: `flock` sobre `locks/<tty>.lck` (666).
 - **Reconexión**: `esp32_tmux.sh` borra solo los locks sin vencimiento (los del
-  flash, como siempre). Una reserva vigente sobrevive el replug; al arrancar,
+  flash, como siempre; misma regla que `locks.parse`: un lock viejo con `:` en el
+  token es permanente). Una reserva vigente sobrevive el replug; al arrancar,
   `remote_esp32.py` la borra si su MAC no es la de la placa que encontró (los
   `ttyUSB` se renumeraron).
 - Ni `user` ni `token` pueden tener `:` (el flash lo rechaza con

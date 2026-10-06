@@ -394,7 +394,6 @@ class TestLocks:
         with patch("subprocess.run", side_effect=mock_tmux_down):
             d = registry.get_device("ttyUSB0")
         assert d.lock_user is None and d.lock_expires is None
-        assert not (tmp_path / "locks" / "ttyUSB0").exists()
 
 
 class TestLiveState:
