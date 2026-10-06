@@ -243,3 +243,46 @@ def test_missing_repo(bench):
     (bench.base / "update.conf").write_text("PIN=\n")
     r = bench.run("--auto")
     assert r.returncode == 1 and "REPO_DIR" in bench.status()["message"]
+
+
+# ---------- --setup (lo llama install.sh) ----------
+
+def conf_lines(bench):
+    return (bench.base / "update.conf").read_text().splitlines()
+
+
+def test_setup_on_empty_conf_pins_the_branch(bench):
+    """El bug de sensipi04: update.conf vacío (touch) y un grep sin match abortaba el install."""
+    (bench.base / "update.conf").write_text("")
+    git(bench.repo, "checkout", "-q", "-b", "feat/x")
+    r = bench.run("--setup", str(bench.repo))
+    assert r.returncode == 0, r.stderr
+    assert conf_lines(bench) == [f"REPO_DIR={bench.repo}", "PIN=feat/x"]
+    assert f"REPO_DIR={bench.repo}" in r.stdout
+
+
+def test_setup_without_conf_on_a_release_follows_releases(bench):
+    (bench.base / "update.conf").unlink()
+    bench.commit("0.2.0", tag="v0.2.0")
+    git(bench.repo, "fetch", "-q", "--tags")
+    git(bench.repo, "checkout", "-q", "--detach", "v0.2.0")
+    assert bench.run("--setup", str(bench.repo)).returncode == 0
+    assert conf_lines(bench) == [f"REPO_DIR={bench.repo}", "PIN="]
+
+
+def test_setup_detached_commit_pins_the_commit(bench):
+    (bench.base / "update.conf").unlink()
+    git(bench.repo, "checkout", "-q", "--detach", "HEAD")
+    bench.run("--setup", str(bench.repo))
+    assert conf_lines(bench)[1] == "PIN=" + git(bench.repo, "rev-parse", "--short", "HEAD")
+
+
+def test_setup_keeps_pin_and_moves_repo_dir(bench):
+    (bench.base / "update.conf").write_text("REPO_DIR=/viejo\nPIN=\n")
+    bench.run("--setup", str(bench.repo))       # en main, pero ya había PIN (vacío): no se toca
+    assert sorted(conf_lines(bench)) == sorted([f"REPO_DIR={bench.repo}", "PIN="])
+
+
+def test_setup_not_a_repo(bench):
+    r = bench.run("--setup", str(bench.tmp))
+    assert r.returncode == 1 and "no es un repo" in r.stderr

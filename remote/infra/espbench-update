@@ -6,6 +6,8 @@
 #   espbench-update --ref <ref>   manual: a una rama, tag o commit, y queda fijo ahí (PIN) para probar
 #   espbench-update --auto        timer (boot y nocturno): al último release; nada si hay PIN o el bench está ocupado
 #   espbench-update --force ...   manual aunque una placa esté flasheando o reservada
+#   espbench-update --setup <repo> (lo llama install.sh) anota REPO_DIR; en una instalación nueva, si el clone no
+#                                 está en un release, deja el PIN en su rama (o commit)
 #
 # Release = tag vX.Y.Z. Config: $ESP_BASE/update.conf (REPO_DIR, PIN; lo escribe install.sh).
 # Estado del último update: $ESP_BASE/update_status.json (lo lee GET /api/update). Log: $ESP_BASE/update.log.
@@ -32,14 +34,15 @@ PY="${ESPBENCH_PYTHON:-$ESP_BASE/venv/bin/python}"
 PYPATH="${ESPBENCH_PYTHONPATH:-$ESP_BASE}"
 RELEASE_GLOB='v[0-9]*.[0-9]*.[0-9]*'
 
-mode=manual; target_kind=default; ref=""; force=0
+mode=manual; target_kind=default; ref=""; force=0; setup_repo=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --auto)    mode=auto ;;
         --release) target_kind=release ;;
         --ref)     target_kind=ref; ref="${2:?--ref necesita una rama, tag o commit}"; shift ;;
         --force)   force=1 ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        --setup)   setup_repo="${2:?--setup necesita el path del clone}"; shift ;;
+        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
         *)         echo "opción desconocida: $1" >&2; exit 2 ;;
     esac
     shift
@@ -78,6 +81,26 @@ finish() {   # finish STATE MESSAGE EXIT_CODE
     log "$1: $2"
     exit "$3"
 }
+
+# ---------- --setup: update.conf para install.sh ----------
+if [ -n "$setup_repo" ]; then
+    git -C "$setup_repo" rev-parse --git-dir >/dev/null 2>&1 || { echo "no es un repo git: $setup_repo" >&2; exit 1; }
+    mkdir -p "$ESP_BASE"
+    conf_set REPO_DIR "$setup_repo"
+    if ! grep -q '^PIN=' "$CONF"; then
+        # Instalación nueva fuera de un release: fija en su rama, así el update automático no la
+        # mueve a un release (quizás más viejo) sin que nadie lo pida.
+        pin=""
+        if ! git -C "$setup_repo" describe --exact-match --tags --match "$RELEASE_GLOB" HEAD >/dev/null 2>&1; then
+            pin="$(git -C "$setup_repo" symbolic-ref -q --short HEAD 2>/dev/null \
+                   || git -C "$setup_repo" rev-parse --short HEAD 2>/dev/null)"
+        fi
+        conf_set PIN "$pin"
+    fi
+    chmod 644 "$CONF"
+    cat "$CONF"
+    exit 0
+fi
 
 started_at="$(python3 -c 'import datetime; print(datetime.datetime.now().astimezone().replace(microsecond=0).isoformat())')"
 

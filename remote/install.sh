@@ -167,22 +167,13 @@ cp "$REMOTE_DIR/infra/espbench-update" /usr/local/bin/.espbench-update.new
 chmod +x /usr/local/bin/.espbench-update.new
 mv -f /usr/local/bin/.espbench-update.new /usr/local/bin/espbench-update
 
-# update.conf: dónde está el clone (REPO_DIR, siempre el de este install) y el PIN.
-# Instalación nueva: si el clone no está en un release, queda fijo en su rama (o
-# commit), así el update automático no lo mueve a un release más viejo.
-UPDATE_CONF=/opt/esp/update.conf
-touch "$UPDATE_CONF"
-{ grep -v '^REPO_DIR=' "$UPDATE_CONF"; echo "REPO_DIR=$REPO_DIR"; } > "$UPDATE_CONF.tmp"
-mv -f "$UPDATE_CONF.tmp" "$UPDATE_CONF"
-if ! grep -q '^PIN=' "$UPDATE_CONF"; then
-    pin=""
-    if ! git -C "$REPO_DIR" describe --exact-match --tags --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD &>/dev/null; then
-        pin="$(git -C "$REPO_DIR" symbolic-ref -q --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
-    fi
-    echo "PIN=$pin" >> "$UPDATE_CONF"
+# update.conf: dónde está el clone (REPO_DIR) y el PIN. Lo escribe espbench-update
+# (tests/test_update.py): antes estaba acá y un grep sin match abortaba el install (set -e).
+if conf="$(/usr/local/bin/espbench-update --setup "$REPO_DIR" 2>&1)"; then
+    info "update.conf: $(echo $conf)"
+else
+    warn "no se pudo escribir /opt/esp/update.conf ($conf): el update automático no va a andar"
 fi
-chmod 644 "$UPDATE_CONF"
-info "update.conf: $(tr '\n' ' ' < "$UPDATE_CONF")"
 
 # ---------------------------------------------------------------------------
 # 8. Install udev rules
