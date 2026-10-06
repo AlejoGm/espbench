@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="style.css">
     <script src="espbench.js"></script>
     <script src="auth.js"></script>
+    <script src="meta.js"></script>
 </head>
 <body>
     <header class="home-header">
@@ -17,7 +18,7 @@
             </div>
             <div class="header-summary" id="summary"></div>
             <div class="header-meta">
-                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / , @usuario )" autocomplete="off">
+                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / , @usuario, chip:esp32-s3 )" autocomplete="off">
                 <span id="version-badge" class="version-badge"></span>
                 <span class="author-tag">by AlejoGm</span>
             </div>
@@ -101,8 +102,10 @@
             card.dataset.lockUser = lock ? lock.user : '';
             card.dataset.lockKind = lock ? (lock.reservation ? 'reserva' : 'flash') : '';
             card.dataset.search = [title, device.tty_name, device.sn, device.mac, device.hw_model,
-                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
+                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user,
+                                   device.note, device.note_by]
                                   .filter(Boolean).join(' ').toLowerCase();
+            card.dataset.props = JSON.stringify(device.props || {});
 
             var hwModelRow = device.hw_model ? row('HW', escapeHtml(device.hw_model)) : '';
             var fwRow = EB.fwRows(device).map(function(r) {
@@ -131,6 +134,7 @@
                     '</div>' +
                 '</div>' +
                 healthHtml(device) +
+                metaHtml(device) +
                 '<div class="card-body">' +
                     hwModelRow + fwRow +
                     row('Último flash', lastFlashHtml(device), ' title="' + escapeHtml(lastFlash) + '"') +
@@ -144,6 +148,8 @@
             card.querySelector('.btn-copy').addEventListener('click', function() {
                 copyConfig(device);
             });
+
+            bindMeta(card, device);
 
             if (device.mac) {
                 var ttyName = device.tty_name;
@@ -160,6 +166,37 @@
             }
 
             return card;
+        }
+
+        // Nota (destacada) y propiedades (chips; click filtra) de la card, con sus botones de edición.
+        function metaHtml(device) {
+            if (!device.mac) return '';
+            var note = EB.noteHtml(device);
+            var chips = EB.propChipsHtml(device.props, EBMeta.catalog());
+            var noteTitle = note ? ' title="' + escapeHtml(EB.noteInfo(device).title) + '"' : '';
+            return '<div class="card-meta">' +
+                (note ? '<div class="card-note"' + noteTitle + '><span class="note-icon">✎</span> ' + note + '</div>' : '') +
+                '<div class="prop-row">' + chips +
+                    '<button class="meta-btn" data-act="props" title="Propiedades: chip, conectividad, estado…">' +
+                        (chips ? '◇' : '◇ props') + '</button>' +
+                    '<button class="meta-btn" data-act="note" title="' + (note ? 'Editar la nota' : 'Agregar una nota') + '">' +
+                        (note ? '✎' : '✎ nota') + '</button>' +
+                '</div>' +
+                '<div class="meta-editor"></div>' +
+            '</div>';
+        }
+
+        function bindMeta(card, device) {
+            var editor = card.querySelector('.meta-editor');
+            if (!editor) return;
+            function done(changed) { editor.innerHTML = ''; if (changed) fetchDevices(); }
+            card.querySelectorAll('.meta-btn[data-act]').forEach(function(b) {
+                b.addEventListener('click', function() {
+                    if (EBMeta.editing()) return;
+                    if (b.dataset.act === 'note') EBMeta.noteEditor(editor, device, done);
+                    else EBMeta.propsEditor(editor, device, done);
+                });
+            });
         }
 
         function startRename(ttyName, mac, currentKey) {
@@ -296,7 +333,7 @@
         }
 
         function renderDevices(devices) {
-            if (_renamingTty !== null) return;
+            if (_renamingTty !== null || EBMeta.editing()) return;
             var known       = document.getElementById('cards-known');
             var unknown     = document.getElementById('cards-unknown');
             var unknownWrap = document.getElementById('cards-unknown-wrap');
@@ -348,8 +385,10 @@
         function applySearch() {
             var q = document.getElementById('search').value.trim().toLowerCase();
             document.querySelectorAll('.device-card').forEach(function(card) {
+                var props = {};
+                try { props = JSON.parse(card.dataset.props || '{}'); } catch (e) {}
                 card.classList.toggle('hidden', !EB.searchMatch(q, card.dataset.search, card.dataset.lockUser,
-                                                                card.dataset.lockKind));
+                                                                card.dataset.lockKind, props));
             });
         }
 
@@ -358,13 +397,15 @@
         document.addEventListener('click', function(e) {
             var b = e.target.closest('.lock-badge');
             if (b) { setSearch('@' + b.dataset.user); return; }
+            var chip = e.target.closest('.prop-chip');
+            if (chip) { setSearch(chip.dataset.filter); return; }
             if (e.target.closest('.sum-locked')) setSearch('lock:reserva');
             else if (e.target.closest('.sum-flashlock')) setSearch('lock:flash');
         });
         setInterval(tickLocks, 1000);
         document.addEventListener('keydown', function(e) {
             var search = document.getElementById('search');
-            if (e.key === '/' && document.activeElement !== search && document.activeElement.tagName !== 'INPUT') {
+            if (e.key === '/' && document.activeElement !== search && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) {
                 e.preventDefault();
                 search.focus();
             }
@@ -386,7 +427,10 @@
             })
             .catch(function() {});
 
-        fetchDevices();
+        // ?q=chip:esp32-s3 (los chips de device.html llevan acá con el filtro puesto)
+        var q0 = new URLSearchParams(location.search).get('q');
+        if (q0) document.getElementById('search').value = q0;
+        EBMeta.loadCatalog().then(fetchDevices);
         setInterval(fetchDevices, 5000);
     </script>
 </body>

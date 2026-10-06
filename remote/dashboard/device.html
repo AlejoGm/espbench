@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="style.css">
     <script src="espbench.js"></script>
     <script src="auth.js"></script>
+    <script src="meta.js"></script>
 </head>
 <body class="device-page">
 
@@ -25,6 +26,14 @@
             <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
             <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)">⟳ Sesión</button>
         </div>
+    </div>
+
+    <div class="device-meta hidden" id="device-meta">
+        <span class="card-note hidden" id="device-note"></span>
+        <span class="prop-row" id="device-props"></span>
+        <button class="meta-btn" id="btn-props" title="Propiedades: chip, conectividad, estado…">◇ props</button>
+        <button class="meta-btn" id="btn-note" title="Agregar una nota">✎ nota</button>
+        <div class="meta-editor" id="device-meta-editor"></div>
     </div>
 
     <div class="term-toolbar">
@@ -465,6 +474,7 @@
                         $('serial-text').placeholder = busy ? 'Device ocupado (' + STATE_LABELS[d.state] + ')…'
                                                             : 'Enviar al serial del device…  (↑↓ historial)';
                     }
+                    renderMeta(d);
                     $('device-name').textContent = name;
                     document.title = 'espbench — ' + name;
                     $('device-badges').innerHTML = badges.join('');
@@ -475,6 +485,41 @@
                 })
                 .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
         }
+
+        // ── Nota y propiedades (meta.js edita; click en un chip → la home filtrada) ──
+        var metaDevice = null;
+
+        function renderMeta(d) {
+            if (EBMeta.editing()) return;
+            metaDevice = d && d.mac ? d : null;
+            $('device-meta').classList.toggle('hidden', !metaDevice);
+            if (!metaDevice) return;
+            var note = EB.noteHtml(d);
+            $('device-note').innerHTML = note ? '<span class="note-icon">✎</span> ' + note : '';
+            $('device-note').title = note ? EB.noteInfo(d).title : '';
+            $('device-note').classList.toggle('hidden', !note);
+            $('device-props').innerHTML = EB.propChipsHtml(d.props, EBMeta.catalog());
+            $('btn-note').textContent = note ? '✎' : '✎ nota';
+            $('btn-note').title = note ? 'Editar la nota' : 'Agregar una nota';
+            $('btn-props').textContent = d.props && Object.keys(d.props).length ? '◇' : '◇ props';
+        }
+
+        function metaDone(changed) {
+            $('device-meta-editor').innerHTML = '';
+            if (changed) loadDeviceInfo();
+        }
+
+        $('btn-note').onclick = function() {
+            if (metaDevice && !EBMeta.editing()) EBMeta.noteEditor($('device-meta-editor'), metaDevice, metaDone);
+        };
+        $('btn-props').onclick = function() {
+            if (metaDevice && !EBMeta.editing()) EBMeta.propsEditor($('device-meta-editor'), metaDevice, metaDone);
+        };
+        $('device-props').onclick = function(e) {
+            var chip = e.target.closest('.prop-chip');
+            if (chip) location.href = './?q=' + encodeURIComponent(chip.dataset.filter);
+        };
+        EBMeta.loadCatalog();
 
         // ── Historial: flasheos y sesiones ────────────────────────────────────
         var sideTab = 'events';
@@ -872,7 +917,7 @@
             $('serial-form').addEventListener('submit', sendSerial);
 
             document.addEventListener('keydown', function(e) {
-                var typing = document.activeElement && document.activeElement.tagName === 'INPUT';
+                var typing = document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
                 if (e.key === 'Escape') {
                     if (!$('viewer').classList.contains('hidden')) closeViewer();
                     else if (document.activeElement === $('filter')) { $('filter').value = ''; filterText = ''; refilter(); $('filter').blur(); }

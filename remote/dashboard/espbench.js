@@ -314,15 +314,155 @@
         return who + '\n¿' + action + ' igual? Queda registrado como forzado.';
     }
 
-    // Búsqueda de la home: texto libre, "@usuario" (solo el usuario del lock;
-    // "@" solo = cualquier placa con lock) o "lock:reserva" / "lock:flash" (los
-    // contadores del header). lockKind: 'reserva' | 'flash' | ''.
-    function searchMatch(q, text, lockUser, lockKind) {
+    // Búsqueda de la home: texto libre (nombre, SN, firmware, nota...), "@usuario"
+    // (solo el usuario del lock; "@" solo = cualquier placa con lock), "lock:reserva" /
+    // "lock:flash" (los contadores del header) y propiedades "cat:valor" (el click en un
+    // chip; "cat:" = con cualquier valor), combinables con texto: "chip:esp32-s3 lte".
+    // lockKind: 'reserva' | 'flash' | ''. props: {cat: valor | [valores]}.
+    function searchMatch(q, text, lockUser, lockKind, props) {
         q = (q || '').trim().toLowerCase();
         if (!q) return true;
         if (q === 'lock:reserva' || q === 'lock:flash') return lockKind === q.slice(5);
         if (q.charAt(0) === '@') return !!lockUser && lockUser.toLowerCase().indexOf(q.slice(1)) >= 0;
-        return (text || '').indexOf(q) >= 0;
+        var rest = [];
+        var ok = q.split(/\s+/).every(function (tok) {
+            var m = /^([a-z_]+):(.*)$/.exec(tok);
+            if (!m || m[1] === 'lock') { rest.push(tok); return true; }
+            var have = propValues((props || {})[m[1]]);
+            return m[2] ? have.indexOf(m[2]) >= 0 : have.length > 0;
+        });
+        return ok && (text || '').indexOf(rest.join(' ')) >= 0;
+    }
+
+    // ── Nota y propiedades de la placa (/api/devices: note*, props; /api/properties) ──
+
+    function propValues(v) { return Array.isArray(v) ? v : (v ? [v] : []); }
+
+    // Nota para mostrar, o null: {text, by, ago, title}. note_at viene con la zona de la Pi.
+    function noteInfo(d, now) {
+        if (!d || !d.note) return null;
+        var ago = d.note_at ? relTime(d.note_at, now) : null;
+        var at = d.note_at ? d.note_at.replace('T', ' ').slice(0, 16) : '';
+        return {text: d.note, by: d.note_by || '', ago: ago || '',
+                title: 'Nota' + (d.note_by ? ' de ' + d.note_by : '') + (at ? ' · ' + at : '') + '\n' + d.note};
+    }
+
+    // Línea de la nota (card y header): "✎ texto — juan · hace 5 min". Todo escapado.
+    function noteHtml(d, now) {
+        var n = noteInfo(d, now);
+        if (!n) return '';
+        var meta = [n.by, n.ago].filter(Boolean).join(' · ');
+        return '<span class="note-text">' + escapeHtml(n.text) + '</span>' +
+               (meta ? ' <span class="note-meta">— ' + escapeHtml(meta) + '</span>' : '');
+    }
+
+    var NOTE_MAX = 200;
+
+    // Validación de la nota antes de mandarla (la misma regla que board_meta.clean_note).
+    function noteCheck(text) {
+        var t = String(text == null ? '' : text).trim();
+        if (t.length > NOTE_MAX) return {ok: false, text: t, error: 'más de ' + NOTE_MAX + ' caracteres'};
+        if (/[\u0000-\u001f\u007f-\u009f]/.test(t)) return {ok: false, text: t, error: 'sin saltos de línea ni tabs'};
+        return {ok: true, text: t, error: null};
+    }
+
+    // Unión de catálogos (bench-master: benches con valores distintos). Mismo formato que /api/properties.
+    function mergeCatalogs(lists) {
+        var out = [], idx = {};
+        (lists || []).forEach(function (cats) {
+            (cats || []).forEach(function (c) {
+                if (!idx[c.id]) { idx[c.id] = {id: c.id, label: c.label, multi: c.multi, values: []}; out.push(idx[c.id]); }
+                var have = idx[c.id].values.map(function (v) { return v.id; });
+                (c.values || []).forEach(function (v) { if (have.indexOf(v.id) < 0) idx[c.id].values.push(v); });
+            });
+        });
+        return out;
+    }
+
+    function findValue(catalog, cat, id) {
+        var c = (catalog || []).filter(function (x) { return x.id === cat; })[0];
+        var v = c ? (c.values || []).filter(function (x) { return x.id === id; })[0] : null;
+        return {cat: c || null, value: v || null};
+    }
+
+    // Chips de las propiedades, en el orden de las categorías del catálogo (las que no
+    // están, al final): [{cat, value, text, warn, filter, title, unknown}].
+    function propChips(props, catalog) {
+        props = props || {};
+        var order = (catalog || []).map(function (c) { return c.id; });
+        var cats = Object.keys(props).sort(function (a, b) {
+            var ia = order.indexOf(a), ib = order.indexOf(b);
+            return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib);
+        });
+        var out = [];
+        cats.forEach(function (cat) {
+            propValues(props[cat]).forEach(function (val) {
+                var f = findValue(catalog, cat, val);
+                var label = f.value ? f.value.label || val : val;
+                out.push({cat: cat, value: val, text: (f.cat ? f.cat.label : cat) + ': ' + label,
+                          warn: !!(f.value && (f.value.warn || f.value.exclude_pick)), filter: cat + ':' + val,
+                          unknown: !!catalog && !f.value,
+                          title: (f.value && f.value.desc ? f.value.desc + '\n' : '') + 'click: filtrar ' + cat + ':' + val});
+            });
+        });
+        return out;
+    }
+
+    function propChipsHtml(props, catalog) {
+        return propChips(props, catalog).map(function (p) {
+            return '<span class="prop-chip' + (p.warn ? ' prop-warn' : '') + (p.unknown ? ' prop-unknown' : '') +
+                   '" data-filter="' + escapeHtml(p.filter) + '" title="' + escapeHtml(p.title) + '">' +
+                   escapeHtml(p.text) + '</span>';
+        }).join('');
+    }
+
+    // Texto para el data-search de la card: "chip:esp32-s3 conectividad:lte ...".
+    function propsSearchText(props) {
+        return Object.keys(props || {}).map(function (cat) {
+            return propValues(props[cat]).map(function (v) { return cat + ':' + v; }).join(' ');
+        }).join(' ');
+    }
+
+    // Lo que necesita el editor: cada categoría con sus valores y cuáles tiene la placa
+    // (un valor que la placa tiene y ya no está en el catálogo aparece igual, para poder quitarlo).
+    function propsEditModel(props, catalog) {
+        props = props || {};
+        return (catalog || []).map(function (c) {
+            var have = propValues(props[c.id]);
+            var values = (c.values || []).map(function (v) {
+                return {id: v.id, label: v.label || v.id, desc: v.desc || '', warn: !!(v.warn || v.exclude_pick),
+                        checked: have.indexOf(v.id) >= 0};
+            });
+            have.forEach(function (id) {
+                if (!values.some(function (v) { return v.id === id; })) {
+                    values.push({id: id, label: id + ' (fuera del catálogo)', desc: '', warn: false, checked: true});
+                }
+            });
+            return {id: c.id, label: c.label || c.id, multi: !!c.multi, values: values};
+        });
+    }
+
+    // Cambios para PATCH {props: ...}: solo las categorías que cambiaron. selection: {cat: [ids]}.
+    // Una categoría sin valores va como null (quitarla); las de un valor, como string.
+    function propsPatch(before, selection, catalog) {
+        var multi = {};
+        (catalog || []).forEach(function (c) { multi[c.id] = !!c.multi; });
+        var out = {}, n = 0;
+        Object.keys(selection || {}).forEach(function (cat) {
+            var now = selection[cat] || [];
+            var was = propValues((before || {})[cat]);
+            var same = now.length === was.length && now.every(function (v) { return was.indexOf(v) >= 0; });
+            if (same) return;
+            out[cat] = now.length ? (multi[cat] ? now.slice() : now[0]) : null;
+            n++;
+        });
+        return n ? out : null;
+    }
+
+    // Slug de un valor nuevo (la regla de board_meta.VALUE_RE): null si no sirve.
+    function propValueId(text) {
+        var t = String(text || '').trim().toLowerCase().replace(/\s+/g, '-');
+        return /^[a-z0-9][a-z0-9._-]*$/.test(t) && t.length <= 24 ? t : null;
     }
 
     // ── Eventos (/api/board/{key}/events) ─────────────────────────────────
@@ -337,6 +477,8 @@
         command:   {icon: '⌘', label: 'comando'},
         reserve:   {icon: '🔒', label: 'reserva'},
         release:   {icon: '🔓', label: 'libera'},
+        note:      {icon: '✎', label: 'nota'},
+        props:     {icon: '◇', label: 'propiedades'},
         state:     {icon: '⇄', label: 'estado'},
         session:   {icon: '●', label: 'sesión'}
     };
@@ -377,6 +519,11 @@
         case 'release': return d.forced ? 'de ' + (d.user || '?') + ' · forzada' +
                                           (forcedBy(d) ? ' por ' + forcedBy(d) : '') : '';
         case 'session': return [d.tty, d.pid ? 'pid ' + d.pid : ''].filter(Boolean).join(' · ');
+        case 'note': return d.text ? '"' + d.text + '"' : 'borrada';
+        case 'props': return Object.keys(d.changes || {}).map(function (cat) {
+            var to = propValues(d.changes[cat].to);
+            return cat + (to.length ? '=' + to.join(',') : ' quitada');
+        }).join(' · ');
         }
         return '';
     }
@@ -733,6 +880,9 @@
     return {
         fmtDur: fmtDur, secondsUntil: secondsUntil, expiresText: expiresText, lockInfo: lockInfo,
         forceConfirmText: forceConfirmText, searchMatch: searchMatch,
+        propValues: propValues, noteInfo: noteInfo, noteHtml: noteHtml, noteCheck: noteCheck, NOTE_MAX: NOTE_MAX,
+        mergeCatalogs: mergeCatalogs, propChips: propChips, propChipsHtml: propChipsHtml,
+        propsSearchText: propsSearchText, propsEditModel: propsEditModel, propsPatch: propsPatch, propValueId: propValueId,
         EVENT_TYPES: EVENT_TYPES, EVENT_ORDER: EVENT_ORDER, eventDetail: eventDetail, eventView: eventView,
         eventCounts: eventCounts, eventContext: eventContext, cursorSession: cursorSession, parseCursor: parseCursor,
         safeType: safeType, mergeEvents: mergeEvents, backoffMs: backoffMs,

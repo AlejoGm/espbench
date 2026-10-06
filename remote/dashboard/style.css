@@ -1057,3 +1057,95 @@ body.hide-ts .terminal .ln-ts { display: none; }
     .search-input { width: 120px; }
     .device-card { width: 100%; }
 }
+
+/* ── Nota y propiedades de la placa (meta.js) ── */
+
+.card-meta { display: flex; flex-direction: column; gap: 6px; }
+
+.card-note {
+    background: rgba(210,153,34,0.10);
+    border: 1px solid #4a3a10;
+    border-left: 3px solid #d29922;
+    border-radius: 4px;
+    color: #e3b341;
+    font-size: 0.8rem;
+    padding: 4px 8px;
+    overflow-wrap: anywhere;
+}
+.note-icon { color: #d29922; }
+.note-text { color: #f0d58a; font-weight: 500; }
+.note-meta { color: #8b7a4a; font-size: 0.75rem; white-space: nowrap; }
+
+.prop-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+.prop-chip {
+    font-size: 0.7rem;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color: #a5b4fc;
+    background: rgba(99,102,241,0.10);
+    border: 1px solid #2f3166;
+    border-radius: 999px;
+    padding: 1px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.prop-chip:hover { border-color: #6366f1; color: #e0e7ff; }
+.prop-chip.prop-warn { color: #ff7b72; background: rgba(248,81,73,0.12); border-color: #5a2020; font-weight: 600; }
+.prop-chip.prop-unknown { color: #777; background: none; border-style: dashed; border-color: #333; }
+
+.meta-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: #555;
+    font-size: 0.72rem;
+    cursor: pointer;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: inherit;
+}
+.meta-btn:hover { color: #ccc; border-color: #333; background: #1e1e1e; }
+
+.meta-editor:empty { display: none; }
+.meta-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.note-input, .prop-new-form input, .props-edit select {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    height: 24px;
+    font-family: inherit;
+}
+.note-input { flex: 1; min-width: 12ch; }
+.note-input:focus, .prop-new-form input:focus, .props-edit select:focus { outline: none; border-color: #d29922; }
+.meta-err { color: #ff7b72; font-size: 0.75rem; }
+
+.props-edit {
+    flex-direction: column;
+    align-items: stretch;
+    background: #161616;
+    border: 1px solid #2e2e2e;
+    border-radius: 6px;
+    padding: 8px;
+    gap: 6px;
+}
+.prop-edit-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prop-edit-label { color: #666; font-size: 0.75rem; min-width: 92px; }
+.prop-edit-field { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1; }
+.prop-opt { font-size: 0.75rem; color: #aaa; display: inline-flex; gap: 3px; align-items: center; cursor: pointer; }
+.prop-opt.prop-warn { color: #ff7b72; }
+.prop-new-form { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.prop-edit-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
+
+/* device.html: barra de nota y propiedades bajo el header */
+.device-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 16px;
+    border-bottom: 1px solid #222;
+}
+.device-meta .meta-editor { flex-basis: 100%; }
+.device-meta .props-edit { max-width: 720px; }

@@ -466,3 +466,92 @@ test('basePath / wsUrl: directo y a través de bench-master', () => {
     assert.equal(EB.wsUrl({protocol: 'https:', host: 'localhost:8090', pathname: '/bench/b1/device.html'}, 'ws/device/x'),
                  'wss://localhost:8090/bench/b1/ws/device/x');
 });
+
+// ── Nota y propiedades ────────────────────────────────────────────────
+
+const CAT = [
+    {id: 'estado', label: 'estado', multi: false, values: [
+        {id: 'no-tocar', label: 'no tocar', desc: 'Nadie la usa', warn: true, exclude_pick: true},
+        {id: 'testeando', label: 'testeando', desc: ''}]},
+    {id: 'chip', label: 'chip', multi: false, values: [{id: 'esp32-s3', label: 'ESP32-S3', desc: 'S3'}]},
+    {id: 'conectividad', label: 'conectividad', multi: true, values: [{id: 'wifi', label: 'WiFi'}, {id: 'lte', label: 'LTE'}]},
+];
+
+test('noteInfo / noteHtml: quién, hace cuánto (con zona) y escapado', () => {
+    const now = Date.UTC(2026, 9, 6, 13, 5, 0);
+    const d = {note: '<b>no tocar</b> & "x"', note_by: 'ju<a>n', note_at: '2026-10-06T10:00:00-03:00'};
+    const n = EB.noteInfo(d, now);
+    assert.equal(n.ago, 'hace 5 min');
+    assert.ok(n.title.startsWith('Nota de ju<a>n · 2026-10-06 10:00'));
+    const h = EB.noteHtml(d, now);
+    assert.ok(h.includes('&lt;b&gt;no tocar&lt;/b&gt; &amp; &quot;x&quot;'));
+    assert.ok(h.includes('ju&lt;a&gt;n · hace 5 min'));
+    assert.ok(!h.includes('<b>'));
+    assert.equal(EB.noteInfo({note: null}), null);
+    assert.equal(EB.noteHtml({}), '');
+});
+
+test('noteCheck: la regla del server', () => {
+    assert.deepEqual(EB.noteCheck('  hola '), {ok: true, text: 'hola', error: null});
+    assert.equal(EB.noteCheck('a\nb').ok, false);
+    assert.equal(EB.noteCheck('x'.repeat(201)).ok, false);
+    assert.equal(EB.noteCheck('x'.repeat(200)).ok, true);
+    assert.equal(EB.noteCheck(null).text, '');
+});
+
+test('propChips: orden del catálogo, warn, desconocidos y escapado', () => {
+    const chips = EB.propChips({conectividad: ['lte', 'wifi'], estado: 'no-tocar', otra: 'x'}, CAT);
+    assert.deepEqual(chips.map(c => c.text), ['estado: no tocar', 'conectividad: LTE', 'conectividad: WiFi', 'otra: x']);
+    assert.deepEqual(chips.map(c => c.warn), [true, false, false, false]);
+    assert.equal(chips[3].unknown, true);
+    assert.equal(chips[1].filter, 'conectividad:lte');
+    const h = EB.propChipsHtml({chip: '<img>'}, CAT);
+    assert.ok(h.includes('chip: &lt;img&gt;') && !h.includes('<img>'));
+    assert.equal(EB.propChipsHtml({}, CAT), '');
+});
+
+test('searchMatch: propiedades cat:valor (click en un chip), con texto y la nota', () => {
+    const props = {chip: 'esp32-s3', conectividad: ['wifi', 'lte']};
+    const text = 'board1 testeando, no tocar';
+    assert.ok(EB.searchMatch('chip:esp32-s3', text, null, '', props));
+    assert.ok(EB.searchMatch('conectividad:lte chip:esp32-s3', text, null, '', props));
+    assert.ok(!EB.searchMatch('conectividad:ble', text, null, '', props));
+    assert.ok(EB.searchMatch('conectividad:', text, null, '', props));
+    assert.ok(!EB.searchMatch('estado:', text, null, '', props));
+    assert.ok(EB.searchMatch('chip:esp32-s3 board1', text, null, '', props));
+    assert.ok(!EB.searchMatch('chip:esp32-s3 board2', text, null, '', props));
+    assert.ok(EB.searchMatch('no tocar', text, null, '', props));        // la nota va en el texto
+    assert.ok(EB.searchMatch('lock:reserva', text, 'ana', 'reserva', props));
+    assert.ok(EB.propsSearchText(props) === 'chip:esp32-s3 conectividad:wifi conectividad:lte');
+});
+
+test('propsEditModel y propsPatch: solo lo que cambió, single como string, vacío = null', () => {
+    const before = {chip: 'esp32-s3', conectividad: ['wifi'], estado: 'viejo'};
+    const m = EB.propsEditModel(before, CAT);
+    assert.deepEqual(m.map(c => [c.id, c.multi]), [['estado', false], ['chip', false], ['conectividad', true]]);
+    assert.deepEqual(m[0].values.map(v => [v.id, v.checked, v.warn]),
+                     [['no-tocar', false, true], ['testeando', false, false], ['viejo', true, false]]);
+    assert.equal(EB.propsPatch(before, {chip: ['esp32-s3'], conectividad: ['wifi'], estado: ['viejo']}, CAT), null);
+    assert.deepEqual(EB.propsPatch(before, {chip: ['esp32-s3'], conectividad: ['lte', 'wifi'], estado: []}, CAT),
+                     {conectividad: ['lte', 'wifi'], estado: null});
+    assert.deepEqual(EB.propsPatch({}, {estado: ['no-tocar']}, CAT), {estado: 'no-tocar'});
+});
+
+test('propValueId y mergeCatalogs', () => {
+    assert.equal(EB.propValueId(' NB IoT '), 'nb-iot');
+    assert.equal(EB.propValueId('-x'), null);
+    assert.equal(EB.propValueId('a'.repeat(25)), null);
+    const m = EB.mergeCatalogs([CAT, [{id: 'chip', label: 'chip', multi: false, values: [{id: 'esp32-p4'}, {id: 'esp32-s3'}]},
+                                      {id: 'uso', label: 'uso', multi: true, values: [{id: 'ci'}]}]]);
+    assert.deepEqual(m.map(c => c.id), ['estado', 'chip', 'conectividad', 'uso']);
+    assert.deepEqual(m[1].values.map(v => v.id), ['esp32-s3', 'esp32-p4']);
+});
+
+test('eventView: note y props', () => {
+    assert.equal(EB.eventView(ev('note', {text: 'hola', user: 'ana'})).detail, '"hola"');
+    assert.equal(EB.eventView(ev('note', {text: '', user: 'ana'})).detail, 'borrada');
+    assert.equal(EB.eventView(ev('note', {text: 'x', user: 'ana'})).who, 'ana');
+    const p = EB.eventView(ev('props', {changes: {chip: {from: null, to: 'esp32'}, uso: {from: ['ci'], to: null}}}));
+    assert.equal(p.detail, 'chip=esp32 · uso quitada');
+    assert.equal(p.icon, '◇');
+});
