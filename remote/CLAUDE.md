@@ -29,4 +29,5 @@ esptool
 esp-idf-monitor
 fastapi
 uvicorn[standard]
+regex              # timeout en grep/until=re: de /api/board/{key}/log (ReDoS); sin él, logrange rechaza cuantificadores anidados
 ```

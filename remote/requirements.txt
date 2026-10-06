@@ -2,3 +2,4 @@ esptool
 esp-idf-monitor
 fastapi
 uvicorn[standard]
+regex

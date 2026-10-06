@@ -31,10 +31,16 @@ import datetime as dt
 import os
 import pathlib
 import re
+import time
 from typing import Optional
 
 from server import events
 from server.serial_watch import line_kind
+
+try:                        # regex: el mismo dialecto que re, con timeout (remote/requirements.txt)
+    import regex as _regex
+except ImportError:         # pragma: no cover - depende de lo instalado
+    _regex = None
 
 DEFAULT_MAX_LINES = 200
 MAX_MAX_LINES = 5000
@@ -50,6 +56,15 @@ _DUR_RE = re.compile(r"(\d+(?:\.\d+)?)(s|m|h|d)")
 _CLOCK_RE = re.compile(r"(\d{1,2}):(\d\d)(?::(\d\d)(?:\.(\d{1,6}))?)?")
 _ISO_RE = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d{1,6})?)?(?:Z|[+-]\d\d:?\d\d)?")
 _DUR_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+# Patrones del usuario (grep, until=re:) sin auth: tope de largo, de texto
+# evaluado y de tiempo. Con `regex`, timeout por búsqueda; sin él (fallback),
+# se rechazan los cuantificadores anidados, que son lo que explota.
+MAX_PATTERN = 256
+MAX_EVAL_CHARS = 4096
+REGEX_TIMEOUT = 0.1         # s por búsqueda (solo con `regex`)
+REGEX_BUDGET = 2.0          # s en total por pedido
+_NESTED_QUANT_RE = re.compile(r"\((?:[^()\\]|\\.)*(?:[+*]|\{\d*,?\d*\})(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
 
 
 class RangeError(Exception):
@@ -338,18 +353,53 @@ def resolve(board: BoardLog, anchor: str, now: float, evs: Optional[list] = None
 
 # ---------- until ----------
 
+class Pattern:
+    """Patrón del usuario con topes (ReDoS: grep y until llegan sin auth).
+    literal=True: substring (sin regex)."""
+
+    def __init__(self, pattern: str, what: str, literal: bool = False):
+        if len(pattern) > MAX_PATTERN:
+            raise RangeError("bad_request", f"{what}: patrón de más de {MAX_PATTERN} caracteres")
+        self.what = what
+        self.literal = pattern if literal else None
+        self.spent = 0.0
+        if literal:
+            return
+        if _regex is None and _NESTED_QUANT_RE.search(pattern):
+            raise RangeError("bad_request", f"{what}: cuantificadores anidados no permitidos (p. ej. (a+)+)")
+        try:
+            self.rx = _regex.compile(pattern) if _regex is not None else re.compile(pattern)
+        except (re.error, getattr(_regex, "error", re.error)) as e:
+            raise RangeError("bad_request", f"{what}: regex inválida: {e}")
+
+    def search(self, text: str) -> bool:
+        text = text[:MAX_EVAL_CHARS]
+        if self.literal is not None:
+            return self.literal in text
+        t0 = time.monotonic()
+        try:
+            found = (self.rx.search(text, timeout=REGEX_TIMEOUT) if _regex is not None
+                     else self.rx.search(text)) is not None
+        except TimeoutError:
+            raise self._too_slow()
+        self.spent += time.monotonic() - t0
+        if self.spent > REGEX_BUDGET:
+            raise self._too_slow()
+        return found
+
+    def _too_slow(self) -> RangeError:
+        return RangeError("bad_request", f"{self.what}: la regex tarda demasiado (simplificala o acotá el rango)")
+
+
 def parse_until(until: str):
-    """→ ("event", tipo) | ("line", tipo) | ("pattern", regex compilada)."""
+    """→ ("event", tipo) | ("line", tipo) | ("pattern", Pattern)."""
     if until in LINE_TYPES:
         return ("line", until)
     if until in events.TYPES:
         return ("event", until)
     if until.startswith("re:"):
-        try:
-            return ("pattern", re.compile(until[3:]))
-        except re.error as e:
-            raise RangeError("bad_request", f"regex inválida en until: {e}")
-    return ("pattern", re.compile(re.escape(until)))
+        return ("pattern", Pattern(until[3:], "until"))
+    return ("pattern", Pattern(until, "until", literal=True))
 
 
 class _LogicalMatcher:
@@ -500,10 +550,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
     src = src or "all"
     if src not in ("all", "serial", "taglog"):
         raise RangeError("bad_request", "src tiene que ser serial, taglog o all")
-    try:
-        grep_re = re.compile(grep) if grep else None
-    except re.error as e:
-        raise RangeError("bad_request", f"regex inválida en grep: {e}")
+    grep_re = Pattern(grep, "grep") if grep else None
     before, after = _int(before, "before"), _int(after, "after")
     if around and (since or until):
         raise RangeError("bad_request", "around no se combina con since/until")

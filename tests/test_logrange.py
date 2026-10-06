@@ -478,3 +478,56 @@ def test_with_real_device_log():
     assert [l.split(" ", 2)[2] for l in r["lines"]] == ["rst:0x1 (POWERON_RESET),boot:0x13", "I (1) app: hola",
                                                          "Guru Meditation Error: Core  1 panic'ed (LoadProhibited). "]
     assert rr(around="panic")["end"] == rr(since="boot")["start"]
+
+
+# ---------- ReDoS: grep y until=re: llegan sin auth ----------
+
+def redos_board():
+    b = Board()
+    for _ in range(20):
+        b.add("16:00:01.000", ">", "a" * 26 + "!")
+    return b
+
+
+def test_pattern_too_long_is_rejected(b):
+    for kw in (dict(grep="a" * 300), dict(until="re:" + "a" * 300), dict(until="a" * 300)):
+        with pytest.raises(RangeError) as e:
+            rr(**kw)
+        assert e.value.error == "bad_request" and "256" in e.value.message
+
+
+def test_without_regex_module_nested_quantifiers_are_rejected(monkeypatch):
+    import time
+    monkeypatch.setattr(logrange, "_regex", None)
+    redos_board()
+    t0 = time.monotonic()
+    for kw in (dict(grep="(a+)+$"), dict(until="re:(a*)*!x"), dict(grep="(a|b+){2,}$")):
+        with pytest.raises(RangeError) as e:
+            rr(**kw)
+        assert e.value.error == "bad_request" and "anidados" in e.value.message
+    assert time.monotonic() - t0 < 1
+    assert len(rr(grep="(foo|a)+!")["lines"]) == 20            # una alternación cuantificada normal pasa
+
+
+def test_regex_time_budget(monkeypatch):
+    redos_board()
+    monkeypatch.setattr(logrange, "REGEX_BUDGET", -1)
+    with pytest.raises(RangeError) as e:
+        rr(grep="a!")
+    assert e.value.error == "bad_request" and "tarda demasiado" in e.value.message
+
+
+def test_only_the_first_chars_of_a_line_are_evaluated():
+    b = Board()
+    b.add("16:00:01.000", ">", "x" * 5000 + "FIN")
+    assert rr(grep="FIN")["lines"] == [] and rr(until="FIN")["until_found"] is False
+
+
+@pytest.mark.skipif(logrange._regex is None, reason="sin el módulo regex (en la Pi viene de requirements.txt)")
+def test_catastrophic_regex_times_out_with_regex_module():
+    import time
+    redos_board()
+    t0 = time.monotonic()
+    with pytest.raises(RangeError) as e:
+        rr(grep="(a+)+$")
+    assert e.value.error == "bad_request" and time.monotonic() - t0 < 2

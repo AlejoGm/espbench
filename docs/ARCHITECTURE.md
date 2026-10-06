@@ -390,6 +390,11 @@ boot ─────► devremote.service ────────────�
   `\r` aplicado y sobre la línea lógica (`>` + sus `↪`, aunque haya taglog en el
   medio). `echo=<texto>`: la primera línea lógica que termina con él (el eco de
   `send`) no cuenta. Sin match: `until_found: false`, `end` = fin del log.
+- **Patrones del usuario** (`grep`, `until=re:`; las lecturas no piden token):
+  hasta 256 caracteres, se evalúan los primeros 4096 de cada línea, y con el
+  módulo `regex` cada búsqueda tiene timeout de 0,1 s y el pedido 2 s en total
+  (`bad_request`). Sin `regex` instalado se rechazan los cuantificadores anidados
+  (`(a+)+`), que son los que explotan.
 - **`around`**: del `rst:` anterior a E (inclusive) al siguiente (exclusive), o
   `before`/`after` líneas. No se combina con `since`/`until`.
 - **Salida**: líneas compactas (`HH:MM:SS.mmm <origen> <texto>`, con fecha si no es
