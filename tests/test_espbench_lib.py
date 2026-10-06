@@ -539,6 +539,40 @@ def test_reset_verify(client, board):
     assert v["ok"] and "RTCWDT_RTC_RESET" in v["boot"]
 
 
+def _boots_until_loop_start(client, board):
+    """Boots "físicos" (botón EN: no pasan por el monitor) hasta que el próximo
+    sea el inicio de un boot loop. add_board ya hizo uno."""
+    from server.serial_watch import BOOT_LOOP_COUNT
+    for _ in range(BOOT_LOOP_COUNT - 2):
+        board.boot()
+    board.wait_prompt()
+    b = client.resolve("sim-board", write=True)
+    return b, client.board_log(b.key, since="now", max_lines=1)["end"], client.crash_snapshot(b.key)
+
+
+def test_verify_boot_loop_at_the_found_boot_is_informative(client, board):
+    """C1: si el boot que encontró --verify es el que SerialWatch marcó como
+    inicio de un boot loop (resets seguidos que no pasaron por el monitor), no
+    es un crash del firmware: `boot_loop: true` informativo. Antes: exit 3."""
+    b, since, known = _boots_until_loop_start(client, board)
+    board.later(0.1, board.boot)
+    v = client.verify(b, since, window_s=0.5, timeout_s=5, known=known)
+    assert v["ok"] and v["boot_loop"] is True, v
+    assert "RTCWDT" not in v["boot"] and "SW_CPU_RESET" in v["boot"]
+    assert client.board_events(b.key, types="boot_loop", limit=5)["events"][-1]["detail"]["phase"] == "start"
+
+
+def test_verify_reboot_in_the_window_during_a_boot_loop_is_crashed(client, board):
+    """En un boot loop no hay eventos boot sueltos: la ventana ve el reinicio
+    por su línea rst:. Si no, un firmware en loop pasaba el verify."""
+    b, since, known = _boots_until_loop_start(client, board)
+    board.later(0.1, board.boot)
+    board.later(0.5, board.boot)
+    v = client.verify(b, since, window_s=1.5, timeout_s=5, known=known)
+    assert v["error"] == "crashed" and v["crash"]["type"] == "boot", v
+    assert "reinició" in v["message"] and "rst:" in v["crash"]["detail"]["line"]
+
+
 def test_restart_session(client, board):
     b = client.resolve("sim-board", write=True)
     old = client.board_events(b.key, limit=1)["session"]
@@ -684,7 +718,8 @@ def test_compact_result(client, board):
     client.reserve(b, 600)
     s = client.send(b, "status")
     r = client.read_range(b.key, since=s["cursor"], until="OK", echo="status", timeout_s=5)
-    assert set(r) == {"ok", "board", "reason", "date", "lines", "start", "end", "until_found", "match"}
+    assert set(r) == {"ok", "board", "reason", "date", "lines", "start", "end", "until_found", "match",
+                      "match_cursor"}
     h = client.read_range(b.key, since="session")
     assert "until_found" not in h and "session_ended" not in h and "truncated" not in h
 

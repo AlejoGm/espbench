@@ -904,6 +904,8 @@ class Client:
             out["until_found"] = bool(last.get("until_found"))
             if last.get("match"):
                 out["match"] = last["match"]
+            if last.get("until_found") and last.get("match_cursor"):
+                out["match_cursor"] = last["match_cursor"]      # inicio de la línea lógica del match
         if acc.truncated:
             out["truncated"] = True
         if last.get("session_ended"):
@@ -981,21 +983,46 @@ class Client:
                 cur, sid = f"c:{new}:0", new
                 continue
             break
+        loop_at_boot = _loop_at_boot(r)
+        if loop_at_boot:
+            # El boot encontrado es el que SerialWatch contó como inicio de un boot
+            # loop (resets que no pasaron por el monitor: botón EN, un server
+            # viejo...). No es un crash del firmware nuevo: queda informativo, y
+            # la ventana igual ve el próximo reinicio por su línea.
+            r = {k: v for k, v in r.items() if k not in ("crash", "error", "message")}
+            r.update(ok=True, reason="until")
         if r.get("error") or r.get("reason") == "panic":
             if r.get("error") == "timeout":
                 r["message"] = "no apareció el boot después del flash/reset"
             return self._verify_result(r, None, None, window_s, sessions)
         boot_end = r["end"]
-        w = self.read_range(key, since=boot_end, for_s=window_s, max_lines=max_lines, expect_panic=expect_panic,
-                            fail_on=("panic", "boot_loop", "boot"), known=known) if window_s > 0 else None
-        if w is not None and w.get("error") == "crashed" and (w.get("crash") or {}).get("type") == "boot":
-            w["message"] = "la placa se reinició en la ventana de asentamiento"
+        w = self._settle(key, boot_end, window_s, max_lines, expect_panic, known) if window_s > 0 else None
         u = None
         if until and (w is None or w.get("ok")) and (w is None or w.get("reason") != "panic"):
             remaining = max(1.0, deadline - self._clock())
             u = self.read_range(key, since=boot_end, until=until, timeout_s=remaining, max_lines=max_lines,
                                 expect_panic=expect_panic, known=known)
-        return self._verify_result(r, w, u, window_s, sessions)
+        out = self._verify_result(r, w, u, window_s, sessions)
+        if loop_at_boot:
+            out["boot_loop"] = True
+        return out
+
+    def _settle(self, key: str, since: str, window_s: float, max_lines: Optional[int], expect_panic: bool,
+                known) -> dict:
+        """Ventana de asentamiento de --verify: falla con otro reinicio, un panic
+        o un boot_loop. El reinicio se busca por su línea `rst:` (until=boot),
+        no por el evento: durante un boot loop SerialWatch no registra los boot
+        sueltos."""
+        w = self.read_range(key, since=since, until="boot", for_s=window_s, max_lines=max_lines,
+                            expect_panic=expect_panic, fail_on=("panic", "boot_loop"), known=known)
+        if w.get("crash") is None and w.get("until_found"):
+            w.update(ok=False, error="crashed", reason="crash",
+                     message="la placa se reinició en la ventana de asentamiento",
+                     crash={"type": "boot", "cursor": w.get("match_cursor"), "detail": {"line": w.get("match")}})
+        elif w.get("error") == "timeout" and w.get("reason") == "for":      # la ventana pasó sin reinicio
+            w = {k: v for k, v in w.items() if k not in ("error", "message")}
+            w["ok"] = True
+        return w
 
     def _verify_result(self, boot: dict, window: Optional[dict], until: Optional[dict], window_s: float,
                        sessions: list) -> dict:
@@ -1073,6 +1100,14 @@ _RANGE_MESSAGES = {
     "crashed": "la placa crasheó (panic / boot loop) en el rango",
     "session_ended": "la placa se desconectó o el proceso se relanzó durante la espera",
 }
+
+
+def _loop_at_boot(r: dict) -> bool:
+    """¿El crash de esta espera de `boot` es el boot_loop que empieza en el
+    mismo boot que se encontró? (mismo cursor: la línea `rst:`)."""
+    crash = r.get("crash") or {}
+    return (r.get("error") == "crashed" and crash.get("type") == "boot_loop" and bool(r.get("until_found"))
+            and crash.get("cursor") is not None and crash.get("cursor") == r.get("match_cursor"))
 
 
 def _single(r: dict, max_lines: Optional[int]) -> _Range:

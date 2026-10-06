@@ -565,7 +565,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
     with BoardLog(home) as board:
         current = board.current_session()
         evs = board.read_events()
-        until_found = match = matcher = None
+        until_found = match = matcher = match_at = None
         if around:
             start, limit = _around(board, around, before, after, now, evs)
         else:
@@ -581,7 +581,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
                     if hit is not None:
                         until_found, limit, match_line = True, hit[0], hit[1]
                         if match_line is not None:
-                            match = match_line.render(None, raw)
+                            match, match_at = match_line.render(None, raw), match_line.offset
                 else:
                     matcher = _LogicalMatcher(kind, what, skip_at, echo)
                     matcher.seed(start.sess.f, start.offset)
@@ -592,7 +592,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
             out.add(line)
             hit = matcher.feed(line) if matcher is not None else None
             if hit is not None:
-                until_found, end = True, line.end
+                until_found, end, match_at = True, line.end, hit[0].offset
                 match = _render_logical(hit[0], hit[1], raw, line)
                 break
         lines, truncated = out.finish()
@@ -613,6 +613,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
             "end": sess.cursor(end),
             "until_found": until_found,
             "match": match,
+            "match_cursor": sess.cursor(match_at) if match_at is not None else None,
             "echo_seen": echo_seen,
             "partial": None,
             "truncated": truncated,

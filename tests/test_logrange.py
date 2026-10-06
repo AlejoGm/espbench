@@ -100,11 +100,24 @@ def test_session_and_now(b):
 
 def test_response_shape_and_server_time(b):
     r = rr(since="panic")
-    assert set(r) == {"date", "lines", "start", "end", "until_found", "match", "echo_seen", "partial",
-                      "truncated", "session_ended", "events", "server_time"}
+    assert set(r) == {"date", "lines", "start", "end", "until_found", "match", "match_cursor", "echo_seen",
+                      "partial", "truncated", "session_ended", "events", "server_time"}
     assert r["partial"] is None and r["session_ended"] is False
     assert dt.datetime.fromisoformat(r["server_time"]).utcoffset() is not None   # con zona
     assert r["server_time"].startswith("2026-10-05T16:10:00.000")
+
+
+def test_match_cursor_is_the_start_of_the_matched_logical_line(b):
+    """match_cursor: inicio de la línea (lógica) del match. --verify lo compara
+    con el cursor del boot_loop (C1); en un patrón partido, es el `>`."""
+    assert rr(until="boot")["match_cursor"] == b.cursor("boot0")
+    assert rr(since=b.cursor("app0"), until="boot")["match_cursor"] == b.cursor("boot1")
+    b.add("16:00:04.000", ">", "esp> ", key="prompt")
+    b.add("16:00:04.100", "↪", "status OK", key="cont")
+    assert rr(since=b.cursor("app1"), until="status OK")["match_cursor"] == b.cursor("prompt")
+    b.event("send", "prompt")
+    assert rr(since=b.cursor("app1"), until="send")["match_cursor"] == b.cursor("prompt")
+    assert rr(since=b.cursor("app1"), until="nunca")["match_cursor"] is None
 
 
 def test_event_anchors_with_ordinals_sorted_by_offset(b):
