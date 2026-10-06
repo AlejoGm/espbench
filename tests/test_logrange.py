@@ -531,3 +531,23 @@ def test_catastrophic_regex_times_out_with_regex_module():
     with pytest.raises(RangeError) as e:
         rr(grep="(a+)+$")
     assert e.value.error == "bad_request" and time.monotonic() - t0 < 2
+
+
+def test_iso_fractions_of_any_length():
+    """fromisoformat de 3.9 rechaza fracciones que no sean de 3 o 6 dígitos."""
+    now = epoch("16:10:00.000")
+    assert logrange.parse_time("2026-10-05T16:02:03.1", now) == epoch("16:02:03.100")
+    assert logrange.parse_time("2026-10-05T16:02:03.12345", now) == pytest.approx(epoch("16:02:03.000") + 0.12345)
+    assert logrange.parse_time("2026-10-05 16:02:03.5-03:00", now) is not None
+
+
+def test_list_events_more_and_order(b):
+    r = le(limit=2)
+    assert [e["cursor"] for e in r["events"]] == [b.cursor("panic0"), b.cursor("boot1")] and r["more"] is True
+    r = le(limit=2, order="asc")
+    assert [e["cursor"] for e in r["events"]] == [b.cursor("boot0"), b.cursor("panic0")] and r["more"] is True
+    r = le(limit=2, order="asc", since=b.cursor("panic0"))
+    assert [e["cursor"] for e in r["events"]] == [b.cursor("panic0"), b.cursor("boot1")] and r["more"] is False
+    assert le()["more"] is False
+    with pytest.raises(RangeError):
+        le(order="x")

@@ -351,7 +351,7 @@ boot ─────► devremote.service ────────────�
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 | `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
-| `GET /api/board/{key}/events?type=a,b&since=&limit=` | Eventos de la placa, ordenados por (sesión, offset) |
+| `GET /api/board/{key}/events?type=a,b&since=&limit=&order=` | Eventos de la placa, ordenados por (sesión, offset): los últimos `limit` (50), o los primeros desde `since` con `order=asc`; `more` si quedaron afuera |
 
 - **Token (opcional)**: si existe `/opt/esp/api_token` (`auth.py`, se lee en cada
   pedido), las escrituras (POST/PATCH) exigen `Authorization: Bearer <token>` →

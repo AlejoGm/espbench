@@ -279,6 +279,8 @@ def parse_time(anchor: str, now: float) -> Optional[float]:
         text = anchor.replace(" ", "T").replace("Z", "+00:00")
         if re.search(r"[+-]\d{4}$", text):
             text = text[:-2] + ":" + text[-2:]
+        # fromisoformat de 3.9 solo acepta 3 o 6 dígitos de fracción
+        text = re.sub(r"\.(\d{1,6})", lambda m: "." + m.group(1).ljust(6, "0"), text, count=1)
         try:
             d = dt.datetime.fromisoformat(text)
         except ValueError:
@@ -680,9 +682,15 @@ def _line_end(sess: _Session, offset: int) -> int:
 
 
 def list_events(home, types: Optional[str] = None, since: Optional[str] = None,
-                limit=None, now: Optional[float] = None) -> dict:
-    """Eventos de la placa ordenados por (sesión, offset). `since`: un anchor;
-    si es de tiempo, compara la hora del evento (cruza sesiones)."""
+                limit=None, order: Optional[str] = None, now: Optional[float] = None) -> dict:
+    """Eventos de la placa ordenados por (sesión, offset). `since`: un anchor
+    (inclusive); si es de tiempo, compara la hora del evento (cruza sesiones).
+    `limit` (default 50): los ÚLTIMOS N; con order=asc, los PRIMEROS N desde
+    since (para paginar hacia adelante). La lista siempre va en orden
+    cronológico; `more`: quedaron eventos afuera (antes, o después con asc)."""
+    order = order or "desc"
+    if order not in ("asc", "desc"):
+        raise RangeError("bad_request", "order tiene que ser asc o desc")
     now = dt.datetime.now().timestamp() if now is None else now
     limit = max(1, min(_int(limit, "limit", 50), 1000))
     wanted = [t.strip() for t in (types or "").split(",") if t.strip()]
@@ -702,8 +710,9 @@ def list_events(home, types: Optional[str] = None, since: Optional[str] = None,
                 out = [e for e in out if _event_key(e) >= (p.sess.sid, p.offset)]
         if wanted:
             out = [e for e in out if e.get("type") in wanted]
-        return {"events": [compact_event(e) for e in out[-limit:]], "session": current,
-                "server_time": _server_time(now)}
+        page = out[:limit] if order == "asc" else out[-limit:]
+        return {"events": [compact_event(e) for e in page], "more": len(out) > limit,
+                "session": current, "server_time": _server_time(now)}
 
 
 def _event_epoch(ev: dict) -> Optional[float]:
