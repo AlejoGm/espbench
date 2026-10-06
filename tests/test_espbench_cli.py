@@ -482,3 +482,102 @@ def test_human_ls_and_benches_without_host(disc, board):
     assert code == 0 and out.splitlines()[0].split()[0] == "BENCH" and "sim-board" in out
     code, out, err = disc("benches", as_json=False)
     assert code == 0 and "viejo: ignorado" in out
+
+
+# ---------- nota y propiedades ----------
+
+def test_note_set_and_clear(cli, board):
+    code, r = cli("note", "sim-board", "testeando, no tocar")
+    assert code == 0 and (r["note"], r["note_by"]) == ("testeando, no tocar", "agent") and r["note_at"]
+    code, r = cli("ls")
+    assert r["devices"][0]["note"] == "testeando, no tocar" and r["devices"][0]["available"]   # aviso, no lock
+    code, r = cli("status", "sim-board")
+    assert r["note"] == "testeando, no tocar" and r["note_by"] == "agent"
+    code, r = cli("events", "sim-board", "--type", "note")
+    assert r["events"][-1]["detail"] == {"text": "testeando, no tocar", "user": "agent"}
+    code, r = cli("note", "sim-board", "--clear")
+    assert code == 0 and r["note"] is None
+    assert cli("note", "sim-board")[1]["error"] == "bad_request"
+    assert cli("note", "sim-board", "x\ny")[1]["error"] == "bad_request"
+
+
+def test_set_props_and_where(cli, board):
+    code, r = cli("set", "sim-board", "chip=esp32-s3", "conectividad=wifi,lte", "uso+=agentes")
+    assert code == 0 and r["props"] == {"chip": "esp32-s3", "conectividad": ["wifi", "lte"], "uso": ["agentes"]}
+    assert r["changes"]["chip"] == {"from": None, "to": "esp32-s3"}
+    code, r = cli("set", "sim-board", "conectividad-=wifi")
+    assert r["props"]["conectividad"] == ["lte"]
+    code, r = cli("set", "sim-board")
+    assert r["props"]["chip"] == "esp32-s3"
+    code, r = cli("set", "sim-board", "chip=esp32-s4")
+    assert code == 1 and r["error"] == "bad_request" and "esp32-s3" in r["message"]
+    assert [d["key"] for d in cli("ls", "--where", "chip=esp32-s3", "--where", "conectividad=lte")[1]["devices"]] \
+        == ["sim-board"]
+    assert cli("ls", "--where", "chip=esp32")[1]["devices"] == []
+    assert cli("ls", "--where", "chipp=esp32")[1]["error"] == "bad_request"
+    code, r = cli("events", "sim-board", "--type", "props")
+    assert {"conectividad": {"from": ["wifi", "lte"], "to": ["lte"]}} in [e["detail"]["changes"] for e in r["events"]]
+    assert all(e["detail"]["user"] == "agent" for e in r["events"])
+
+
+def test_props_catalog_add_and_rm(cli, board):
+    code, r = cli("props")
+    assert code == 0 and [c["id"] for c in r["categories"]] == ["estado", "uso", "chip", "conectividad", "perifericos"]
+    code, r = cli("props", "add", "estado", "prestada", "--desc", "prestada a otro equipo", "--exclude-pick")
+    assert code == 0 and r["value"]["exclude_pick"] is True
+    cli("set", "sim-board", "estado=prestada")
+    code, r = cli("ls", "--free")
+    assert r["devices"] == []                                   # el valor nuevo también excluye
+    code, r = cli("props", "rm", "estado", "prestada")
+    assert (code, r["error"]) == (5, "in_use") and "sim-board" in r["message"]
+    cli("set", "sim-board", "estado=")
+    assert cli("props", "rm", "estado", "prestada")[0] == 0
+
+
+def test_estado_no_tocar_is_not_available_and_pick_skips_it(cli, bench, board):
+    cli("set", "sim-board", "estado=no-tocar")
+    code, r = cli("ls")
+    assert r["devices"][0]["avoid"] is True and r["devices"][0]["available"] is False
+    code, r = cli("pick")
+    assert code == 7 and r["error"] == "not_found"
+    cli("set", "sim-board", "estado=", "chip=esp32-c3")
+    code, r = cli("pick", "--where", "chip=esp32-c3")
+    assert code == 0 and r["board"] == "sim-board" and r["reserved"] is False
+
+
+def test_pick_reserve_and_skip_taken(cli, bench, board):
+    bench.add_board("ttyUSB1", "AA:BB:CC:DD:EE:02", key="sim-2")
+    for k in ("sim-board", "sim-2"):
+        cli("set", k, "uso+=agentes")
+    assert cli("reserve", "sim-board", user="otro")[0] == 0         # la tiene otro: no está available
+    code, r = cli("pick", "--where", "uso=agentes", "--reserve", "--ttl", "5m")
+    assert code == 0 and r["board"] == "sim-2" and r["reserved"] and r["lock_user"] == "agent"
+    code, r = cli("pick", "--where", "uso=agentes", "--reserve")
+    assert code == 0 and r["board"] == "sim-2"                     # la propia sigue disponible para mí
+    assert cli("pick", "--where", "uso=agentes", "--reserve", user="tercero")[1]["error"] == "not_found"
+
+
+def test_pick_reserve_tries_next_when_taken_in_between(cli, bench, board, monkeypatch):
+    bench.add_board("ttyUSB1", "AA:BB:CC:DD:EE:02", key="sim-2")
+    orig = lib.Client.reserve
+    taken = []
+
+    def racy(self, b, ttl):
+        if not taken:                           # otro la toma justo antes
+            taken.append(b.label)
+            raise lib.EspbenchError("locked", "la tiene 'otro'")
+        return orig(self, b, ttl)
+    monkeypatch.setattr(lib.Client, "reserve", racy)
+    code, r = cli("pick", "--reserve")
+    assert code == 0 and r["reserved"] and r["board"] != taken[0]
+    assert r["skipped"] == [{"board": taken[0], "bench": None, "error": "locked"}]
+
+
+def test_pick_and_where_across_benches(disc, benches_net, board):
+    benches_net["b"].devices[0]["props"] = {"chip": "esp32-s3"}
+    code, r = disc("ls", "--where", "chip=esp32-s3")
+    assert [(d["bench"], d["key"]) for d in r["devices"]] == [("bench-b", "otra-placa")]
+    code, r = disc("pick", "--where", "chip=esp32-s3")
+    assert code == 0 and (r["bench"], r["board"]) == ("bench-b", "otra-placa")
+    code, r = disc("note", "sim-board", "dev alejo")
+    assert code == 0 and r["bench"] == "bench-sim"

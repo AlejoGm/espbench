@@ -772,3 +772,48 @@ def test_config_host_auto_means_discovery(tmp_path):
     cfg = lib.Config.load(env={}, cwd=tmp_path, user_config=tmp_path / "no.json", device="x")
     assert cfg.host is None and cfg.discovery
     assert not lib.Config.load(host="pi", env={}, cwd=tmp_path, user_config=tmp_path / "no.json").discovery
+
+
+# ---------- nota y propiedades (sin red) ----------
+
+def test_parse_set_ops():
+    props, add, rm = lib.parse_set_ops(["chip=ESP32-S3", "estado=", "conectividad=wifi,lte", "uso+=ci", "perifericos-=modbus"])
+    assert props == {"chip": "esp32-s3", "estado": None, "conectividad": ["wifi", "lte"]}
+    assert (add, rm) == ({"uso": ["ci"]}, {"perifericos": ["modbus"]})
+    for bad in (["chip"], ["chip==x"], ["uso+="], ["chip=a", "chip=b"], ["-chip=a"]):
+        with pytest.raises(lib.EspbenchError) as e:
+            lib.parse_set_ops(bad)
+        assert e.value.error == "bad_request"
+
+
+def test_where_and_pick_order():
+    assert lib.parse_where(["chip=esp32-s3", "estado="]) == [("chip", "esp32-s3"), ("estado", None)]
+    with pytest.raises(lib.EspbenchError):
+        lib.parse_where(["chip"])
+    base = {"mac": "AA", "state": "monitoring"}
+    a = lib.summarize_device({**base, "device_key": "a", "props": {"chip": "esp32-s3", "conectividad": ["wifi", "lte"]}})
+    b = lib.summarize_device({**base, "device_key": "b", "props": {"chip": "esp32-s3"}, "note": "dev alejo"})
+    c = lib.summarize_device({**base, "device_key": "c", "props": {"chip": "esp32-s3", "estado": "no-tocar"}})
+    d = lib.summarize_device({**base, "device_key": "d", "props": {"chip": "esp32-s3"}, "health": {"boot_loop": True}})
+    e = lib.summarize_device({**base, "device_key": "e", "props": {"chip": "esp32-s3"}, "lock_user": "otro"})
+    assert c["avoid"] and not c["available"] and a["available"] and not a["avoid"]
+    assert lib.matches_where(a, [("conectividad", "lte"), ("chip", "esp32-s3")])
+    assert not lib.matches_where(b, [("conectividad", "lte")])
+    assert lib.matches_where(b, [("estado", None)]) and not lib.matches_where(c, [("estado", None)])
+    assert [s["key"] for s in lib.pick_order([b, c, d, e, a], [("chip", "esp32-s3")])] == ["a", "b"]   # sin nota primero
+    assert lib.summarize_device({**base, "props": {"estado": "prestada"}},
+                                exclude={"estado": ("prestada",)})["avoid"]
+
+
+def test_check_props_suggests_and_merge_categories():
+    cats1 = [{"id": "chip", "multi": False, "values": [{"id": "esp32"}, {"id": "esp32-s3"}]}]
+    cats2 = [{"id": "chip", "multi": False, "values": [{"id": "esp32"}, {"id": "esp32-p4"}]},
+             {"id": "uso", "multi": True, "values": [{"id": "ci"}]}]
+    merged = lib.merge_categories([cats1, cats2])
+    assert [(c["id"], [v["id"] for v in c["values"]]) for c in merged] == [("chip", ["esp32", "esp32-s3", "esp32-p4"]),
+                                                                           ("uso", ["ci"])]
+    lib.check_props([("chip", "esp32-p4"), ("uso", None)], merged)
+    with pytest.raises(lib.EspbenchError, match=r"¿'esp32-s3'\?"):
+        lib.check_props([("chip", "esp32-s4")], merged)
+    with pytest.raises(lib.EspbenchError, match=r"¿'chip'\?"):
+        lib.check_props([("chips", "x")], merged)

@@ -1,6 +1,6 @@
 ---
 name: espbench
-description: Flashear y observar placas ESP32 reales en la Pi de espbench con el CLI `espbench`. Usala para flashear un build en una placa remota, verificar que arranca, mandar comandos por la consola serie y esperar la respuesta, leer el log serie o los eventos (boot, panic, flash) de una placa, o reservar una placa del banco.
+description: Flashear y observar placas ESP32 reales en la Pi de espbench con el CLI `espbench`. Usala para conseguir una placa del banco por sus propiedades (chip, conectividad, periféricos), flashear un build en una placa remota, verificar que arranca, mandar comandos por la consola serie y esperar la respuesta, leer el log serie o los eventos (boot, panic, flash) de una placa, o reservar una placa.
 ---
 
 # espbench
@@ -18,14 +18,23 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 - El build lo hacés vos (`idf.py build`); `espbench flash` sube lo que hay en `--build-dir` (default `build`).
 - El texto de cada `send` queda en el log de eventos de la Pi y cualquiera en la red lo lee: mandá comandos, nunca secretos.
 
+## Elegir placa: propiedades y nota
+
+Cada placa tiene **propiedades** (`props`, categorías fijas: `estado`, `uso`, `chip`, `conectividad`, `perifericos`; `espbench props --json` lista los valores) y puede tener una **nota** (`note`, `note_by`, `note_at`: texto libre de una persona o un agente).
+
+- **Forma recomendada**: `espbench pick --where chip=esp32-s3 --where conectividad=lte --reserve --ttl 30m --json` → la primera placa que cumple todo, libre, sana y sin `estado` excluido, en cualquier bench, ya reservada (si otro la toma en el medio, prueba la siguiente). Exit 7 `not_found` si no hay ninguna: no la busques a mano entre las ocupadas, avisale al usuario.
+- **`estado=no-tocar` o `estado=roto`** (`avoid: true`, `available: false`): no la uses nunca sin preguntarle al usuario, aunque te la nombren. `pick` y `ls --free` ya las saltean.
+- **Leé la `note`** antes de usar una placa (también la que te devuelve `pick`, que prefiere las que no tienen nota). Si dice algo como "no tocar", "testeando", "es de X", elegí otra o preguntale al usuario. Es un aviso, no un lock: el banco no te frena.
+- Podés dejar una nota de lo que estás haciendo (`espbench note <dev> "agente: probando OTA del PR 123" --json`) y **borrala al terminar** (`espbench note <dev> --clear --json`). No cambies `props` ni notas de otros sin que el usuario lo pida.
+
 ## Ciclo
 
-1. `espbench ls --json` → elegí una placa con **`available: true`**: en `monitoring` y con `lock_user: null` (libre) o con tu usuario. Una placa con `lock_user` de otro no te sirve aunque no tenga `lock_expires`: es el lock que dejó su último flash, y te va a dar `locked` al reservar o flashear (ver Errores).
-2. `espbench reserve <dev> --ttl 30m --json` → nadie más le escribe mientras trabajás. Desde acá tus escrituras exigen que la reserva siga siendo tuya.
+1. `espbench pick --where <cat>=<valor> --reserve --ttl 30m --json` (o `espbench ls --free --json` y elegir una con **`available: true`**: en `monitoring`, con `lock_user: null` o tu usuario, y sin `estado` excluido). Una placa con `lock_user` de otro no te sirve aunque no tenga `lock_expires`: es el lock que dejó su último flash, y te va a dar `locked` al reservar o flashear (ver Errores). Mirá su `note`.
+2. Si no usaste `pick --reserve`: `espbench reserve <dev> --ttl 30m --json` → nadie más le escribe mientras trabajás. Desde acá tus escrituras exigen que la reserva siga siendo tuya.
 3. `idf.py build`, después `espbench flash <dev> --verify --json` → flash + espera el primer boot + 10 s de asentamiento sin reboot ni panic. Exit 0 = el firmware nuevo arrancó y se quedó arriba.
 4. `espbench send <dev> "<comando>" --until "<texto esperado>" --json` → `match` trae la línea que lo cumplió; `lines`, lo que salió desde el envío.
 5. Si algo crasheó: `espbench events <dev> --type panic --json`, después `espbench logs <dev> --around panic --json` (del boot anterior al siguiente).
-6. Iterá 3–5. Al terminar: `espbench release <dev> --json`.
+6. Iterá 3–5. Al terminar: `espbench release <dev> --json` (y `note --clear` si dejaste una nota).
 
 ## Esperas
 
@@ -78,7 +87,7 @@ Los logs se comen tokens. Pedí lo justo:
 | 2 | `flash_failed` | leé `error_hint` y `log_tail`; rc 2 suele ser placa que no entra en download mode: `espbench reset <dev> --bootloader` y reintentá una vez |
 | 3 | `crashed` | el firmware crasheó: mirá `crash` y `lines`, después `logs --around panic`. Es un bug del firmware, no del banco |
 | 4 | `timeout` | no apareció el `until`: mirá `lines` (¿salió otra cosa?) antes de subir el `--timeout` |
-| 5 | `busy` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos |
+| 5 | `busy`, `in_use` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos. `in_use`: el valor de propiedad que querés borrar lo usa alguna placa |
 | 6 | `locked`, `reservation_lost`, `token_mismatch` | `locked`: otra persona tiene la placa. `espbench who <dev> --json`: con `reservation: true` es una reserva (vence sola: elegí otra placa o esperá); con `reservation: false` es el **lock permanente de su último flash** (no vence): elegí otra placa con `available: true`, o pedile al usuario que el dueño la suelte (`python client/deploy.py --unlock` con su `.flashcfg.json`, o `devremote --unlock <tty>` en la Pi). Nunca reintentes en loop. `reservation_lost`: tu reserva venció o la soltaron; `message` dice cuál. Si venció y nadie la tomó, `espbench reserve <dev> --json` y reintentá la escritura una vez; si la tiene otro, pará y avisá |
 | 7 | `not_found`, `ambiguous`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `ambiguous`: el mismo nombre en dos benches, elegí con `<dev>@<bench>`. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |

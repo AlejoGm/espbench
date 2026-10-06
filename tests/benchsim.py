@@ -296,7 +296,7 @@ class _Handler(BaseHTTPRequestHandler):
         parts = [urllib.parse.unquote(p) for p in url.path.strip("/").split("/")]
         auth = self.headers.get("Authorization")
         body = None
-        if method == "POST":
+        if method in ("POST", "PATCH"):
             n = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -315,6 +315,15 @@ class _Handler(BaseHTTPRequestHandler):
             return _call(api.get_devices)
         if method == "GET" and parts == ["api", "version"]:
             return _call(api.get_version)
+        if method == "GET" and parts == ["api", "properties"]:
+            return _call(api.get_properties)
+        if method == "PATCH" and len(parts) == 3 and parts[:2] == ["api", "devices"]:
+            return _call(api.patch_device, parts[2], body, authorization=auth)
+        if parts[:2] == ["api", "properties"] and len(parts) >= 4 and parts[3] == "values":
+            if method == "POST" and len(parts) == 4:
+                return _call(api.add_property_value, parts[2], body, authorization=auth)
+            if method == "DELETE" and len(parts) == 5:
+                return _call(api.delete_property_value, parts[2], parts[4], authorization=auth)
         if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "board"]:
             fn = {"log": api.board_log, "events": api.board_events}.get(parts[3])
             if fn is not None:
@@ -339,6 +348,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._dispatch("POST")
+
+    def do_PATCH(self):
+        self._dispatch("PATCH")
+
+    def do_DELETE(self):
+        self._dispatch("DELETE")
 
 
 _NOT_FOUND = object()

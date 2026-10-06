@@ -589,7 +589,11 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
   `$ESPBENCH_STATE_DIR/benches.json` y los devices se piden en cada comando. Si la placa no está en los benches de
   la cache, se escanea de nuevo una vez. `espbench benches` siempre escanea.
 - **`ls`/`status`**: `available` = `monitoring` y sin lock, o con lock propio (un lock ajeno, aunque sea el
-  permanente de un flash, no deja flashear ni reservar).
+  permanente de un flash, no deja flashear ni reservar), y sin `estado` excluido (`exclude_pick`: `avoid`).
+- **`pick`**: la primera placa `available`, con MAC, sin boot loop y que cumple los `--where` (AND), en todos los
+  benches (o el configurado); las que tienen nota van al final. Con `--reserve` la reserva en el mismo comando y, si
+  otro la toma entre la lista y la reserva (`locked`, `busy`, `device_changed`), prueba la siguiente. Ninguna →
+  `not_found`. La nota y las propiedades son avisos: el server no bloquea nada por ellas (§8).
 - `fcntl` es opcional (Windows): sin él, el registro local de reservas va sin `flock`.
 
 Tests: contra `tests/benchsim.py`, una Pi simulada con la API real y `DeviceManager`/`DeviceLog` reales (§10).

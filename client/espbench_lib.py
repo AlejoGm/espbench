@@ -21,6 +21,7 @@ dependencias). Corre en la Mac del dev: Python 3.9+.
 Los errores llevan `error` estable (el contrato, §8.3) y su exit code.
 """
 import dataclasses
+import difflib
 import json
 import os
 import pathlib
@@ -63,7 +64,7 @@ EXIT_CODES = {
     "flash_failed": 2,
     "crashed": 3,
     "timeout": 4,
-    "busy": 5,
+    "busy": 5, "in_use": 5,
     "locked": 6, "reservation_lost": 6, "token_mismatch": 6,
     "not_found": 7, "device_changed": 7, "session_down": 7, "ambiguous": 7,
     "bad_anchor": 8, "cursor_expired": 8,
@@ -295,23 +296,131 @@ class Board:
                    lock_expires=d.get("lock_expires"), hw_model=d.get("hw_model"), info=d)
 
 
-def summarize_device(d: dict, me: Optional[str] = None) -> dict:
+# Valores que pick / ls --free no eligen si el bench no sirve /api/properties (bench viejo).
+DEFAULT_EXCLUDE = {"estado": ("no-tocar", "roto")}
+
+
+def _prop_values(v) -> list:
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+def summarize_device(d: dict, me: Optional[str] = None, exclude: Optional[dict] = None) -> dict:
     """Lo que le sirve a un agente de /api/devices, compacto (tokens).
-    `available`: la placa está en monitoring y sin lock, o el lock es de `me`
-    (un lock ajeno, aunque sea el permanente de un flash, no deja flashear ni
-    reservar)."""
+    `available`: la placa está en monitoring, sin lock (o el lock es de `me`:
+    un lock ajeno, aunque sea el permanente de un flash, no deja flashear ni
+    reservar) y sin una propiedad que la excluye (`avoid`: estado no-tocar o
+    roto, los valores con exclude_pick). La nota (`note`) es un aviso para
+    leer: no cambia `available`."""
+    exclude = DEFAULT_EXCLUDE if exclude is None else exclude
     health = d.get("health") or {}
     lock_user = d.get("lock_user")
+    props = dict(d.get("props") or {})
+    avoid = any(v in (exclude.get(cat) or ()) for cat, val in props.items() for v in _prop_values(val))
     out = {
         "key": d.get("device_key") or d.get("sn") or d.get("mac") or d.get("tty_name"),
         "device_key": d.get("device_key"), "sn": d.get("sn"), "mac": d.get("mac"),
         "tty": d.get("tty_name"), "state": d.get("state"),
-        "available": d.get("state") == "monitoring" and (not lock_user or (bool(me) and lock_user == me)),
+        "available": d.get("state") == "monitoring" and (not lock_user or (bool(me) and lock_user == me))
+                     and not avoid,
         "lock_user": lock_user, "lock_expires": d.get("lock_expires"),
         "hw_model": d.get("hw_model"), "fw_project": d.get("fw_project"), "fw_version": d.get("fw_version"),
+        "props": props, "avoid": avoid,
+        "note": d.get("note"), "note_by": d.get("note_by"), "note_at": d.get("note_at"),
     }
     if health:
         out["health"] = {k: health.get(k) for k in ("boots", "panics", "boot_loop") if k in health}
+    return out
+
+
+_WHERE_RE = re.compile(r"([a-z][a-z0-9_]*)=([^=]*)")
+_SET_RE = re.compile(r"([a-z][a-z0-9_]*)([+-]?=)(.*)")
+_VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def parse_where(items) -> list:
+    """`--where chip=esp32-s3` (repetible; varias separadas por espacio no) → [(cat, valor | None)].
+    `cat=` = sin valor en esa categoría."""
+    out = []
+    for item in items or []:
+        m = _WHERE_RE.fullmatch((item or "").strip())
+        if not m:
+            raise EspbenchError("bad_request", f"--where {item!r}: va como categoria=valor (ej. chip=esp32-s3)")
+        out.append((m.group(1), m.group(2).strip().lower() or None))
+    return out
+
+
+def matches_where(summary: dict, where) -> bool:
+    """La placa cumple todas las condiciones (AND). En una categoría de varios valores, alcanza con tenerlo."""
+    props = summary.get("props") or {}
+    for cat, val in where or ():
+        have = _prop_values(props.get(cat))
+        if (val is None and have) or (val is not None and val not in have):
+            return False
+    return True
+
+
+def pick_order(summaries: list, where=None) -> list:
+    """Candidatas de `espbench pick`, en orden: cumplen `where`, `available` (libre, sin
+    estado no-tocar/roto), con MAC y sin boot loop. Primero las que no tienen nota (una
+    nota suele ser "estoy usando esta")."""
+    ok = [s for s in summaries if s.get("mac") and s.get("available") and matches_where(s, where)
+          and not (s.get("health") or {}).get("boot_loop")]
+    return sorted(ok, key=lambda s: bool(s.get("note")))
+
+
+def parse_set_ops(ops) -> tuple:
+    """`chip=esp32-s3`, `conectividad=wifi,lte`, `estado=` (quitar), `uso+=ci`, `uso-=ci`
+    → (props, props_add, props_remove) para PATCH /api/devices/{mac}."""
+    props, add, remove = {}, {}, {}
+    for op in ops or []:
+        m = _SET_RE.fullmatch((op or "").strip())
+        if not m:
+            raise EspbenchError("bad_request", f"{op!r}: va como categoria=valor, categoria+=valor, categoria-=valor "
+                                               "o categoria= (quitar)")
+        cat, kind, raw = m.group(1), m.group(2), m.group(3)
+        vals = [v.strip().lower() for v in raw.split(",") if v.strip()]
+        bad = [v for v in vals if not _VALUE_RE.fullmatch(v)]
+        if bad:
+            raise EspbenchError("bad_request", f"{op!r}: valor inválido {bad[0]!r} (minúsculas, números, '.', '_', '-')")
+        if cat in props or cat in add or cat in remove:
+            raise EspbenchError("bad_request", f"{cat} aparece dos veces")
+        if kind == "=":
+            props[cat] = vals if len(vals) > 1 else (vals[0] if vals else None)
+        elif not vals:
+            raise EspbenchError("bad_request", f"{op!r}: falta el valor")
+        else:
+            (add if kind == "+=" else remove)[cat] = vals
+    return props, add, remove
+
+
+def check_props(where_or_values, categories: list) -> None:
+    """bad_request si una categoría o un valor (cat, valor) no está en el catálogo, con el más parecido."""
+    by_cat = {c.get("id"): [v.get("id") for v in c.get("values") or []] for c in categories}
+    for cat, val in where_or_values:
+        if cat not in by_cat:
+            raise EspbenchError("bad_request", f"categoría '{cat}' no existe" + _near(cat, list(by_cat)) +
+                                f". Categorías: {', '.join(by_cat)} (`espbench props`)")
+        if val is not None and val not in by_cat[cat]:
+            raise EspbenchError("bad_request", f"{cat}: '{val}' no es un valor válido" + _near(val, by_cat[cat]) +
+                                f". Válidos: {', '.join(by_cat[cat])} (`espbench props add {cat} {val}` para "
+                                "agregarlo)")
+
+
+def _near(x: str, options: list) -> str:
+    m = difflib.get_close_matches(x, options, n=1, cutoff=0.5)
+    return f" (¿'{m[0]}'?)" if m else ""
+
+
+def merge_categories(lists) -> list:
+    """Unión de los catálogos de varios benches (mismas categorías, valores sumados)."""
+    out, index = [], {}
+    for cats in lists:
+        for c in cats or []:
+            if c.get("id") not in index:
+                index[c["id"]] = {**c, "values": []}
+                out.append(index[c["id"]])
+            have = {v.get("id") for v in index[c["id"]]["values"]}
+            index[c["id"]]["values"] += [v for v in c.get("values") or [] if v.get("id") not in have]
     return out
 
 
@@ -664,6 +773,7 @@ class Client:
         self.state_dir = pathlib.Path(state_dir or default_state_dir())
         self._clock = clock
         self._sleep = sleep
+        self._catalog = None
 
     # ----- HTTP -----
 
@@ -697,6 +807,33 @@ class Client:
 
     def devices(self) -> list:
         return self.request("GET", "/api/devices") or []
+
+    def properties(self) -> list:
+        """Categorías de propiedades con los valores del bench (GET /api/properties). Un
+        bench viejo no lo tiene: not_found."""
+        if self._catalog is None:
+            self._catalog = (self.request("GET", "/api/properties") or {}).get("categories") or []
+        return self._catalog
+
+    def excluded(self) -> dict:
+        """{cat: valores con exclude_pick}; sin catálogo, DEFAULT_EXCLUDE."""
+        try:
+            return {c["id"]: tuple(v["id"] for v in c.get("values") or [] if v.get("exclude_pick"))
+                    for c in self.properties()}
+        except EspbenchError:
+            return DEFAULT_EXCLUDE
+
+    def summarize(self, d: dict) -> dict:
+        return summarize_device(d, self.config.lock_user, self.excluded())
+
+    def set_meta(self, board: "Board", **fields) -> dict:
+        """Nota / propiedades de la placa (PATCH /api/devices/{MAC}); `user` = ESPBENCH_USER."""
+        if not board.mac:
+            raise EspbenchError("not_found", f"la placa '{board.name}' no tiene MAC: no hay dónde guardar nota/props")
+        body = dict(fields)
+        if self.config.lock_user:
+            body["user"] = self.config.lock_user
+        return self.request("PATCH", f"/api/devices/{bare_mac(board.mac)}", body=body) or {}
 
     def resolve(self, name: str, write: bool = False, need_mac: bool = True) -> Board:
         """device_key, SN, MAC o tty → Board, con /api/devices. Una placa que no

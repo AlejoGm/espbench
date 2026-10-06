@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.36.0
+**Version:** 0.37.0
 
 ---
 
@@ -176,6 +176,10 @@ cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_B
 
 espbench benches --json                  # benches encontrados (Tailscale + ~/.config/espbench-benches.json)
 espbench ls --json                       # sin host: las placas de todos los benches, con `bench`
+espbench pick --where chip=esp32-s3 --reserve --ttl 30m --json   # la primera libre que cumple, ya reservada
+espbench note mi-board "agente: probando OTA" --json             # aviso para otros (--clear al terminar)
+espbench set mi-board chip=esp32-s3 conectividad+=lte estado=    # propiedades (estado= la quita)
+espbench props --json                    # categorías y valores; props add <cat> <valor> para uno nuevo
 espbench reserve mi-board --ttl 30m --json
 idf.py build && espbench flash mi-board --verify --json        # flash + primer boot + 10 s sin crash
 espbench send mi-board "status" --until "OK" --json
@@ -191,7 +195,7 @@ espbench release mi-board --json
 | 2 | `flash_failed` |
 | 3 | `crashed` (panic, boot loop o reinicio en la ventana) |
 | 4 | `timeout` |
-| 5 | `busy` |
+| 5 | `busy` / `in_use` |
 | 6 | `locked` / `reservation_lost` / `token_mismatch` |
 | 7 | `not_found` / `ambiguous` / `device_changed` / `session_down` |
 | 8 | `bad_anchor` / `cursor_expired` |
@@ -223,7 +227,12 @@ cómo no llenar el contexto de log):
 mkdir -p ~/.claude/skills && ln -sfn "$PWD/client/agent" ~/.claude/skills/espbench    # desde la raíz del repo
 ```
 
-`ls --json` marca `available: true` en las placas libres o con lock propio: un agente elige entre esas.
+`ls --json` marca `available: true` en las placas libres o con lock propio y sin `estado` excluido (`no-tocar`,
+`roto`: `avoid: true`); `--where cat=valor` (repetible, AND) y `--free` filtran. `pick` hace eso solo: la primera
+placa libre, sana, que cumple los `--where`, en cualquier bench (las que tienen nota, al final), y con `--reserve`
+la reserva. **Nota** (`note`): texto libre, un aviso para personas y agentes, no un lock. **Propiedades** (`props`):
+categorías fijas (`estado`, `uso`, `chip`, `conectividad`, `perifericos`) con valores que cada bench puede ampliar
+(`espbench props add conectividad nb-iot`, o desde el dashboard); ver ARCHITECTURE §8 "Nota y propiedades".
 
 Probar sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --port 8099` levanta una Pi simulada (API real, una
 placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_HOST=127.0.0.1:8099 espbench ls`.
