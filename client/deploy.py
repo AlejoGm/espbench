@@ -13,6 +13,9 @@ import argparse, json, os, pathlib, shlex, socket, struct, subprocess, sys, temp
 import sys as _sys
 _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import sha256_file, send_msg, recv_msg
+# El camino del flash con flasher_args.json del build dir vive en la lib (lo usa también el CLI `espbench`)
+from client import espbench_lib as _lib
+from client.espbench_lib import EspbenchError as _EspbenchError, hw_model_from_build as _hw_model_from_build
 
 try:
     from rich.console import Console
@@ -363,6 +366,13 @@ def save_custom_flasher_args_path(project_root: pathlib.Path, flasher_args_path:
     print(f"[CUSTOM] ✓ Configuración guardada en {config_path.name}")
 
 def collect_artifact(build_dir: pathlib.Path, custom_flasher_args_path: str = None, is_custom_mode: bool = False, is_remote: bool = False)->pathlib.Path:
+    if not (is_custom_mode and custom_flasher_args_path):
+        # Modo normal: flasher_args.json del build (espbench_lib.collect_artifact)
+        try:
+            return _lib.collect_artifact(build_dir, include_elf=is_remote, log=lambda m: print(f"[ARTIFACT] {m}"))
+        except _EspbenchError as e:
+            raise SystemExit(e.message)
+
     print("[ARTIFACT] Recolectando archivos para flashear...")
     
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="artifact_"))
@@ -380,104 +390,48 @@ def collect_artifact(build_dir: pathlib.Path, custom_flasher_args_path: str = No
                 copied.add(p)
                 print(f"[ARTIFACT] + {name} ({p.stat().st_size} bytes)")
         
-        if is_custom_mode and custom_flasher_args_path:
-            # Modo custom: usar flasher_args.json custom
-            print("[ARTIFACT] Modo custom: usando flasher_args.json custom")
-            custom_fa = pathlib.Path(custom_flasher_args_path)
-            if not custom_fa.exists():
-                raise SystemExit(f"[CUSTOM] ✗ No existe el archivo flasher_args.json custom: {custom_flasher_args_path}")
-            
-            # Leer el flasher_args.json custom
-            try:
-                custom_data = json.loads(custom_fa.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as e:
-                raise SystemExit(f"[CUSTOM] ✗ Error al leer flasher_args.json custom: {e}")
-            
-            # Copiar el flasher_args.json al ZIP
-            z.write(custom_fa, arcname="flasher_args.json")
-            print("[ARTIFACT] + flasher_args.json (custom)")
-            
-            # Agregar los archivos especificados en flash_files
-            flash_files = custom_data.get("flash_files", {})
-            if isinstance(flash_files, dict):
-                print(f"[ARTIFACT] Procesando {len(flash_files)} archivo(s) desde flasher_args.json custom")
-                for offset, file_path in flash_files.items():
-                    if file_path:
-                        fp = pathlib.Path(file_path)
-                        # Si es ruta relativa, buscar en el mismo directorio que el flasher_args.json
-                        if not fp.is_absolute():
-                            fp = custom_fa.parent / fp
-                        if fp.exists() and fp.is_file():
-                            add(fp, arcname=fp.name)
-                        else:
-                            print(f"[ARTIFACT] ⚠ Archivo no encontrado: {fp}")
-            
-            # También procesar entradas individuales
-            for key in ["bootloader", "app", "partition-table", "otadata"]:
-                entry = custom_data.get(key)
-                if isinstance(entry, dict):
-                    file_path = entry.get("file")
-                    if file_path:
-                        fp = pathlib.Path(file_path)
-                        if not fp.is_absolute():
-                            fp = custom_fa.parent / fp
-                        if fp.exists() and fp.is_file():
-                            add(fp, arcname=fp.name)
-        else:
-            # Modo normal: usar flasher_args.json del build
-            fa = build_dir / "flasher_args.json"
-            if not fa.exists():
-                raise SystemExit(f"no existe {fa} (corré un build primero)")
-            
-            z.write(fa, arcname="flasher_args.json")
-            print(f"[ARTIFACT] + flasher_args.json")
-            J = json.loads(fa.read_text(encoding="utf-8"))
-            
-            # Procesar flash_files (puede ser dict o list)
-            ff = J.get("flash_files")
-            if isinstance(ff, dict):
-                print(f"[ARTIFACT] flash_files es dict con {len(ff)} entradas")
-                for offset, path in ff.items():
-                    if path:
-                        bp = pathlib.Path(path)
-                        if not bp.is_absolute(): bp = build_dir / bp
-                        add(bp)
-            elif isinstance(ff, list):
-                print(f"[ARTIFACT] flash_files es list con {len(ff)} entradas")
-                for it in ff:
-                    path = None
-                    if isinstance(it, (list, tuple)) and len(it) >= 2:
-                        path = it[1]
-                    elif isinstance(it, dict):
-                        path = it.get("file") or it.get("bin_file") or it.get("path")
-                    if path:
-                        bp = pathlib.Path(path)
-                        if not bp.is_absolute(): bp = build_dir / bp
-                        add(bp)
-            
-            # Procesar entradas individuales (bootloader, app, partition-table, otadata)
-            for key in ["bootloader", "app", "partition-table", "otadata"]:
-                entry = J.get(key)
-                if isinstance(entry, dict):
-                    path = entry.get("file")
-                    if path:
-                        bp = pathlib.Path(path)
-                        if not bp.is_absolute(): bp = build_dir / bp
-                        add(bp)
-            
-            # fallbacks por si acaso
-            for rel in ["bootloader/bootloader.bin", "partition_table/partition-table.bin", "ota_data_initial.bin", "clc1.bin", "app.bin"]:
-                p = build_dir / rel
-                if p.exists():
-                    add(p)
-
-            if is_remote:
-                elf_files = list(build_dir.glob("*.elf"))
-                if elf_files:
-                    z.write(elf_files[0], arcname="firmware.elf")
-                    print(f"[ARTIFACT] + firmware.elf ({elf_files[0].stat().st_size} bytes)")
-                else:
-                    print("[ARTIFACT] WARNING: no .elf found in build dir, skipping")
+        # Modo custom: usar flasher_args.json custom
+        print("[ARTIFACT] Modo custom: usando flasher_args.json custom")
+        custom_fa = pathlib.Path(custom_flasher_args_path)
+        if not custom_fa.exists():
+            raise SystemExit(f"[CUSTOM] ✗ No existe el archivo flasher_args.json custom: {custom_flasher_args_path}")
+        
+        # Leer el flasher_args.json custom
+        try:
+            custom_data = json.loads(custom_fa.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"[CUSTOM] ✗ Error al leer flasher_args.json custom: {e}")
+        
+        # Copiar el flasher_args.json al ZIP
+        z.write(custom_fa, arcname="flasher_args.json")
+        print("[ARTIFACT] + flasher_args.json (custom)")
+        
+        # Agregar los archivos especificados en flash_files
+        flash_files = custom_data.get("flash_files", {})
+        if isinstance(flash_files, dict):
+            print(f"[ARTIFACT] Procesando {len(flash_files)} archivo(s) desde flasher_args.json custom")
+            for offset, file_path in flash_files.items():
+                if file_path:
+                    fp = pathlib.Path(file_path)
+                    # Si es ruta relativa, buscar en el mismo directorio que el flasher_args.json
+                    if not fp.is_absolute():
+                        fp = custom_fa.parent / fp
+                    if fp.exists() and fp.is_file():
+                        add(fp, arcname=fp.name)
+                    else:
+                        print(f"[ARTIFACT] ⚠ Archivo no encontrado: {fp}")
+        
+        # También procesar entradas individuales
+        for key in ["bootloader", "app", "partition-table", "otadata"]:
+            entry = custom_data.get(key)
+            if isinstance(entry, dict):
+                file_path = entry.get("file")
+                if file_path:
+                    fp = pathlib.Path(file_path)
+                    if not fp.is_absolute():
+                        fp = custom_fa.parent / fp
+                    if fp.exists() and fp.is_file():
+                        add(fp, arcname=fp.name)
     
     size_mb = out.stat().st_size / (1024*1024)
     print(f"[ARTIFACT] ✓ Artifact creado: {out.name} ({size_mb:.2f} MB)")
@@ -545,90 +499,18 @@ def _resolve_device_port(r: dict) -> tuple:
     except Exception as e:
         raise RuntimeError(f"No se pudo resolver device '{device_key}' en {host}: {e}")
 
-def _hw_model_from_build(build_dir: pathlib.Path) -> str:
-    """Read hw_model from build/project_description.json (split on last '-')."""
-    desc = build_dir / "project_description.json"
-    if not desc.exists():
-        return None
-    try:
-        data = json.loads(desc.read_text())
-        pname = data.get("project_name", "")
-        if not pname:
-            return None
-        idx = pname.rfind("-")
-        return pname[:idx] if idx >= 0 else pname
-    except Exception:
-        return None
-
 def flash_one(remote_cfg: dict, artifact: pathlib.Path, digest: str, size: int,
               job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
               on_status=None, on_line=None, verbose: bool = False) -> dict:
-    name = _remote_name(remote_cfg)
-    logs = []
-
-    def log(msg):
-        logs.append(msg)
+    """espbench_lib.flash_one con la salida de siempre: verbose imprime las fases
+    y el log de esptool a medida que llega."""
+    def line(l):
         if verbose:
-            print(msg)
-
-    def status(phase):
-        if on_status:
-            on_status(phase)
-        log(f"  {phase}")
-
-    lock_user  = str(remote_cfg.get("lock_user",  "")).strip()
-    lock_token = str(remote_cfg.get("lock_token", "")).strip()
-    if not lock_user or not lock_token:
-        return {"ok": False, "name": name, "error": "falta lock_user/lock_token en config", "logs": logs}
-
-    token = str(remote_cfg.get("token", ""))
-    host  = remote_cfg["host"]
-    port  = int(remote_cfg["port"])
-    header = {
-        "token": token, "action": "upload_and_flash",
-        "job_id": f"{job_id}_{name}", "chip": chip, "baud": flash_baud,
-        "encrypt": bool(encrypt), "erase": bool(erase),
-        "artifact_size": size, "artifact_sha256": digest, "artifact_name": artifact.name,
-        "lock_user": lock_user, "lock_token": lock_token,
-        "stream": True,
-    }
-    try:
-        status("conectando...")
-        s = socket.create_connection((host, port), timeout=30)
-        try:
-            send_msg(s, header)
-            status("esperando ACK...")
-            ack = recv_msg(s)
-            if not ack.get("ok") or ack.get("phase") != "ready":
-                err = ack.get("message") or ack.get("error") or "ACK fallido"
-                return {"ok": False, "name": name, "error": err, "logs": logs}
-            status(f"enviando artifact ({size / (1024*1024):.1f} MB)...")
-            with artifact.open("rb") as f:
-                for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                    s.sendall(chunk)
-            status("flasheando...")
-            s.settimeout(300)
-            stream_lines = []
-            resp = None
-            while True:
-                msg = recv_msg(s)
-                if "ok" in msg:  # mensaje final (server nuevo o viejo)
-                    resp = msg
-                    break
-                if msg.get("phase") == "log":
-                    line = msg.get("line", "")
-                    stream_lines.append(line)
-                    if verbose:
-                        print(line, flush=True)
-                    if on_line:
-                        on_line(line)
-            resp.setdefault("name", name)
-            resp["logs"] = logs + stream_lines
-            return resp
-        finally:
-            s.close()
-    except Exception as e:
-        return {"ok": False, "name": name, "error": str(e), "logs": logs}
+            print(l, flush=True)
+        if on_line:
+            on_line(l)
+    return _lib.flash_one(remote_cfg, artifact, digest, size, job_id, chip, flash_baud, encrypt, erase,
+                          on_status=on_status, on_line=line, on_log=print if verbose else None)
 
 def _flash_parallel(remotes: list, artifact: pathlib.Path, digest: str, size: int,
                     job_id: str, chip: str, flash_baud: int, encrypt: bool, erase: bool,
