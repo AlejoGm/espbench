@@ -184,9 +184,29 @@ test('lockInfo: reserva, lock del flash, vencida y sin lock', () => {
 test('forceConfirmText: quién y hasta cuándo', () => {
     const lock = EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T16:20:00'}, NOW);
     const t = EB.forceConfirmText(lock, 'Mandar');
-    assert.match(t, /reservada por juan \(vence en 20 min, hasta 16:20:00\)/);
+    assert.match(t, /reservada por juan \(vence en 20 min, hasta 16:20:00\)/);   // sin zona = hora local
     assert.match(t, /¿Mandar igual\? Queda registrado como forzado\./);
     assert.match(EB.forceConfirmText(null, 'Resetear', "reservada por 'x' hasta y"), /^reservada por 'x'/);
+    const flash = EB.lockInfo({lock_user: 'ana', lock_expires: null}, NOW);
+    assert.match(EB.forceConfirmText(flash, 'Soltarlo'), /^La placa tiene el lock del flash de ana \(sin vencimiento\)/);
+});
+
+// Este archivo corre con TZ=UTC y con TZ de Argentina (tests/test_dashboard_js.py):
+// lo que viene con offset o epoch no puede depender de la zona del navegador.
+test('lockInfo/parseLocal: lock_expires con offset y epoch, en cualquier TZ', () => {
+    const now = Date.UTC(2026, 9, 6, 19, 0, 0);                  // 16:00 en la Pi (-03:00)
+    const r = EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T16:20:00-03:00'}, now);
+    assert.equal(r.text, 'vence en 20 min');
+    assert.equal(EB.parseLocal('2026-10-06T16:20:00-03:00').getTime(), Date.UTC(2026, 9, 6, 19, 20, 0));
+    assert.equal(EB.parseLocal('2026-10-06T19:20:00Z').getTime(), Date.UTC(2026, 9, 6, 19, 20, 0));
+    assert.equal(EB.parseLocal('2026-10-06T22:20:00+0300').getTime(), Date.UTC(2026, 9, 6, 19, 20, 0));
+    // el epoch manda sobre el ISO (aunque el ISO venga sin zona, de una Pi vieja)
+    const e = EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T16:20:00',
+                           lock_expires_epoch: Date.UTC(2026, 9, 6, 19, 30, 0) / 1000}, now);
+    assert.equal(e.text, 'vence en 30 min');
+    assert.equal(EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T15:59:00-03:00'}, now), null);
+    // until: la hora en el reloj del navegador
+    assert.equal(EB.tsMs(r.until), Date.UTC(2026, 9, 6, 19, 20, 0));
 });
 
 test('searchMatch: texto libre o @usuario del lock', () => {

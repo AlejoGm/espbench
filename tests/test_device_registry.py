@@ -379,7 +379,9 @@ class TestLocks:
         with patch("subprocess.run", side_effect=mock_tmux_down):
             d = dataclasses.asdict(registry.get_device("ttyUSB0"))
         assert d["lock_user"] == "alejo"
-        assert d["lock_expires"] == dt.datetime.fromtimestamp(future).isoformat(timespec="seconds")
+        # con offset: el navegador del dashboard puede estar en otra zona que la Pi
+        assert d["lock_expires"] == dt.datetime.fromtimestamp(future).astimezone().isoformat(timespec="seconds")
+        assert d["lock_expires"][-6] in "+-" and d["lock_expires_epoch"] == future
 
     def test_flash_lock_has_no_expiry(self, tmp_path, monkeypatch):
         registry = self._registry(tmp_path, monkeypatch)

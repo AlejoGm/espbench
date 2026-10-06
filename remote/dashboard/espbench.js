@@ -19,12 +19,21 @@
 
     // ── Tiempo y tamaños ──────────────────────────────────────────────────
 
-    // Los timestamps del server son hora local sin zona ("2026-10-05T16:00:00").
+    // Los timestamps del server son hora local sin zona ("2026-10-05T16:00:00"),
+    // salvo los que traen offset (lock_expires: "...-03:00" o "Z"), que se
+    // respetan aunque el navegador esté en otra zona que la Pi.
     function parseLocal(iso) {
         if (!iso) return null;
-        var m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)/.exec(iso);
+        var m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:?\d\d)?$/.exec(iso) ||
+                /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)/.exec(iso);
         if (!m) return null;
-        return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+        if (!m[7]) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+        var off = 0;
+        if (m[7] !== 'Z') {
+            var z = m[7].replace(':', '');
+            off = (z.charAt(0) === '-' ? -1 : 1) * (+z.slice(1, 3) * 60 + +z.slice(3, 5));
+        }
+        return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - off * 60000);
     }
 
     function relTime(iso, now) {
@@ -280,21 +289,26 @@
      */
     function lockInfo(d, now) {
         if (!d || !d.lock_user) return null;
-        if (!d.lock_expires) {
-            return {user: d.lock_user, reservation: false, expires: null, text: 'sin vencimiento',
+        if (!d.lock_expires && !d.lock_expires_epoch) {
+            return {user: d.lock_user, reservation: false, expires: null, until: null, text: 'sin vencimiento',
                     title: 'Lock del flash de ' + d.lock_user + ' (sin vencimiento; no bloquea la consola)'};
         }
-        var text = expiresText(d.lock_expires, now);
+        // epoch si está (no depende de zonas); si no, el ISO (con offset o local)
+        var expires = d.lock_expires_epoch ? isoLocal(d.lock_expires_epoch) : d.lock_expires;
+        var text = expiresText(expires, now);
         if (!text) return null;
-        return {user: d.lock_user, reservation: true, expires: d.lock_expires, text: text,
-                title: 'Reservada por ' + d.lock_user + ' hasta ' + d.lock_expires.replace('T', ' ')};
+        var until = isoLocal(parseLocal(expires).getTime() / 1000);   // hora del navegador
+        return {user: d.lock_user, reservation: true, expires: expires, until: until, text: text,
+                title: 'Reservada por ' + d.lock_user + ' hasta ' + until.replace('T', ' ')};
     }
 
     // Texto del confirm antes de forzar (escritura con 423, o "forzar" la reserva).
     function forceConfirmText(lock, action, fallback) {
-        var who = lock ? 'La placa está reservada por ' + lock.user +
-                         (lock.reservation ? ' (' + lock.text + ', hasta ' + lock.expires.slice(11, 19) + ')' : '') + '.'
-                       : (fallback || 'La placa está reservada por otro usuario.');
+        var who;
+        if (!lock) who = fallback || 'La placa está reservada por otro usuario.';
+        else if (lock.reservation) who = 'La placa está reservada por ' + lock.user + ' (' + lock.text +
+                                         ', hasta ' + lock.until.slice(11, 19) + ').';
+        else who = 'La placa tiene el lock del flash de ' + lock.user + ' (sin vencimiento).';
         return who + '\n¿' + action + ' igual? Queda registrado como forzado.';
     }
 

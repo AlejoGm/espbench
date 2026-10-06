@@ -56,9 +56,17 @@ class Lock:
         return self.user == user and self.token == token
 
     def expires_iso(self) -> Optional[str]:
+        """Hora local de la Pi, sin zona: para mensajes."""
         if self.expires is None:
             return None
         return dt.datetime.fromtimestamp(self.expires).isoformat(timespec="seconds")
+
+    def expires_iso_tz(self) -> Optional[str]:
+        """Con el offset de la Pi (2026-10-06T16:30:00-03:00): para datos que
+        lee otro reloj (el navegador del dashboard puede estar en otra zona)."""
+        if self.expires is None:
+            return None
+        return dt.datetime.fromtimestamp(self.expires).astimezone().isoformat(timespec="seconds")
 
 
 def normalize_mac(mac: Optional[str]) -> Optional[str]:

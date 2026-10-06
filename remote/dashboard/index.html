@@ -377,7 +377,8 @@
                 if (!lock) return;
                 if (lock.reservation) {
                     c.reserved++;
-                    who.push(lock.user + ' → ' + (d.device_key || d.tty_name) + ' (' + lock.text + ')');
+                    // hora fija, no "vence en": el tooltip no se refresca con el tick
+                    who.push(lock.user + ' → ' + (d.device_key || d.tty_name) + ' (hasta ' + lock.until.slice(11, 16) + ')');
                 } else {
                     c.flashLocked++;
                 }

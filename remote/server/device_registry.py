@@ -156,9 +156,11 @@ class DeviceInfo:
     health: Optional[dict] = None
     # Cómo terminó el último flasheo (result.json). None si no hay o es anterior a result.json.
     last_flash_ok: Optional[bool] = None
-    # Vencimiento del lock (ISO local) si es una reserva; None si es el lock
-    # permanente del flash o no hay lock. Un lock vencido no aparece.
+    # Vencimiento del lock si es una reserva (ISO con el offset de la Pi, y en
+    # epoch); None si es el lock permanente del flash o no hay lock. Un lock
+    # vencido no aparece.
     lock_expires: Optional[str] = None
+    lock_expires_epoch: Optional[int] = None
 
 
 class DeviceRegistry:
@@ -281,7 +283,8 @@ class DeviceRegistry:
             state=self._live_state(state),
             health=state.get("health"),
             last_flash_ok=last_flash_ok,
-            lock_expires=lock.expires_iso() if lock else None,
+            lock_expires=lock.expires_iso_tz() if lock else None,
+            lock_expires_epoch=lock.expires if lock else None,
         )
 
     @staticmethod
