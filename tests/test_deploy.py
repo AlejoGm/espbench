@@ -74,3 +74,31 @@ def test_deploy_flash_one_against_the_real_protocol(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "  conectando..." in out and "  flasheando..." in out and "Writing at 0x00010000... (100 %)" in out
     assert r["logs"][0] == "  conectando..."
+
+
+def test_client_works_without_fcntl(tmp_path, monkeypatch, capsys):
+    """Windows no tiene fcntl: deploy.py y la lib tienen que importar igual, y
+    el CLI anda sin el flock del registro local de reservas (antes, `import
+    fcntl` a nivel de módulo rompía deploy.py en Windows)."""
+    import importlib
+    import client as client_pkg
+    with Bench() as bench:
+        bench.add_board(key="sim-board")
+        for name in ("espbench_lib", "deploy", "espbench"):
+            monkeypatch.delitem(sys.modules, f"client.{name}", raising=False)
+            if hasattr(client_pkg, name):
+                monkeypatch.setattr(client_pkg, name, getattr(client_pkg, name))
+        monkeypatch.setitem(sys.modules, "fcntl", None)        # import fcntl → ImportError
+        lib = importlib.import_module("client.espbench_lib")
+        importlib.import_module("client.deploy")
+        cli = importlib.import_module("client.espbench")
+        assert lib.fcntl is None
+        for k, v in {"ESPBENCH_HOST": bench.host, "ESPBENCH_USER": "win", "ESPBENCH_LOCK_TOKEN": "t0k",
+                     "ESPBENCH_CONFIG": str(tmp_path / "no.json"), "ESPBENCH_STATE_DIR": str(tmp_path / "st")}.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.chdir(tmp_path)
+        capsys.readouterr()
+        assert cli.main(["reserve", "sim-board", "--json"]) == 0
+        assert "win" in json.dumps(json.loads((tmp_path / "st" / "reservations.json").read_text()))
+        assert cli.main(["release", "sim-board", "--json"]) == 0
+        assert json.loads((tmp_path / "st" / "reservations.json").read_text()) == {}

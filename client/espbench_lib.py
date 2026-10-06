@@ -21,7 +21,6 @@ dependencias). Corre en la Mac del dev: Python 3.9+.
 Los errores llevan `error` estable (el contrato, §8.3) y su exit code.
 """
 import dataclasses
-import fcntl
 import json
 import os
 import pathlib
@@ -39,6 +38,11 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from common import recv_msg, send_msg, sha256_file  # noqa: E402
+
+try:                    # Windows no tiene fcntl: deploy.py y el CLI andan igual, sin el flock del registro local
+    import fcntl
+except ImportError:     # pragma: no cover - depende de la plataforma
+    fcntl = None
 
 DASHBOARD_PORT = 8080
 POLL_S = 0.3
@@ -661,7 +665,8 @@ class Client:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(path.with_name(path.name + ".lck")), os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if fcntl is not None:       # Windows: sin flock (dos agentes en la misma máquina pueden pisarse)
+                fcntl.flock(fd, fcntl.LOCK_EX)
             data = self._resv_load()
             fn(data)
             tmp_fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".reservations.", suffix=".tmp")
