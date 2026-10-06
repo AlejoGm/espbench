@@ -1,0 +1,43 @@
+#!/bin/bash
+# espbench-procs [--roots] [<tty path>] — pids de los procesos de una placa (o de todas), uno por línea.
+#
+# Raíz = proceso cuyo cmdline empieza con sudo o python* y corre `remote_esp32.py -p <tty>`: el python del
+# venv y el sudo que lo lanza. Se mira argv[0] para no tomar el tmux server: su cmdline es el del new-session
+# que lo creó, que lleva el comando entero (`tmux new-session ... sudo .../python3 .../remote_esp32.py -p ...`).
+# Sin --roots se suman todos sus descendientes (esp_idf_monitor, esptool): con -9 solo al python, quedan
+# huérfanos y con el puerto serie abierto. Los zombies no cuentan (ya murieron; falta que el padre los junte).
+#
+# Lo usan devremote (--reset, --status, --check) y esp32_tmux.sh (¿la sesión tiene proceso?).
+set -euo pipefail
+
+roots=0
+if [ "${1:-}" = "--roots" ]; then
+    roots=1
+    shift
+fi
+tty="${1:-}"
+
+ps -ww -eo pid=,ppid=,stat=,args= 2>/dev/null | awk -v tty="$tty" -v roots="$roots" '
+    $3 ~ /^Z/ { next }
+    {
+        pid = $1; ppid = $2
+        $1 = ""; $2 = ""; $3 = ""
+        sub(/^ +/, "")
+        args = $0 " "
+        split(args, a, " "); n = split(a[1], p, "/"); cmd = p[n]
+        n_all++; pids[n_all] = pid; parent[pid] = ppid
+        if ((cmd == "sudo" || tolower(cmd) ~ /^python/) && index(args, "remote_esp32.py -p " tty (tty == "" ? "" : " ")))
+            sel[pid] = 1
+    }
+    END {
+        if (!roots) {
+            do {
+                changed = 0
+                for (i = 1; i <= n_all; i++) {
+                    q = pids[i]
+                    if (!(q in sel) && (parent[q] in sel)) { sel[q] = 1; changed = 1 }
+                }
+            } while (changed)
+        }
+        for (q in sel) print q
+    }'

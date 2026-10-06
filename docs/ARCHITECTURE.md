@@ -351,9 +351,19 @@ boot ─────► devremote.service ────────────�
   recibieron SIGTERM + SIGHUP y quedaron DOWN. Lo mismo con `devremote-reset` del
   api (unit `dashboard.service`) y el siguiente restart del dashboard. Red de
   seguridad: los units del update tienen `KillMode=process`, como `espbench-attach@`.
-- `devremote`: `--status`, `--reset [<dev>]`, `--unlock <dev>`, `--slots`,
+- `devremote`: `--status`, `--reset [<dev>]`, `--check`, `--unlock <dev>`, `--slots`,
   `--cleanup`, `<dev>` (attach). `<dev>` acepta `N`, `ttyUSBN`, `esp-slotK` o
   `slotK`.
+- **Reinicio**: `devremote --reset` mata con `-9` los procesos de la placa *y sus hijos*
+  (`espbench-procs`: con `-9` solo al python, esptool y esp_idf_monitor quedaban
+  huérfanos con el puerto abierto), espera a que mueran de verdad y recién ahí
+  recrea la sesión. Antes era `pkill -f "python3.*remote_esp32[.]py ..."`, que
+  matcheaba también el `sudo` y el tmux server (tmux no reescribe su cmdline en
+  Linux: es el del `new-session` que lo creó, con el comando entero), y un
+  `sleep 1` en vez de esperar.
+- `esp32_tmux.sh` no saltea una sesión que existe sin su proceso (`STALE`) o con
+  un proceso que está cerrando (`"stopping": true` en `run/<tty>.json`, que
+  `remote_esp32.py` publica antes de parar el monitor): la recrea.
 - Desconexión: el watcher del proceso ve que el tty desapareció → `DISCONNECTED`
   → el proceso termina. Cuando el tty vuelve, `esp32_tmux.sh` recrea la sesión.
 

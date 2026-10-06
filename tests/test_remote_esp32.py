@@ -230,3 +230,15 @@ def test_signal_during_discover_exits_without_monitor(env, monkeypatch):
     text = "\n".join(lines)
     assert "señal durante el arranque" in text
     assert "-> unknown" not in text and "-> monitoring" not in text
+
+
+def test_publishes_stopping_before_stopping_the_monitor(env, monkeypatch):
+    """Parar el monitor tarda: esp32_tmux.sh ve "stopping" y espera a que el proceso salga
+    para recrear la sesión, en vez de saltearla porque el proceso todavía está vivo."""
+    base, tty, seen = env
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port, stop=None: MAC)
+    at_stop = {}
+    monkeypatch.setattr(FakeMon, "stop", lambda self: at_stop.update(runstate.read("ttyUSB3") or {}))
+    run_main(tty, base, stop_after=0.3)
+    assert at_stop.get("stopping") is True and at_stop["state"] == "monitoring"
+    assert runstate.read("ttyUSB3") is None

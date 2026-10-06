@@ -30,14 +30,22 @@ if [ ! -e "$PORT_TTY" ]; then
   exit 1
 fi
 
+alive() { [ -n "$(espbench-procs --roots "$PORT_TTY")" ]; }
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-  # Si el proceso de esa sesión marcó el tty como desconectado, está por
-  # terminar: recrearla ahora, si no el device que volvió queda sin sesión.
+  # Se deja solo una sesión con su proceso andando. Si no, se recrea: si se la
+  # saltea, el device queda sin sesión cuando el proceso termine de salir.
   if grep -q '"state": "disconnected"' "$STATE" 2>/dev/null; then
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    :   # el tty se fue y volvió: el proceso viejo está por terminar
+  elif ! alive; then
+    :   # la sesión quedó sin su remote_esp32
+  elif grep -q '"stopping": true' "$STATE" 2>/dev/null; then
+    # recibió una señal y está cerrando (parar el monitor tarda): esperar a que salga
+    for _ in $(seq 50); do alive || break; sleep 0.2; done
   else
     exit 0
   fi
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
 fi
 
 # Liberar el lock del flash al iniciar nueva sesión (dispositivo reconectado).

@@ -163,6 +163,13 @@ def main(argv=None):
         _shutdown.set()
     finally:
         stop_watch.set()
+        if device.state != DeviceState.DISCONNECTED:
+            # Parar el monitor puede tardar unos segundos: esp32_tmux.sh ve "stopping" y espera
+            # a que el proceso salga para recrear la sesión, en vez de saltearla por estar vivo.
+            try:
+                runstate.write(device.tty_name, {**device.snapshot(), "stopping": True})
+            except Exception as e:
+                taglog.warn(TAG, f"no se pudo publicar stopping: {e}")
         mon.stop()
         if device.state == DeviceState.DISCONNECTED:
             # Se deja run/<tty>.json en "disconnected": esp32_tmux.sh lo usa para

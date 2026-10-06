@@ -169,6 +169,11 @@ info "Instalando espbench-name en /usr/local/bin/..."
 cp "$REMOTE_DIR/infra/espbench-name" /usr/local/bin/espbench-name
 chmod +x /usr/local/bin/espbench-name
 
+# espbench-procs: los procesos de una placa (devremote --reset/--check, esp32_tmux.sh).
+info "Instalando espbench-procs en /usr/local/bin/..."
+cp "$REMOTE_DIR/infra/espbench-procs" /usr/local/bin/espbench-procs
+chmod +x /usr/local/bin/espbench-procs
+
 # espbench-update: se instala con cp + mv (no cp encima): si este install lo
 # corre el propio espbench-update, no se le pisa el archivo mientras corre.
 info "Instalando espbench-update en /usr/local/bin/..."
@@ -265,6 +270,7 @@ echo "    /opt/esp/jobs/            <- jobs temporales"
 echo "    /usr/local/bin/devremote  <- CLI"
 echo "    /usr/local/bin/esp32_tmux.sh"
 echo "    /usr/local/bin/espbench-name"
+echo "    /usr/local/bin/espbench-procs"
 echo "    /etc/udev/rules.d/99-esp32.rules"
 echo "    /etc/systemd/system/devremote.service"
 echo "    /etc/systemd/system/dashboard.service"

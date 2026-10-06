@@ -7,7 +7,8 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | Archivo | Tipo | Qué hace | Instalado en |
 |---|---|---|---|
 | `espbench-name` | bash | **Única fuente** de la regla de nombre y puerto de un device | `/usr/local/bin/` |
-| `esp32_tmux.sh` | bash | Crea la sesión tmux `esp32_<nombre>` que corre `remote_esp32.py` | `/usr/local/bin/` |
+| `esp32_tmux.sh` | bash | Crea la sesión tmux `esp32_<nombre>` que corre `remote_esp32.py`. Una sesión existente se deja solo si su proceso está vivo; sin proceso, `disconnected` o `stopping` (esperando a que salga), se recrea | `/usr/local/bin/` |
+| `espbench-procs` | bash | **Única fuente** de "cuáles son los procesos de una placa": `sudo`/`python*` con `remote_esp32.py -p <tty>` en argv[0] (no el tmux server, cuyo cmdline lleva el comando entero) + descendientes (esptool, esp_idf_monitor). `--roots`: sin descendientes | `/usr/local/bin/` |
 | `devremote` | bash | CLI de sesiones (ver abajo). Siempre corre como `sfypi` | `/usr/local/bin/` |
 | `99-esp32.rules` | udev | Symlink `/dev/esp-slotK` + hotplug vía systemd | `/etc/udev/rules.d/` |
 | `espbench-attach@.service` | systemd | Hotplug: `devremote --start %I` como `sfypi` | `/etc/systemd/system/` |
@@ -36,8 +37,9 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 |---|---|
 | `devremote` | Levanta las sesiones que falten |
 | `devremote <dev>` | `tmux attach` a la sesión del device |
-| `devremote --status` | Device / kernel tty / puerto / sesión / estado de la FSM / pid |
-| `devremote --reset [<dev>]` | Reinicia todas las sesiones, o solo la de `<dev>` |
+| `devremote --status` | Device / kernel tty / puerto / sesión (`RUNNING`, `STALE` = sesión sin proceso, `DOWN`) / estado de la FSM / pid |
+| `devremote --reset [<dev>]` | Reinicia todas las sesiones, o solo la de `<dev>`: `kill -9` a los procesos de la placa y sus hijos (`espbench-procs`), espera a que mueran (`DEVREMOTE_KILL_TIMEOUT`, 5 s; si no, `-9` de nuevo) y recién ahí recrea la sesión |
+| `devremote --check` | Sale con 0 si cada device enchufado tiene sesión con su `remote_esp32` vivo; lista lo que falta (lo usa `espbench-update`) |
 | `devremote --unlock <dev>` | Libera el lock o la reserva (de quien sea), bajo el `flock` de `locks.exclusive` y con un evento `release` forzado (`python3 -m server.locks unlock`; sin el server instalado, `rm`) |
 | `devremote --slots` | `ID_PATH` de cada puerto (para armar `slots.conf`) |
 | `devremote --start <ttyUSBN>` | Levanta una sesión (lo usa el hotplug) |

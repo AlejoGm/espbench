@@ -22,8 +22,23 @@ exit 0
 echo "$*" >> "$FAKE/tmux.log"
 case "$1" in
   has-session)  [ -f "$FAKE/sessions/$3" ] ;;
-  new-session)  touch "$FAKE/sessions/$4"; echo "${@: -1}" > "$FAKE/sessions/$4" ;;
-  kill-session) rm -f "$FAKE/sessions/$3" ;;
+  new-session)  cmd="${@: -1}"
+                tty="$(echo "$cmd" | sed -n 's/.* -p \([^ ]*\) .*/\1/p')"
+                # ¿arranca con el proceso viejo de esa placa todavía vivo?
+                old="$(espbench-procs --roots "$tty")"
+                [ -n "$old" ] && echo "OLD_ALIVE $tty $(echo $old)" >> "$FAKE/tmux.log"
+                echo "$cmd" > "$FAKE/sessions/$4"
+                # el comando de la sesión: sudo → python (remote_esp32.py)
+                n=$(( $(cat "$FAKE/nextpid" 2>/dev/null || echo 7000) + 2 )); echo "$n" > "$FAKE/nextpid"
+                echo "$n 1 S $cmd" >> "$FAKE/ps.table"
+                echo "$((n + 1)) $n S ${cmd#sudo }" >> "$FAKE/ps.table"
+                echo "$n $((n + 1))" > "$FAKE/sesspid/$4" ;;
+  kill-session) rm -f "$FAKE/sessions/$3"
+                # SIGHUP a los procesos de la sesión: mueren
+                for p in $(cat "$FAKE/sesspid/$3" 2>/dev/null); do
+                  grep -v "^$p " "$FAKE/ps.table" > "$FAKE/ps.tmp" || true; mv "$FAKE/ps.tmp" "$FAKE/ps.table"
+                done
+                rm -f "$FAKE/sesspid/$3" ;;
   ls)           n=0                      # sin sesiones no hay server: tmux ls sale con 1
                 for s in "$FAKE"/sessions/*; do
                   [ -e "$s" ] || continue
@@ -35,6 +50,35 @@ case "$1" in
 esac
 ''',
     "pkill": '#!/bin/bash\necho "$*" >> "$FAKE/pkill.log"\nexit 0\n',
+    # Tabla de procesos falsa ($FAKE/ps.table: "pid ppid stat args"). Un pid en dying/<pid>
+    # (contador) sigue apareciendo esa cantidad de llamadas más: un proceso que tarda en morir.
+    "ps": r'''#!/bin/bash
+t="$FAKE/ps.table"; touch "$t"
+for d in "$FAKE"/dying/*; do
+  [ -e "$d" ] || continue
+  n=$(cat "$d"); pid=$(basename "$d")
+  if [ "$n" -le 0 ]; then
+    rm -f "$d"; grep -v "^$pid " "$t" > "$t.tmp" || true; mv "$t.tmp" "$t"
+  else
+    echo $((n - 1)) > "$d"
+  fi
+done
+cat "$t"
+''',
+    # kill -9 pids: los saca de la tabla. immortal/<pid> (contador): sobrevive esa cantidad de
+    # kills. slow/<pid> (contador): muere, pero sigue en la tabla esa cantidad de ps más.
+    "kill": r'''#!/bin/bash
+echo "kill $*" >> "$FAKE/kill.log"
+t="$FAKE/ps.table"
+for pid in "$@"; do
+  case "$pid" in -*) continue ;; esac
+  if [ -f "$FAKE/immortal/$pid" ] && [ "$(cat "$FAKE/immortal/$pid")" -gt 0 ]; then
+    echo $(( $(cat "$FAKE/immortal/$pid") - 1 )) > "$FAKE/immortal/$pid"; continue
+  fi
+  if [ -f "$FAKE/slow/$pid" ]; then mv "$FAKE/slow/$pid" "$FAKE/dying/$pid"; continue; fi
+  grep -v "^$pid " "$t" > "$t.tmp" || true; mv "$t.tmp" "$t"
+done
+''',
     # sudo [-n] [-u user] cmd...: exec, así `sudo kill` usa el kill falso y no el builtin
     "sudo": r'''#!/bin/bash
 while [ $# -gt 0 ]; do
@@ -58,8 +102,9 @@ exec "$@"
 def infra(tmp_path):
     fake = tmp_path / "fake"
     (fake / "bin").mkdir(parents=True)
-    (fake / "sessions").mkdir()
-    (fake / "idpath").mkdir()
+    for d in ("sessions", "idpath", "sesspid", "dying", "immortal", "slow"):
+        (fake / d).mkdir()
+    (fake / "ps.table").touch()
     for name, body in FAKES.items():
         f = fake / "bin" / name
         f.write_text(body)
@@ -89,6 +134,27 @@ def infra(tmp_path):
 
         def slots(self, text):
             (base / "slots.conf").write_text(text)
+
+        def proc(self, pid, ppid, args, stat="S"):
+            """Un proceso en la tabla falsa de ps."""
+            with open(fake / "ps.table", "a") as f:
+                f.write(f"{pid} {ppid} {stat} {args}\n")
+
+        def board(self, name, pid=100, session=True):
+            """Una placa corriendo como en la Pi: tmux server (cuyo cmdline es el del new-session
+            que lo creó), sudo, el python de remote_esp32.py y un esptool hijo. Devuelve los pids."""
+            cmd = f"sudo {base}/venv/bin/python3 {base}/server/remote_esp32.py -p {devdir}/{name} -tcp 5000 --base {base}"
+            self.proc(pid, 1, f"tmux new-session -d -s esp32_{name} {cmd}")
+            self.proc(pid + 1, pid, cmd)
+            self.proc(pid + 2, pid + 1, cmd[len("sudo "):])
+            self.proc(pid + 3, pid + 2, f"{base}/venv/bin/python3 -m esptool --port {devdir}/{name} read_mac")
+            if session:
+                (fake / "sessions" / f"esp32_{name}").write_text("viejo")
+                (fake / "sesspid" / f"esp32_{name}").write_text(f"{pid + 1} {pid + 2}")
+            return pid + 1, pid + 2, pid + 3
+
+        def pids(self):
+            return {int(l.split()[0]) for l in (fake / "ps.table").read_text().splitlines() if l.strip()}
 
         def session_cmd(self, name):
             f = fake / "sessions" / name
@@ -170,10 +236,34 @@ def test_tmux_fails_clearly_if_slot_symlink_missing(infra):
 
 def test_tmux_keeps_running_session(infra):
     infra.plug("ttyUSB3")
-    (infra.fake / "sessions" / "esp32_ttyUSB3").write_text("viejo")
+    infra.board("ttyUSB3")
     (infra.base / "run" / "ttyUSB3.json").write_text('{\n  "state": "monitoring"\n}')
     infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
     assert infra.session_cmd("esp32_ttyUSB3") == "viejo"
+
+
+def test_tmux_recreates_session_whose_process_is_gone(infra):
+    """La sesión existe pero su remote_esp32 ya no: antes se la salteaba (has-session) y,
+    cuando la sesión terminaba de cerrarse, el device quedaba sin ninguna."""
+    infra.plug("ttyUSB3")
+    (infra.fake / "sessions" / "esp32_ttyUSB3").write_text("viejo")
+    (infra.base / "run" / "ttyUSB3.json").write_text('{\n  "state": "discovering"\n}')
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    assert "kill-session -t esp32_ttyUSB3" in infra.log("tmux")
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB3")
+
+
+def test_tmux_waits_for_a_stopping_process_and_recreates(infra):
+    """El proceso recibió una señal y está cerrando ("stopping"): se espera a que salga y
+    se recrea la sesión, en vez de saltearla porque todavía está vivo."""
+    infra.plug("ttyUSB3")
+    sudo, py, esptool = infra.board("ttyUSB3")
+    for pid in (sudo, py):
+        (infra.fake / "dying" / str(pid)).write_text("3")       # sale solo, en un rato
+    (infra.base / "run" / "ttyUSB3.json").write_text('{\n  "state": "monitoring",\n  "stopping": true\n}')
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    assert "OLD_ALIVE" not in infra.log("tmux")
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB3")
 
 
 def test_tmux_recreates_session_of_disconnected_device(infra):
@@ -267,9 +357,9 @@ def test_tmux_lock_rule_matches_locks_parse(infra, content, kept):
 def test_devremote_scan_starts_missing(infra):
     infra.plug("ttyUSB0")
     infra.plug("ttyUSB1")
-    (infra.fake / "sessions" / "esp32_ttyUSB0").write_text("ya corre")
+    infra.board("ttyUSB0")
     infra.run("devremote")
-    assert infra.session_cmd("esp32_ttyUSB0") == "ya corre"
+    assert infra.session_cmd("esp32_ttyUSB0") == "viejo"
     assert "-tcp 5001" in infra.session_cmd("esp32_ttyUSB1")
 
 
@@ -281,19 +371,57 @@ def test_devremote_start_used_by_hotplug(infra):
 
 def test_devremote_reset_one_does_not_kill_ttyusb10(infra):
     infra.plug("ttyUSB1")
+    infra.plug("ttyUSB10")
+    b1 = infra.board("ttyUSB1", pid=100)
+    b10 = infra.board("ttyUSB10", pid=200)
     infra.run("devremote", "--reset", "1")
-    pattern = infra.log("pkill").rstrip("\n")
-    assert pattern.endswith(f"-p {infra.devdir}/ttyUSB1 ")   # el espacio final excluye ttyUSB10
-    assert "esp32_ttyUSB1" in infra.log("tmux")
+    alive = infra.pids()
+    assert not alive & set(b1)                   # sudo, python y el esptool hijo
+    assert set(b10) <= alive                     # ttyUSB10 no se toca
+    assert {100, 200} <= alive                   # ni el tmux server (su cmdline lleva el comando entero)
+    assert "OLD_ALIVE" not in infra.log("tmux")
+    assert infra.session_cmd("esp32_ttyUSB1") != "viejo" and infra.session_cmd("esp32_ttyUSB10") == "viejo"
 
 
 def test_devremote_reset_accepts_slot_names(infra):
     infra.slots(f"2 {HUB_2}\n")
     infra.plug("ttyUSB7", HUB_2)
     (infra.devdir / "esp-slot2").touch()
+    pids = infra.board("esp-slot2")
     infra.run("devremote", "--reset", "slot2")
-    assert f"-p {infra.devdir}/esp-slot2 " in infra.log("pkill")
+    assert not infra.pids() & set(pids)
     assert "remote_esp32.py" in infra.session_cmd("esp32_esp-slot2")
+
+
+def test_devremote_reset_waits_until_the_old_process_is_really_gone(infra):
+    """kill -9 no es instantáneo (un proceso en medio de I/O USB tarda en morir): la sesión
+    nueva no arranca con el proceso viejo de la placa todavía vivo."""
+    infra.plug("ttyUSB1")
+    sudo, py, esptool = infra.board("ttyUSB1")
+    (infra.fake / "slow" / str(py)).write_text("4")
+    infra.run("devremote", "--reset", "1")
+    assert "OLD_ALIVE" not in infra.log("tmux")
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB1")
+
+
+def test_devremote_reset_kills_again_if_the_first_kill_does_not_take(infra):
+    infra.plug("ttyUSB1")
+    sudo, py, esptool = infra.board("ttyUSB1")
+    (infra.fake / "immortal" / str(py)).write_text("1")       # sobrevive al primer -9
+    r = infra.run("devremote", "--reset", "1")
+    kills = infra.log("kill").splitlines()
+    assert len(kills) == 2 and str(py) in kills[1].split()
+    assert "siguen vivos" in r.stderr
+    assert "OLD_ALIVE" not in infra.log("tmux")
+
+
+def test_devremote_reset_goes_on_if_the_process_never_dies(infra):
+    infra.plug("ttyUSB1")
+    sudo, py, esptool = infra.board("ttyUSB1")
+    (infra.fake / "immortal" / str(py)).write_text("99")
+    r = infra.run("devremote", "--reset", "1")
+    assert "no murieron" in r.stderr
+    assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB1")
 
 
 def test_devremote_unlock_by_number_and_slot(infra):
@@ -334,11 +462,29 @@ def test_devremote_rejects_weird_names(infra):
 def test_devremote_status_shows_name_port_and_fsm_state(infra):
     infra.slots(f"2 {HUB_2}\n")
     infra.plug("ttyUSB7", HUB_2)
-    (infra.fake / "sessions" / "esp32_esp-slot2").touch()
+    infra.board("esp-slot2")
     (infra.base / "run" / "esp-slot2.json").write_text('{\n  "state": "flashing"\n}')
+    infra.plug("ttyUSB8")
+    (infra.fake / "sessions" / "esp32_ttyUSB8").write_text("sin proceso")
     out = infra.run("devremote", "--status").stdout
     row = [l for l in out.splitlines() if l.startswith("esp-slot2")][0].split()
     assert row[:5] == ["esp-slot2", "ttyUSB7", "5002", "RUNNING", "flashing"]
+    row = [l for l in out.splitlines() if l.startswith("ttyUSB8")][0].split()
+    assert row[3] == "STALE"
+
+
+def test_devremote_check_needs_a_live_session_per_device(infra):
+    infra.plug("ttyUSB0")
+    infra.plug("ttyUSB1")
+    infra.plug("ttyUSB2")
+    infra.board("ttyUSB0", pid=100)
+    (infra.fake / "sessions" / "esp32_ttyUSB1").write_text("sin proceso")
+    r = infra.run("devremote", "--check", check=False)
+    assert r.returncode == 1
+    assert "ttyUSB0: ok" in r.stdout and "ttyUSB1: sesión sin proceso" in r.stdout
+    assert "ttyUSB2: sin sesión" in r.stdout
+    infra.run("devremote")
+    assert infra.run("devremote", "--check").returncode == 0
 
 
 def test_devremote_slots_lists_id_paths(infra):
@@ -358,6 +504,20 @@ def test_devremote_reset_all_restarts_when_no_session_survives(infra):
     assert infra.session_cmd("esp32_ttyUSB0") and infra.session_cmd("esp32_ttyUSB1")
 
 
+def test_devremote_reset_all_kills_every_board_and_its_children(infra):
+    infra.plug("ttyUSB0")
+    infra.plug("ttyUSB1")
+    b0 = infra.board("ttyUSB0", pid=100)
+    b1 = infra.board("ttyUSB1", pid=200)
+    infra.proc(300, 1, "/usr/bin/python3 /home/sfypi/otra_cosa.py")
+    infra.run("devremote", "--reset")
+    alive = infra.pids()
+    assert not alive & (set(b0) | set(b1))
+    assert {100, 200, 300} <= alive              # tmux servers y lo que no es de espbench
+    assert "OLD_ALIVE" not in infra.log("tmux")
+    assert infra.session_cmd("esp32_ttyUSB0") != "viejo" and infra.session_cmd("esp32_ttyUSB1") != "viejo"
+
+
 def test_devremote_reset_all_kills_surviving_sessions(infra):
     infra.plug("ttyUSB0")
     (infra.fake / "sessions" / "esp32_ttyUSB0").write_text("viejo")
@@ -366,6 +526,13 @@ def test_devremote_reset_all_kills_surviving_sessions(infra):
     assert "kill-session -t esp32_ttyUSB0" in infra.log("tmux")
     assert "otra_cosa" not in infra.log("tmux").replace("ls -F", "")
     assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB0")
+
+
+def test_install_installs_every_script_the_sessions_use():
+    install = (INFRA.parent / "install.sh").read_text()
+    for script in ("devremote", "esp32_tmux.sh", "espbench-name", "espbench-procs"):
+        assert f'cp "$REMOTE_DIR/infra/{script}" /usr/local/bin/{script}' in install
+        assert os.access(INFRA / script, os.X_OK)
 
 
 def test_install_creates_meta_dir_writable_by_the_api():
