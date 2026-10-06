@@ -4,7 +4,7 @@
 espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
 
     espbench benches
-    espbench ls [--all] [--bench B] [--where cat=valor ...] [--free]
+    espbench ls [--all] [--bench B] [--location L] [--where cat=valor ...] [--free]
     espbench pick [--where cat=valor ...] [--reserve [--ttl 30m]]
     espbench note <dev> "texto" | --clear
     espbench set <dev> chip=esp32-s3 conectividad+=lte uso-=ci estado=
@@ -81,7 +81,7 @@ def _table(rows: list) -> None:
 
 def _human_devices(r: dict) -> None:
     multi = any("bench" in d for d in r["devices"])
-    rows = [(("BENCH",) if multi else ()) + ("KEY", "SN", "MAC", "TTY", "STATE", "LIBRE", "LOCK", "FW", "PROPS",
+    rows = [(("BENCH", "UBICACIÓN") if multi else ()) + ("KEY", "SN", "MAC", "TTY", "STATE", "LIBRE", "LOCK", "FW", "PROPS",
                                               "NOTA")]
     for d in r["devices"]:
         lock = d.get("lock_user") or ""
@@ -93,7 +93,7 @@ def _human_devices(r: dict) -> None:
         if note:
             note = (note if len(note) <= 40 else note[:39] + "…") + (f" ({d['note_by']})" if d.get("note_by") else "")
         libre = "sí" if d.get("available") else ("no (estado)" if d.get("avoid") else "no")
-        cols = ((d.get("bench"),) if multi else ()) + (d["key"], d.get("sn"), d.get("mac"), d.get("tty"),
+        cols = ((d.get("bench"), d.get("location")) if multi else ()) + (d["key"], d.get("sn"), d.get("mac"), d.get("tty"),
                                                       d.get("state"), libre, lock, fw, props, note)
         rows.append(tuple(str(x or "-") for x in cols))
     _table(rows)
@@ -106,11 +106,11 @@ def _props_text(props) -> str:
 
 
 def _human_benches(r: dict) -> None:
-    rows = [("BENCH", "HOST", "VERSION", "AUTH", "PLACAS", "LIBRES", "")]
+    rows = [("BENCH", "UBICACIÓN", "HOST", "VERSION", "AUTH", "PLACAS", "LIBRES", "")]
     for b in r["benches"]:
         note = "viejo: ignorado" if not b["supported"] else (b["error"] or (
             "sin notas/propiedades: actualizar" if b.get("props") is False else ""))
-        rows.append((b["name"], b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
+        rows.append((b["name"], b.get("location") or "-", b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
                      str(b["boards"]), str(b["available"]), note))
     _table(rows)
 
@@ -162,7 +162,8 @@ def _all_boards(c: lib.Client, a, with_unknown: bool = False):
             errors.append({"bench": b.name, "error": b.error})
         for d in (b.devices if b is not None else bc.devices()):
             if with_unknown or d.get("mac"):
-                devs.append({"bench": b.name, **bc.summarize(d)} if b is not None else bc.summarize(d))
+                devs.append({"bench": b.name, "location": b.location, **bc.summarize(d)} if b is not None
+                            else bc.summarize(d))
     return devs, errors
 
 
@@ -176,6 +177,11 @@ def cmd_ls(c: lib.Client, a, out: Out) -> int:
     where = _where_args(c, a)
     devs, errors = _all_boards(c, a, with_unknown=a.all)
     devs = [d for d in devs if lib.matches_where(d, where) and (not a.free or d["available"])]
+    if a.location is not None:
+        # Con host fijo las placas no traen la ubicación: es la del bench (/api/version).
+        here = c.version().get("location") if a.multi is None else None
+        devs = [d for d in devs if lib.location_matches(d.get("location") if a.multi is not None else here,
+                                                        a.location)]
     r = {"ok": True, "devices": devs}
     if errors:
         r["errors"] = errors
@@ -593,6 +599,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--where", action="append", metavar="CAT=VALOR",
                     help="filtro por propiedad (repetible: todas), ej. chip=esp32-s3; 'estado=' = sin estado")
     sp.add_argument("--free", action="store_true", help="solo disponibles (sin lock ajeno, sin estado no-tocar/roto)")
+    sp.add_argument("--location", metavar="TEXTO",
+                    help="solo benches cuya ubicación contiene TEXTO (sin mayúsculas; '' = sin ubicación)")
 
     sp = add("pick", cmd_pick, "la primera placa libre que cumple --where, en cualquier bench", dev=False)
     sp.add_argument("--where", action="append", metavar="CAT=VALOR", help="propiedad requerida (repetible: todas)")

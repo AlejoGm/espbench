@@ -111,7 +111,8 @@ def benches_net(bench, tmp_path, monkeypatch):
     from server import paths
     paths.bench_name_file().parent.mkdir(parents=True, exist_ok=True)
     paths.bench_name_file().write_text("bench-sim\n")
-    b = _FakeBench({"app": "espbench", "version": "0.34.0", "name": "bench-b", "auth": True}, [dict(OTHER)])
+    b = _FakeBench({"app": "espbench", "version": "0.34.0", "name": "bench-b", "location": "Lab Chile",
+                    "auth": True}, [dict(OTHER)])
     old = _FakeBench({"version": "0.6.0"}, [dict(OTHER, device_key="vieja")])
     cfg = tmp_path / "benches.json"
     cfg.write_text(json.dumps({"tailscale": False, "hosts": [bench.host, b.host, old.host], "timeout_s": 2}))
@@ -479,9 +480,38 @@ def test_events_all_without_host(disc, board):
 
 def test_human_ls_and_benches_without_host(disc, board):
     code, out, err = disc("ls", as_json=False)
-    assert code == 0 and out.splitlines()[0].split()[0] == "BENCH" and "sim-board" in out
+    assert code == 0 and out.splitlines()[0].split()[:2] == ["BENCH", "UBICACIÓN"] and "sim-board" in out
+    assert "Lab Chile" in out
     code, out, err = disc("benches", as_json=False)
-    assert code == 0 and "viejo: ignorado" in out
+    assert code == 0 and "viejo: ignorado" in out and "UBICACIÓN" in out and "Lab Chile" in out
+
+
+def test_benches_and_ls_carry_the_bench_location(disc, board):
+    code, r = disc("benches")
+    by = {b["name"]: b for b in r["benches"]}
+    assert (by["bench-b"]["location"], by["bench-sim"]["location"]) == ("Lab Chile", None)
+    code, r = disc("ls")
+    assert sorted((d["bench"], d["location"]) for d in r["devices"]) == [("bench-b", "Lab Chile"),
+                                                                        ("bench-sim", None)]
+
+
+def test_ls_filters_by_location(disc, board):
+    from server import benchinfo
+    benchinfo.set_location("Oficina BA")
+    assert [d["key"] for d in disc("ls", "--location", "chile")[1]["devices"]] == ["otra-placa"]
+    assert [d["key"] for d in disc("ls", "--location", "  oficina   ba ")[1]["devices"]] == ["sim-board"]
+    assert disc("ls", "--location", "cordoba")[1]["devices"] == []
+    assert [d["key"] for d in disc("ls", "--location", "")[1]["devices"]] == []        # todos tienen
+
+
+def test_ls_with_host_filters_by_the_location_of_that_bench(cli, bench, board):
+    from server import benchinfo
+    assert [d["key"] for d in cli("ls", "--location", "")[1]["devices"]] == ["sim-board"]     # sin ubicación
+    assert cli("ls", "--location", "lab")[1]["devices"] == []
+    benchinfo.set_location("Lab Chile")
+    assert [d["key"] for d in cli("ls", "--location", "LAB")[1]["devices"]] == ["sim-board"]
+    assert cli("ls", "--location", "")[1]["devices"] == []
+    assert "location" not in cli("ls")[1]["devices"][0]          # con host fijo, como antes
 
 
 # ---------- nota y propiedades ----------

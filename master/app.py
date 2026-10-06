@@ -102,7 +102,8 @@ class BenchState:
 
     def summary(self) -> dict:
         b = self.bench
-        return {"name": b.name, "id": b.id, "url": b.url, "address": b.address, "port": b.port, "source": b.source,
+        return {"name": b.name, "id": b.id, "location": b.location, "url": b.url, "address": b.address,
+                "port": b.port, "source": b.source,
                 "version": b.version, "online": self.online, "last_seen": self.last_seen,
                 "error": self.error, "device_count": len(b.devices)}
 
@@ -173,7 +174,7 @@ class BenchCache:
         for st in self.states():
             for d in st.bench.devices:
                 out.append(dict(d, bench=st.bench.name, bench_url=st.bench.url, bench_online=st.online,
-                                bench_last_seen=st.last_seen))
+                                bench_last_seen=st.last_seen, bench_location=st.bench.location))
         return out
 
 

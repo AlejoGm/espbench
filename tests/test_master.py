@@ -32,9 +32,9 @@ DEV_B = {"tty_name": "ttyUSB0", "port_tcp": 5000, "mac": "AA:BB:CC:DD:EE:FF", "s
          "device_key": "medidor-b", "status": "RUNNING"}
 
 
-def bench(name, *devices, ok=True, url=None, error=None, id=None):
+def bench(name, *devices, ok=True, url=None, error=None, id=None, location=None):
     return Bench(name=name, url=url or f"http://{name}:8080", address=name, port=8080, source="tailscale",
-                 version="0.14.0", ok=ok, error=error, devices=list(devices), id=id)
+                 version="0.14.0", ok=ok, error=error, devices=list(devices), id=id, location=location)
 
 
 class Clock:
@@ -50,6 +50,16 @@ def run(coro):
 
 
 # ---------- BenchCache ----------
+
+def test_cache_exposes_the_bench_location_in_benches_and_devices():
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("pi1", DEV_A, location="Oficina BA"), bench("pi2", DEV_B)])
+    s = {st.bench.name: st.summary() for st in cache.states()}
+    assert (s["pi1"]["location"], s["pi2"]["location"]) == ("Oficina BA", None)
+    assert [(d["bench"], d["bench_location"]) for d in cache.devices()] == [("pi1", "Oficina BA"), ("pi2", None)]
+    cache.update([bench("pi1", DEV_A, location="Lab Chile")])        # la cambiaron en el bench
+    assert cache.get("pi1").summary()["location"] == "Lab Chile"
+
 
 def test_cache_keeps_offline_bench_with_last_snapshot():
     clock = Clock()

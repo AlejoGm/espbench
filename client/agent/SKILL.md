@@ -5,7 +5,7 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 
 # espbench
 
-`espbench` maneja placas ESP32 enchufadas a una Raspberry Pi (el banco): flash, consola serie, log con hora por línea y eventos por placa. Corre en esta máquina. Sin host configurado (`ESPBENCH_HOST` / `~/.config/espbench.json` / `remote.host` del `.flashcfg.json`) encuentra solo los benches de la tailnet: `espbench benches --json` los lista, `ls` muestra las placas de todos (campo `bench`) y cada comando busca la placa en todos. `espbench <cmd> --help` tiene todas las opciones.
+`espbench` maneja placas ESP32 enchufadas a una Raspberry Pi (el banco): flash, consola serie, log con hora por línea y eventos por placa. Corre en esta máquina. Sin host configurado (`ESPBENCH_HOST` / `~/.config/espbench.json` / `remote.host` del `.flashcfg.json`) encuentra solo los benches de la tailnet: `espbench benches --json` los lista (con su `location`, "Oficina BA"), `ls` muestra las placas de todos (campos `bench` y `location`; `--location <texto>` filtra por dónde está el bench) y cada comando busca la placa en todos. `espbench <cmd> --help` tiene todas las opciones.
 
 ## Configuración (una vez, antes de reservar)
 

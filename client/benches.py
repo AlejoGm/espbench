@@ -67,6 +67,7 @@ class Bench:
     auth: Optional[bool] = None     # el bench tiene token de la API (/api/version)
     legacy: bool = False            # sin `app: espbench`: bench viejo (sin /api/board, reservas, notas)
     id: Optional[str] = None        # MAC de la máquina (/api/version); None en benches viejos
+    location: Optional[str] = None  # dónde está ("Oficina BA", /api/version); None si no tiene
 
     @property
     def key(self) -> str:
@@ -163,7 +164,8 @@ def probe(c: Candidate, timeout: float, get_json: Callable = http_get_json) -> O
     return Bench(name=str(info.get("name") or c.label or c.address), url=c.url, address=c.address,
                  port=c.port, source=c.source, version=info.get("version"), ok=True,
                  auth=info.get("auth") if isinstance(info.get("auth"), bool) else None, legacy=legacy,
-                 id=str(info["id"]).lower() if info.get("id") else None)
+                 id=str(info["id"]).lower() if info.get("id") else None,
+                 location=(str(info["location"]).strip() or None) if info.get("location") else None)
 
 
 def fetch_devices(b: Bench, timeout: float, get_json: Callable = http_get_json) -> Bench:
@@ -204,7 +206,7 @@ def scan(cfg: Optional[dict] = None, status: Optional[dict] = None,
     return benches
 
 
-_CACHED_FIELDS = ("name", "url", "address", "port", "source", "version", "auth", "legacy", "id")
+_CACHED_FIELDS = ("name", "url", "address", "port", "source", "version", "auth", "legacy", "id", "location")
 
 
 def _load_cache(path: pathlib.Path, ttl_s: float, now: float) -> Optional[List[Bench]]:

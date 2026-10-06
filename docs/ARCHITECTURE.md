@@ -608,6 +608,9 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
   `timeout_s` = 2 s por peer que no contesta); la lista de benches se cachea 30 s en
   `$ESPBENCH_STATE_DIR/benches.json` y los devices se piden en cada comando. Si la placa no está en los benches de
   la cache, se escanea de nuevo una vez. `espbench benches` siempre escanea.
+- **Ubicación** (`location` de `/api/version`, §8): `benches` la muestra; sin host, cada placa de `ls` trae
+  `location` (la de su bench, de la cache: un cambio tarda hasta 30 s). `ls --location <texto>` filtra por bench
+  (contiene, sin mayúsculas; `''` = benches sin ubicación); con host fijo pregunta `/api/version` de ese bench.
 - **`ls`/`status`**: `available` = `monitoring` y sin lock, o con lock propio (un lock ajeno, aunque sea el
   permanente de un flash, no deja flashear ni reservar), y sin `estado` excluido (`exclude_pick`: `avoid`).
 - **`pick`**: la primera placa `available`, con MAC, sin boot loop y que cumple los `--where` (AND), en todos los
@@ -628,7 +631,7 @@ centraliza todos, y corre **en la máquina del dev**, no en un bench.
 
 ```
 client/benches.py ── tailscale status --json (peers online) + ~/.config/espbench-benches.json
-      │                 └─ GET :8080/api/version → {app: "espbench", name}  ¿es bench? ¿cómo se llama?
+      │                 └─ GET :8080/api/version → {app: "espbench", name, location}  ¿es bench? ¿cómo se llama?
       ├─ deploy.py      remote sin host / host "auto" → resolve(key) → bench + puerto TCP
       ├─ espbench (CLI) sin host → scan_cached (lista de benches 30 s) → ls de todos / resolve(<dev>) (§11)
       └─ master/app.py  poll cada 5 s → BenchCache

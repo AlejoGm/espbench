@@ -514,11 +514,20 @@ def _resolve_error(e) -> "EspbenchError":
     return EspbenchError("not_found", str(e))
 
 
+def location_matches(location: Optional[str], wanted: str) -> bool:
+    """`ls --location`: la ubicación del bench contiene `wanted` (sin mayúsculas ni espacios de más);
+    `wanted` vacío = benches sin ubicación."""
+    wanted = " ".join(wanted.split()).lower()
+    have = " ".join((location or "").split()).lower()
+    return wanted in have if wanted else not have
+
+
 def bench_summary(b, me: Optional[str] = None, exclude: Optional[dict] = None, props: Optional[bool] = None) -> dict:
     """Lo que `espbench benches` muestra de un bench. `exclude`: los exclude_pick de su
     catálogo (Client.excluded()); `props`: si soporta nota y propiedades."""
     devs = [d for d in b.devices if d.get("mac")]
-    return {"name": b.name, "url": b.url, "host": f"{b.address}:{b.port}", "version": b.version, "auth": b.auth,
+    return {"name": b.name, "location": b.location, "url": b.url, "host": f"{b.address}:{b.port}",
+            "version": b.version, "auth": b.auth,
             "supported": not b.legacy, "props": props, "ok": b.ok, "error": b.error, "boards": len(devs),
             "available": sum(1 for d in devs if summarize_device(d, me, exclude)["available"])}
 

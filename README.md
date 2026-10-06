@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.41.0
+**Version:** 0.42.0
 
 ---
 
@@ -175,7 +175,8 @@ exit codes por causa. Spec: [docs/specs/agents-cli.md](docs/specs/agents-cli.md)
 cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_BIN_DIR para otro lugar)
 
 espbench benches --json                  # benches encontrados (Tailscale + ~/.config/espbench-benches.json)
-espbench ls --json                       # sin host: las placas de todos los benches, con `bench`
+espbench ls --json                       # sin host: las placas de todos los benches, con `bench` y `location`
+espbench ls --location chile             # solo los benches cuya ubicación dice "chile"
 espbench pick --where chip=esp32-s3 --reserve --ttl 30m --json   # la primera libre que cumple, ya reservada (no una mía: --include-mine)
 espbench note mi-board "agente: probando OTA" --json             # aviso para otros (--clear al terminar)
 espbench set mi-board chip=esp32-s3 conectividad+=lte estado=    # propiedades (estado= la quita)
