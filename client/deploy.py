@@ -528,13 +528,29 @@ def _normalize_remotes(cfg) -> list:
 def _remote_name(r: dict) -> str:
     return r.get("name") or r.get("device_key") or r.get("host", "?")
 
+_benches_cache = None  # un solo scan por corrida, aunque haya varios remotes
+
+
 def _resolve_device_port(r: dict) -> tuple:
-    """Return (port_int, device_info_dict_or_None). Uses dashboard API if device_key present."""
-    if "port" in r:
+    """Return (port_int, device_info_dict_or_None). Uses dashboard API if device_key present.
+
+    Sin `host` (o `"host": "auto"`) busca en qué bench está la placa (client/benches.py)
+    y completa r["host"]."""
+    if "port" in r and r.get("host", "auto") != "auto":
         return int(r["port"]), None
     device_key = r.get("device_key") or r.get("name")
     if not device_key:
         raise ValueError(f"Remote sin 'port' ni 'device_key'")
+    if r.get("host", "auto") == "auto":
+        from client import benches
+        global _benches_cache
+        if _benches_cache is None:
+            print("[REMOTE] Buscando benches (Tailscale + ~/.config/espbench-benches.json)...")
+            _benches_cache = benches.scan()
+        bench, info = benches.resolve(device_key, _benches_cache)
+        r["host"] = bench.address
+        print(f"[REMOTE] '{device_key}' está en el bench {bench.name} ({bench.address}), {info.get('tty_name')}")
+        return int(info["port_tcp"]), info
     host = r["host"]
     import urllib.request as _urllib
     url = f"http://{host}:{DASHBOARD_PORT}/api/device/by-key/{device_key}"
@@ -734,7 +750,7 @@ def flash_remote(cfg, project_root: pathlib.Path, build_dir: pathlib.Path, idf_p
     resolved = []
     for r in remotes:
         r = dict(r)
-        if "port" not in r:
+        if "port" not in r or r.get("host", "auto") == "auto":
             try:
                 port, device_info = _resolve_device_port(r)
                 r["port"] = port
@@ -811,7 +827,7 @@ def unlock_remote(cfg):
             with results_lock:
                 results[name] = {"ok": False, "name": name, "error": "falta lock_user/lock_token"}
             return
-        if "port" not in r:
+        if "port" not in r or r.get("host", "auto") == "auto":
             try:
                 port_resolved, _ = _resolve_device_port(r)
                 r["port"] = port_resolved
