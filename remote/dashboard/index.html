@@ -103,6 +103,7 @@
         if (!st) { s.textContent = ''; return; }
         if (st.state === 'running') s.textContent = 'Actualizando…';
         else if (st.state === 'rolled_back' || st.state === 'failed') { s.textContent = st.state === 'failed' ? 'El último update falló' : 'El último update volvió atrás'; s.className += ' bad'; s.title = st.message || ''; }
+        else if (st.warning) { s.textContent = 'Update con avisos'; s.className += ' bad'; s.title = st.warning; }
         else s.textContent = '';
     }
 

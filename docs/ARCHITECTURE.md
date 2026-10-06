@@ -705,6 +705,7 @@ sudo espbench-update / update.sh [ref] ─────────────�
       └─ /opt/esp/update.conf (REPO_DIR, PIN) → git fetch → checkout --detach <target>
          → install.sh → restart dashboard → devremote --reset → /api/version == VERSION ?
                                                                  └─ no: checkout del commit anterior + install (rollback)
+         → devremote --check (sesión viva por placa) ─ no: devremote --reset otra vez ─ no: `warning` (sin rollback)
 ```
 
 - **Qué sigue un bench**: el último tag `vX.Y.Z` (orden de versión, no de fecha), salvo que tenga **PIN**: una rama,
@@ -715,6 +716,13 @@ sudo espbench-update / update.sh [ref] ─────────────�
 - **Rollback**: el chequeo es que el dashboard conteste `/api/version` con el `VERSION` del commit nuevo en ≤ 60 s.
   Si no, vuelve al commit anterior con el mismo camino. `update_status.json` queda en `rolled_back` (o `failed` si
   el rollback tampoco levanta: hay que entrar al bench).
+- **Sesiones**: después del reset, `devremote --check` (tmux + `remote_esp32` vivo por cada `/dev/ttyUSB*`/slot,
+  dos veces seguidas, hasta `ESPBENCH_SESSIONS_TIMEOUT` = 30 s). Si falta alguna, otro `devremote --reset`; si
+  sigue faltando, el estado queda `ok` con `warning` (y el mensaje lo dice; el dashboard muestra "Update con
+  avisos"): el código nuevo anda, lo que falla es una placa. Esto no ve lo que pase *después* de que el update
+  termina: por eso el tmux server va en su propio scope y los units del update tienen `KillMode=process` (§7).
+- `install.sh` hace `udevadm trigger --action=change --subsystem-match=tty`: aplica la regla de slots sin disparar
+  el hotplug (`ACTION=="add"`), que competiría con el `devremote --reset` del update.
 - **Ocupado**: `--auto` no actualiza con una placa flasheando/borrando o una reserva vigente (`server/update.py`,
   `busy_reason`); el manual falla salvo `--force`. Un lock de flash (sin vencimiento) no cuenta.
 - **Desde la API**: `POST /api/update` (`{ref?, force?}`, con el token si hay `api_token`) lanza el script con

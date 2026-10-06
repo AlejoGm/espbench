@@ -535,6 +535,16 @@ def test_install_installs_every_script_the_sessions_use():
         assert os.access(INFRA / script, os.X_OK)
 
 
+def test_install_udev_trigger_does_not_fire_the_hotplug():
+    """El trigger del install es change: el hotplug (ACTION=="add") no relanza sesiones en
+    paralelo con el devremote --reset que espbench-update hace después del install."""
+    install = (INFRA.parent / "install.sh").read_text()
+    triggers = [l.strip() for l in install.splitlines() if l.strip().startswith("udevadm trigger")]
+    assert triggers == ["udevadm trigger --action=change --subsystem-match=tty"]
+    rules = (INFRA / "99-esp32.rules").read_text()
+    assert 'ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyUSB*"' in rules
+
+
 def test_install_creates_meta_dir_writable_by_the_api():
     """properties.json lo escribe el api (sfypi) con archivo temporal + rename: su directorio
     tiene que ser escribible (/opt/esp es root 755)."""

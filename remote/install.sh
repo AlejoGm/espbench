@@ -228,7 +228,10 @@ cp "$REMOTE_DIR/infra/espbench-update.timer" /etc/systemd/system/espbench-update
 # ---------------------------------------------------------------------------
 info "Recargando reglas udev..."
 udevadm control --reload-rules
-udevadm trigger
+# change (no add) y solo tty: aplica la regla de slots (/dev/esp-slotK) sin disparar el
+# hotplug (ACTION=="add" → espbench-attach@), que relanzaría sesiones en paralelo con el
+# devremote --reset que hace espbench-update después del install.
+udevadm trigger --action=change --subsystem-match=tty
 
 # ---------------------------------------------------------------------------
 # 11. Enable systemd services

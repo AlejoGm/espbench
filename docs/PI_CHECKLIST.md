@@ -36,6 +36,20 @@ bench-master y el bench nuevo (identidad, URLs relativas, proxy, `host: auto`): 
       (o `espbench note <dev> "x"` / `espbench set <dev> chip=esp32` / `espbench props add uso prueba` y
       `props rm uso prueba`) sin 500; `/opt/esp/meta/properties.json` creado; `devices.json` sigue `-rw-rw-rw-`
       y con los nombres de antes. `journalctl -u dashboard` sin `PermissionError`.
+- [ ] **Update con placas leyendo MAC** (el 2026-10-06 un update `ok` dejó las 3 placas DOWN: el tmux
+      server nació en el unit del update y systemd lo mató al terminar): con las placas enchufadas,
+      `curl -X POST -H 'Content-Type: application/json' -d '{"ref":"<rama>"}' http://<pi>:8080/api/update`
+      (el `devremote --reset` del update las deja en `discovering` justo cuando el update termina).
+      Con `GET /api/update` en `ok`: `"warning": null`; 30 s después `devremote --status` → todas `RUNNING`
+      en `monitoring`, y `devremote --check` sale con 0. El tmux server, en su scope:
+      `ps -u sfypi -o pid=,cgroup=,comm= | grep tmux` → `.../espbench-tmux-<dev>-<pid>.scope`, **no**
+      `espbench-update-manual-*.service`. En `devices/<MAC>/output.log`, ninguna `señal 15`/`señal 1` después
+      del `inicio` de la sesión nueva. Y `dmesg -T | grep -iE 'ttyUSB|disconnect|over-current'` sin
+      desconexiones durante el update.
+- [ ] `devremote --reset 1` con la placa en `discovering`: la sesión nueva arranca recién cuando la vieja
+      murió (en el log, el `fin` de la vieja antes del `inicio` de la nueva) y no queda ningún esptool
+      huérfano: `ps -ww -eo pid,ppid,args | grep -E 'esptool|esp_idf_monitor'` solo con hijos de un
+      `remote_esp32.py` vivo. `devremote --reset 1` no toca las otras sesiones.
 
 ## P1 — hardware
 

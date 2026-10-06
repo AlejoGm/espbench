@@ -30,6 +30,7 @@ LOG="$ESP_BASE/update.log"
 LOCK="$ESP_BASE/update.lock"
 DASHBOARD_URL="${ESPBENCH_DASHBOARD_URL:-http://127.0.0.1:8080}"
 HEALTH_TIMEOUT="${ESPBENCH_HEALTH_TIMEOUT:-60}"
+SESSIONS_TIMEOUT="${ESPBENCH_SESSIONS_TIMEOUT:-30}"
 PY="${ESPBENCH_PYTHON:-$ESP_BASE/venv/bin/python}"
 PYPATH="${ESPBENCH_PYTHONPATH:-$ESP_BASE}"
 RELEASE_GLOB='v[0-9]*.[0-9]*.[0-9]*'
@@ -62,15 +63,16 @@ conf_set() {   # conf_set KEY VALUE: reemplaza la línea o la agrega
 status() {
     local tmp; tmp="$(mktemp)"
     python3 - "$tmp" "$1" "$2" "$mode" "${target_label:-}" "${from_sha:-}" "${from_version:-}" \
-        "${to_sha:-}" "${to_version:-}" "$(conf_get PIN)" "$started_at" <<'EOF'
+        "${to_sha:-}" "${to_version:-}" "$(conf_get PIN)" "$started_at" "${warning:-}" <<'EOF'
 import datetime, json, sys
-out, state, msg, mode, target, fsha, fver, tsha, tver, pin, started = sys.argv[1:]
+out, state, msg, mode, target, fsha, fver, tsha, tver, pin, started, warning = sys.argv[1:]
 now = datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()
 json.dump({"state": state, "message": msg, "mode": mode, "target": target or None,
            "from": {"commit": fsha[:12] or None, "version": fver or None},
            "to": {"commit": tsha[:12] or None, "version": tver or None},
            "pin": pin or None, "started_at": started,
-           "finished_at": None if state == "running" else now}, open(out, "w"))
+           "finished_at": None if state == "running" else now,
+           "warning": warning or None}, open(out, "w"))
 EOF
     chmod 644 "$tmp"
     mv "$tmp" "$STATUS"
@@ -198,15 +200,46 @@ healthy() {   # healthy VERSION: el dashboard contesta /api/version con esa vers
     return 1
 }
 
+# sessions_ok: una sesión viva (tmux + su remote_esp32) por cada placa enchufada, dos chequeos
+# seguidos (una que muere al arrancar no pasa el segundo). Espera hasta SESSIONS_TIMEOUT s.
+sessions_ok() {
+    local i ok=0
+    for ((i = 0; i < SESSIONS_TIMEOUT; i += 2)); do
+        if devremote --check >>"$LOG" 2>&1; then
+            ok=$((ok + 1))
+            [ "$ok" -ge 2 ] && return 0
+        else
+            ok=0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+# check_sessions: después del reset del deploy. Si falta alguna, otro reset y otra espera; si
+# sigue faltando, queda en `warning` (update_status.json): no es motivo de rollback, el código
+# nuevo anda (el dashboard contestó) y lo que falla es una placa.
+check_sessions() {
+    sessions_ok && return 0
+    log "faltan sesiones después del reset: devremote --reset de nuevo"
+    devremote --reset >>"$LOG" 2>&1 || true
+    sessions_ok && return 0
+    warning="sin sesión viva: $(devremote --check 2>/dev/null | grep -v ': ok$' | tr '\n' ' ' | sed 's/ *$//')"
+    log "$warning (devremote --status; ver ARCHITECTURE §7)"
+}
+
 log "actualizando ${from_version:-?} (${from_sha:0:7}) → $to_version ($target_label, ${to_sha:0:7})"
 status running "instalando $target_label"
+warning=""
 if deploy "$to_sha" && healthy "$to_version"; then
-    finish ok "actualizado a $target_label ($to_version, ${to_sha:0:7})" 0
+    check_sessions
+    finish ok "actualizado a $target_label ($to_version, ${to_sha:0:7})${warning:+ — $warning}" 0
 fi
 
 log "el update falló: vuelvo a ${from_sha:0:7}"
 status running "rollback a ${from_sha:0:7}"
 if deploy "$from_sha" && healthy "$from_version"; then
+    check_sessions
     finish rolled_back "$target_label no levantó; quedó en ${from_version:-?} (${from_sha:0:7}). Ver $LOG" 1
 fi
 finish failed "$target_label no levantó y el rollback tampoco: entrar al bench (ver $LOG)" 1

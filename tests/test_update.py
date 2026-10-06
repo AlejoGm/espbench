@@ -23,7 +23,19 @@ if [ -f "$REPO/BROKEN" ]; then touch "$FAKE/down"; else rm -f "$FAKE/down"; fi
 
 FAKES = {
     "systemctl": '#!/bin/bash\necho "systemctl $*" >> "$FAKE/calls.log"\n',
-    "devremote": '#!/bin/bash\necho "devremote $*" >> "$FAKE/calls.log"\n',
+    # devremote --check: falla mientras $FAKE/check_fail (contador) sea > 0
+    "devremote": r'''#!/bin/bash
+echo "devremote $*" >> "$FAKE/calls.log"
+if [ "${1:-}" = "--check" ]; then
+  n=$(cat "$FAKE/check_fail" 2>/dev/null || echo 0)
+  if [ "$n" -gt 0 ]; then
+    echo $((n - 1)) > "$FAKE/check_fail"
+    echo "ttyUSB0: ok"; echo "ttyUSB2: sin sesión"; exit 1
+  fi
+  echo "ttyUSB0: ok"; echo "ttyUSB2: ok"
+fi
+exit 0
+''',
     "sleep": "#!/bin/bash\nexit 0\n",
     # /api/version del dashboard: la versión instalada, salvo que el último install lo haya roto
     "curl": '#!/bin/bash\n[ -f "$FAKE/down" ] && exit 7\nprintf \'{"version": "%s"}\' "$(cat "$ESP_BASE/VERSION")"\n',
@@ -200,6 +212,39 @@ def test_broken_release_rolls_back(bench):
     assert bench.head() == good and bench.installed() == "0.2.0"
     installs = (bench.fake / "install.log").read_text().splitlines()
     assert installs[-2:] == ["install 0.3.0", "install 0.2.0"]
+
+
+def test_update_checks_a_live_session_per_board(bench):
+    bench.commit("0.2.0", tag="v0.2.0")
+    assert bench.run("--auto").returncode == 0
+    calls = bench.calls()
+    reset = calls.index("devremote --reset")
+    assert calls[reset + 1:].count("devremote --check") >= 2          # dos chequeos seguidos ok
+    st = bench.status()
+    assert st["state"] == "ok" and st["warning"] is None
+
+
+def test_missing_session_after_update_resets_once_more(bench):
+    """El 2026-10-06 un update quedó `ok` con las 3 placas DOWN: ahora se verifica, y si
+    falta alguna sesión se reintenta el reset una vez."""
+    bench.commit("0.2.0", tag="v0.2.0")
+    (bench.fake / "check_fail").write_text("20")       # más que la primera espera entera
+    assert bench.run("--auto").returncode == 0
+    assert bench.calls().count("devremote --reset") == 2
+    st = bench.status()
+    assert st["state"] == "ok" and st["warning"] is None and bench.installed() == "0.2.0"
+
+
+def test_sessions_still_missing_is_a_warning_not_a_rollback(bench):
+    bench.commit("0.2.0", tag="v0.2.0")
+    (bench.fake / "check_fail").write_text("1000")
+    r = bench.run("--auto")
+    assert r.returncode == 0
+    st = bench.status()
+    assert st["state"] == "ok" and bench.installed() == "0.2.0"
+    assert "ttyUSB2: sin sesión" in st["warning"] and "ttyUSB0" not in st["warning"]
+    assert "ttyUSB2" in st["message"]
+    assert bench.calls().count("devremote --reset") == 2
 
 
 def test_up_to_date_does_nothing(bench):

@@ -29,6 +29,7 @@ espbench/
 - **Logs**: `taglog.info(TAG, msg)` con un TAG por módulo. Nada de `print`/`nprint`.
 - **Nombres y puertos**: la regla vive en un solo lugar, `remote/infra/espbench-name` (`ttyUSBN` → 5000+N, o `esp-slotK` si el puerto físico está en `slots.conf`). El código Python no deriva puertos: los recibe por `--control-port`.
 - **Rutas**: todo pasa por `remote/server/paths.py`; nunca escribir `"/opt/esp"` a mano.
+- **Sesiones y systemd**: el tmux server nace en un scope propio (`esp32_tmux.sh`); un unit que lance `devremote` y termine (no `RemainAfterExit`) va con `KillMode=process`. Si no, systemd mata todas las placas al terminar el unit. Ver `remote/infra/CLAUDE.md`.
 - **Imports del server**: siempre `from server import X` / `from server.X import Y`. Si se importa `monitor` suelto y también `server.monitor`, Python carga dos módulos distintos (con dos copias de su estado).
 
 ## Tests
