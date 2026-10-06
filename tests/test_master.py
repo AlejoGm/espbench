@@ -238,7 +238,7 @@ def test_proxy_serves_real_bench_frontend_with_relative_urls():
             return (await c.get("/bench/pi1/"), await c.get("/bench/pi1/device.html?tty=esp-slot1"),
                     await c.get("/bench/pi1/espbench.js"), await c.get("/bench/pi1/api/version"))
     index, device, js, version = run(go())
-    assert index.status_code == 200 and "fetch('api/devices')" in index.text
+    assert index.status_code == 200 and "getJson('api/devices')" in index.text
     assert 'href="/' not in index.text and 'href="/' not in device.text
     assert "EB.wsUrl(location, 'ws/device/'" in device.text
     assert js.status_code == 200

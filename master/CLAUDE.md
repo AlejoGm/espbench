@@ -12,7 +12,7 @@ master/bench-master --open        # arma master/.venv la primera vez; http://loc
 | `app.py` | FastAPI: `BenchCache` (estado de los benches, en memoria), API propia, proxy HTTP + WS, guard de Host/Origin |
 | `__main__.py` | `python -m master`: `--host` (default 127.0.0.1), `--port` (8090), `--poll` (5 s), `--open` |
 | `bench-master` | Launcher: crea/actualiza `.venv` desde `requirements.txt` y corre `python -m master` |
-| `dashboard/index.html` | Grilla de todos los devices agrupada por bench. Reusa `espbench.js` y `style.css` de `remote/dashboard/` (montados en `/shared`) |
+| `dashboard/index.html` | Card protagonista del bench elegido (salud de la máquina, reinicios por hora en 24 h con los panics marcados, Actualizar), lista de benches, alertas con notificaciones del sistema y la grilla de placas de todos los benches. Reusa `espbench.js`, `theme.js` y `style.css` de `remote/dashboard/` (montados en `/shared`) |
 
 ## Cómo funciona
 
@@ -20,7 +20,9 @@ master/bench-master --open        # arma master/.venv la primera vez; http://loc
 - **`BenchCache`**: por nombre de bench. Un bench que deja de contestar queda `online: false` con el **último snapshot** de sus devices y `last_seen`. Nada en disco: al reiniciar el master se pierde.
 - **API**: `GET /api/benches`, `GET /api/devices` (cada device con `bench`, `bench_url`, `bench_online`), `GET /api/resolve/{key}` (solo benches online; 404 / 409 si es ambiguo), `POST /api/rescan`, `GET /api/version`.
 - **Proxy**: `/bench/<nombre>/<path>` → `http://<bench>:8080/<path>` (todos los métodos), `/bench/<nombre>/ws/<path>` → WebSocket del bench. Así el `device.html` del bench (log en vivo, consola, historial) anda a través del master. Requiere benches con el frontend de URLs relativas (≥ 0.13.0); los viejos se abren con el link directo `↗`.
-- **Update de un bench**: botón **⟳ update** en la cabecera de cada bench → `POST /bench/<n>/api/update` por el proxy (ref vacía = último release). Muestra el PIN (📌) y el resultado del último update (`GET /bench/<n>/api/update`). El token del bench se guarda con la misma clave que usa `auth.js` del bench (`eb.apiToken:/bench/<n>/`).
+- **Datos de cada bench**: el master solo pollea `/api/devices`; la página pide por el proxy, cada 30 s, `/api/bench/health`, `/api/activity` y `/api/update` de cada bench online.
+- **Alertas**: panics, boot loops y flashes de las últimas 24 h (`recent` de `/api/activity`), placas sin log y benches que no responden. Con el interruptor, notificación del sistema (Notification API, `localStorage` `eb.notify`) de lo que aparece **después** de abrir la página; nunca de un flash.
+- **Update de un bench**: botón **Actualizar bench** de la card protagonista → `POST /bench/<n>/api/update` por el proxy (ref vacía = último release). Muestra el PIN (📌) y el resultado del último update (`GET /bench/<n>/api/update`). El token del bench se guarda con la misma clave que usa `auth.js` del bench (`eb.apiToken:/bench/<n>/`).
 - **Guard** (`_OnlyFromThisPage`): el proxy da consola serie y resets de todos los benches sin auth. Se rechaza (403) un `Host` que no sea localhost (DNS rebinding) y cualquier escritura o WebSocket con `Origin` ajeno (CSRF). Con `--host 0.0.0.0` no hay chequeo de Host: cualquiera en la red llega a las consolas.
 
 ## Tests

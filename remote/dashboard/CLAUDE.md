@@ -4,23 +4,22 @@ Frontend del dashboard. Lo sirve `server/api.py` (montaje estático de FastAPI, 
 
 | Archivo | |
 |---|---|
-| `index.html` | Grilla de cards, una por device. Pollea `/api/devices` cada 5 s |
+| `index.html` | Home del bench: cabecera (nombre, versión, salud de la máquina en chips, rama fijada, Actualizar) y cards de placa con pestañas y búsqueda. Pollea `/api/devices` (5 s), `/api/activity` (30 s), salud y update (15 s) |
 | `device.html` | Log del device en vivo (`/ws/device/{tty}`) con marcas de eventos, historial (eventos, flasheos, sesiones), consola serie, reserva (liberar/forzar), botones reset/boot/sesión |
-| `espbench.js` | Lógica sin DOM (`window.EB`): tiempos relativos, badges de salud, prefijo de línea (`splitPrefix`), clasificación de líneas, ANSI → HTML, `LineBuffer`; reservas (`lockInfo`, `expiresText`, `forceConfirmText`, `searchMatch`); eventos (`eventView`, `eventCounts`, `eventContext`, `findLine`, `lineMark`, `EventMarks`). Tests: `tests/js/test_espbench.js` (node) |
+| `espbench.js` | Lógica sin DOM (`window.EB`): tiempos relativos, badges de salud, prefijo de línea (`splitPrefix`), clasificación de líneas, ANSI → HTML, `LineBuffer`; reservas (`lockInfo`, `expiresText`, `forceConfirmText`, `searchMatch`); eventos (`eventView`, `eventCounts`, `eventContext`, `findLine`, `lineMark`, `EventMarks`); **UI v2**: `boardStatus`, `silentFor`, `uptimeParts`, `activityBarsHtml`, `benchChips`, `boardCardHtml`, `areaChartSvg`. Tests: `tests/js/test_espbench.js`, `tests/js/test_v2.js` (node) |
+| `theme.js` | Tema claro/oscuro: pone `<html data-theme>` antes de pintar (va en el `<head>` antes del CSS), lo guarda en `localStorage` (`eb.theme`; sin elección, el del sistema). Cualquier `[data-theme-toggle]` lo alterna |
 | `auth.js` | `EBAuth.fetch`: escrituras con el token de la API (`localStorage`); ante un 401 lo pide en una barra inline y reintenta |
-| `style.css` | Tema oscuro, grilla responsive |
+| `style.css` | Estilos v2 (también los usa bench-master en `/shared/style.css`): tokens en `:root` y `[data-theme="dark"]`, piezas (pill, status, chips, tabs, card de placa), home, monitor. El log (`.terminal`) es oscuro en los dos temas |
+
+Fuentes e íconos por CDN: Manrope y JetBrains Mono (Google Fonts) y Tabler Icons (jsdelivr). Sin internet en el navegador la página anda igual, con la tipografía del sistema y sin íconos.
 
 Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests/js/`. Las páginas solo arman DOM.
 
 ## index.html
 
-- Header con contadores (devices, ok, ocupados, con problemas, caídos, **reservadas** —tooltip con quién y hasta qué hora— y **con lock de flash**) y búsqueda (`/`): filtra por nombre, tty, SN, MAC, firmware, deployer, lock. `@usuario` filtra solo por el usuario del lock (`@` solo: cualquier placa con lock); `lock:reserva` / `lock:flash` (click en cada contador) solo esas; click en el badge de una card pone `@usuario`.
-- Card por device: nombre (renombrable, `PATCH /api/devices/{mac}`), HW, `App` (versión; el proyecto en el tooltip) y `ESP-IDF` en filas separadas, último flash relativo con ✓/✗ (de `result.json`) y deployer, SN (si no es ya el título), puerto.
-- Franja izquierda de color: verde ok, ámbar reset anormal o lock, rojo panic/boot loop, azul pulsando flasheando/borrando/iniciando, gris sin MAC, rojo apagado caído.
-- Badges de salud (`health`, de `SerialWatch`): **BOOT LOOP**, `⚠ N panics` (tooltip con el último), `↯ <reset anormal>`, `↻ N` reinicios. Se resetean al flashear.
-- Badges de estado: `status` (RUNNING/DOWN) y `state` de la FSM (**FLASHEANDO** / **BORRANDO** / **INICIANDO** / **SIN MAC** / **DESCONECTADO**; `monitoring` no lleva badge).
-- Lock en la card: `🔒 user · vence en 20 min` (reserva) o `🔒 user · sin vencimiento` (lock del flash, más apagado), tooltip con la hora exacta; usuarios largos con elipsis. `lock_expires` viene con el offset de la Pi (y `lock_expires_epoch`): el "vence en" es correcto aunque el navegador esté en otra zona. El "vence en" lo actualiza un tick de 1 s sin esperar el poll, y al vencer el badge desaparece (el server ya la ignora: vencida = inexistente).
-- Los devices con MAC conocida van en la grilla principal; los que no, en "sin identificar".
+- **Cabecera del bench**: nombre (`/api/version`), salud de la máquina (`/api/bench/health` → `EB.benchChips`: temperatura ámbar ≥ 70 °C y roja ≥ 80, RAM, disco, carga contra los CPUs, tiempo encendida), rama fijada (📌, de `/api/update`) y **Actualizar** (`POST /api/update`: pregunta la ref, vacía = último release). Debajo, el estado del último update si está corriendo o falló.
+- **Pestañas**: todas, con problemas (estado `bad`/`warn`/`off`), reservadas. Búsqueda (`/`) por nombre, tty, SN, MAC, firmware, deployer y lock; `@usuario` filtra por el usuario del lock (`EB.searchMatch`); click en el lock de una card pone `@usuario`.
+- **Card de placa** (`EB.boardCardHtml`, la misma en bench-master): estado en una palabra (`EB.boardStatus`: Caída/Desconectada, Flasheando/Borrando/Iniciando, Sin MAC, Boot loop, Panic, **Sin log** —monitoreando y sin escribir el log hace 5 min (`last_log_epoch`)—, Reset anormal, En línea), tiempo encendida desde el último boot (`health.last_reset.ts`), último log, reinicios y panics de las últimas 24 h, **barras por hora** (`/api/activity`: gris reinicio, rojo panic o boot loop, violeta flash, subrayado ámbar reservada; tooltip con el detalle), firmware (proyecto e IDF en el tooltip), lock, copiar config y Monitor. Renombrar con el lápiz al lado del nombre (`PATCH /api/devices/{mac}`).
 
 ## device.html
 

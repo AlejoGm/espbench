@@ -730,6 +730,168 @@
         return proto + '//' + loc.host + basePath(loc.pathname) + rel;
     }
 
+    // ── v2: estado, actividad y card de placa (bench y bench-master) ──────
+
+    var SILENT_S = 300;      // monitoreando y sin imprimir nada hace 5 min: "sin log"
+
+    function silentFor(d, nowMs) {
+        if (!d || d.status !== 'RUNNING' || d.state !== 'monitoring' || !d.last_log_epoch) return null;
+        var s = ((nowMs === undefined ? Date.now() : nowMs) / 1000) - d.last_log_epoch;
+        return s >= SILENT_S ? s : null;
+    }
+
+    // Estado de la placa en una palabra: {cls: ok|bad|warn|flash|off, text}. El orden es la prioridad.
+    function boardStatus(d, nowMs) {
+        if (d.status !== 'RUNNING') return {cls: 'off', text: d.state === 'disconnected' ? 'Desconectada' : 'Caída'};
+        if (d.state === 'flashing') return {cls: 'flash', text: 'Flasheando'};
+        if (d.state === 'erasing') return {cls: 'flash', text: 'Borrando'};
+        if (d.state === 'discovering') return {cls: 'flash', text: 'Iniciando'};
+        if (d.state === 'unknown') return {cls: 'warn', text: 'Sin MAC'};
+        var h = d.health || {};
+        if (h.boot_loop) return {cls: 'bad', text: 'Boot loop'};
+        if (h.panics > 0) return {cls: 'bad', text: h.panics === 1 ? 'Panic' : h.panics + ' panics'};
+        if (silentFor(d, nowMs) !== null) return {cls: 'warn', text: 'Sin log'};
+        if (healthLevel(h) === 'warn') return {cls: 'warn', text: 'Reset anormal'};
+        return {cls: 'ok', text: 'En línea'};
+    }
+
+    // Tiempo encendida desde el último boot visto: [número, unidad, número, unidad] o null.
+    function uptimeParts(d, nowMs) {
+        var r = d && d.health && d.health.last_reset;
+        var t = r && parseLocal(r.ts);
+        if (!t || d.state !== 'monitoring') return null;
+        var s = Math.max(0, ((nowMs === undefined ? Date.now() : nowMs) - t.getTime()) / 1000);
+        var m = Math.floor(s / 60), h = Math.floor(m / 60), days = Math.floor(h / 24);
+        if (days > 0) return [String(days), 'd', String(h % 24), 'h'];
+        if (h > 0) return [String(h), 'h', String(m % 60), 'min'];
+        if (m > 0) return [String(m), 'min'];
+        return [String(Math.floor(s)), 's'];
+    }
+
+    function agoText(epochS, nowMs) {
+        if (!epochS) return '—';
+        return fmtDur(((nowMs === undefined ? Date.now() : nowMs) / 1000) - epochS);
+    }
+
+    // Totales de una lista de buckets de /api/activity.
+    function activityTotals(buckets) {
+        var t = {boot: 0, panic: 0, flash: 0, boot_loop: 0, reserve: 0};
+        (buckets || []).forEach(function (b) { for (var k in t) t[k] += b[k] || 0; });
+        return t;
+    }
+
+    var BAR_H = {boot: 38, flash: 66, panic: 100};
+    function barKind(b) {
+        if (b.panic || b.boot_loop) return 'panic';
+        if (b.flash) return 'flash';
+        if (b.boot) return 'boot';
+        return '';
+    }
+
+    // Una barra por hora (la más vieja a la izquierda), coloreada por lo peor que pasó en esa hora.
+    function activityBarsHtml(buckets) {
+        var n = (buckets || []).length;
+        return (buckets || []).map(function (b, i) {
+            var k = barKind(b), ago = n - i;
+            var parts = [];
+            if (b.boot) parts.push(b.boot + (b.boot === 1 ? ' reinicio' : ' reinicios'));
+            if (b.panic) parts.push(b.panic + (b.panic === 1 ? ' panic' : ' panics'));
+            if (b.boot_loop) parts.push('boot loop');
+            if (b.flash) parts.push(b.flash + (b.flash === 1 ? ' flash' : ' flashes'));
+            if (b.reserve) parts.push('reservada');
+            var title = 'Hace ' + ago + ' h' + (parts.length ? ': ' + parts.join(', ') : ': sin novedades');
+            return '<span class="' + (k + (b.reserve ? ' resv' : '')).trim() + '" style="height:' +
+                   (k ? BAR_H[k] : 8) + '%" title="' + escapeHtml(title) + '"></span>';
+        }).join('');
+    }
+
+    // Chips de salud de la máquina del bench (GET /api/bench/health). [{icon, value, label, level}]
+    function benchChips(h) {
+        if (!h) return [];
+        var out = [];
+        if (h.temp_c != null) out.push({icon: 'temperature', value: String(h.temp_c).replace('.', ',') + ' °C', label: 'temperatura',
+                                        level: h.temp_c >= 80 ? 'bad' : h.temp_c >= 70 ? 'warn' : ''});
+        if (h.ram) out.push({icon: 'cpu', value: h.ram.used_pct + ' %', label: 'RAM de ' + (h.ram.total_mb >= 1024 ? Math.round(h.ram.total_mb / 1024) + ' GB' : h.ram.total_mb + ' MB'),
+                             level: h.ram.used_pct >= 90 ? 'bad' : h.ram.used_pct >= 80 ? 'warn' : ''});
+        if (h.disk) out.push({icon: 'database', value: h.disk.used_pct + ' %', label: 'disco',
+                              level: h.disk.used_pct >= 95 ? 'bad' : h.disk.used_pct >= 85 ? 'warn' : ''});
+        if (h.load) out.push({icon: 'activity', value: String(h.load['1m']).replace('.', ','), label: 'carga',
+                              level: h.load['1m'] >= h.load.cpus ? 'warn' : ''});
+        if (h.uptime_s != null) out.push({icon: 'clock', value: fmtDur(h.uptime_s), label: 'encendida', level: ''});
+        return out;
+    }
+
+    function bigNum(parts) {
+        if (!parts) return '<span class="big">—</span>';
+        var html = '';
+        for (var i = 0; i < parts.length; i += 2) html += escapeHtml(parts[i]) + '<em>' + escapeHtml(parts[i + 1]) + '</em>';
+        return '<span class="big">' + html + '</span>';
+    }
+
+    /*
+     * Card de una placa. opts: {buckets, href (monitor), direct (link directo, bench-master),
+     * bench (nombre, bench-master), rename (bench: lápiz para renombrar), now}.
+     * Los botones llevan data-act="rename|copy" para que la página les ponga el handler.
+     */
+    function boardCardHtml(d, opts) {
+        opts = opts || {};
+        var st = boardStatus(d, opts.now);
+        var title = d.device_key || d.tty_name;
+        var meta = [d.hw_model, opts.bench ? 'en ' + opts.bench : null, d.tty_name].filter(Boolean).join(', ');
+        var tot = opts.buckets ? activityTotals(opts.buckets) : null;
+        var boots = tot ? tot.boot : Math.max(0, ((d.health || {}).boots || 1) - 1);
+        var panics = tot ? tot.panic : (d.health || {}).panics || 0;
+        var silent = silentFor(d, opts.now) !== null;
+        var lock = lockInfo(d, opts.now);
+        var live = d.state === 'monitoring' && d.status === 'RUNNING';
+        var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
+        return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
+            '<div class="bh"><div class="bh-name"><div class="name">' + escapeHtml(title) +
+                (opts.rename && d.mac ? ' <button class="icon-btn" data-act="rename" aria-label="Renombrar"><i class="ti ti-pencil"></i></button>' : '') +
+                '</div><div class="meta">' + escapeHtml(meta) + '</div></div>' +
+                '<span class="status ' + st.cls + '">' + escapeHtml(st.text) + '</span></div>' +
+            '<div class="uptime">' + bigNum(uptimeParts(d, opts.now)) + '<span class="lbl">' + (live ? 'encendida' : escapeHtml(st.text.toLowerCase())) + '</span></div>' +
+            '<div class="facts">' +
+                '<span class="fact' + (silent ? ' warn' : '') + '">' + (silent ? '<i class="ti ti-volume-off"></i>' : (live ? '<span class="live"></span>' : '')) +
+                    'Último log <b>' + escapeHtml(agoText(d.last_log_epoch, opts.now)) + '</b></span>' +
+                '<span class="fact">Reinicios <b>' + boots + '</b></span>' +
+                '<span class="fact' + (panics ? ' bad' : '') + '">Panics <b>' + panics + '</b></span>' +
+            '</div>' +
+            (opts.buckets ? '<div class="bars" aria-label="Actividad por hora, últimas ' + opts.buckets.length + ' h">' + activityBarsHtml(opts.buckets) + '</div>' +
+                            '<div class="baxis"><span>hace ' + opts.buckets.length + ' h</span><span>ahora</span></div>' : '') +
+            '<div class="bf"><span class="fw"' + (fwTitle ? ' title="' + escapeHtml(fwTitle) + '"' : '') + '>Firmware <b>' + escapeHtml(d.fw_version || '—') + '</b></span>' +
+                (lock ? '<span class="lock" title="' + escapeHtml(lock.title) + '"><i class="ti ti-lock"></i>' + escapeHtml(lock.user) +
+                        (lock.reservation ? ', ' + escapeHtml(lock.text.replace('vence en ', '')) : '') + '</span>' : '') +
+                (opts.direct ? '<a class="icon-btn" href="' + escapeHtml(opts.direct) + '" title="Abrir directo en el bench"><i class="ti ti-external-link"></i></a>' : '') +
+                '<button class="icon-btn" data-act="copy" title="Copiar config para deploy.py"><i class="ti ti-copy"></i></button>' +
+                '<a class="btn" href="' + escapeHtml(opts.href || ('device.html?tty=' + encodeURIComponent(d.tty_name))) + '"><i class="ti ti-terminal-2"></i>Monitor</a>' +
+            '</div>' +
+        '</article>';
+    }
+
+    // Gráfico de área (SVG) para una serie: curva suave, relleno, marcas en los índices de `marks`.
+    function areaChartSvg(values, marks, w, h, opts) {
+        opts = opts || {};
+        var pad = opts.pad || 14, inset = opts.inset || 12;
+        var max = Math.max(1, Math.max.apply(null, values.concat([0])) * 1.25);
+        var n = values.length;
+        var pts = values.map(function (v, i) {
+            return [inset + (n > 1 ? i / (n - 1) : 0) * (w - 2 * inset), h - pad - v / max * (h - 2 * pad)];
+        });
+        var d = 'M' + pts[0][0].toFixed(1) + ',' + pts[0][1].toFixed(1);
+        for (var i = 1; i < n; i++) {
+            var p = pts[i - 1], c = pts[i], mx = ((p[0] + c[0]) / 2).toFixed(1);
+            d += ' C' + mx + ',' + p[1].toFixed(1) + ' ' + mx + ',' + c[1].toFixed(1) + ' ' + c[0].toFixed(1) + ',' + c[1].toFixed(1);
+        }
+        var dots = (marks || []).map(function (i) {
+            return '<circle class="mark" cx="' + pts[i][0].toFixed(1) + '" cy="' + pts[i][1].toFixed(1) + '" r="5"/>';
+        }).join('');
+        return {points: pts, svg: '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img">' +
+            '<defs><linearGradient id="area-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" class="area-stop-a"/><stop offset="1" class="area-stop-b"/></linearGradient></defs>' +
+            '<path class="area" d="' + d + ' L' + pts[n - 1][0].toFixed(1) + ',' + h + ' L' + pts[0][0].toFixed(1) + ',' + h + ' Z"/>' +
+            '<path class="line" d="' + d + '"/>' + dots + '</svg>'};
+    }
+
     return {
         fmtDur: fmtDur, secondsUntil: secondsUntil, expiresText: expiresText, lockInfo: lockInfo,
         forceConfirmText: forceConfirmText, searchMatch: searchMatch,
@@ -746,6 +908,9 @@
         splitPrefix: splitPrefix, stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem,
         ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer,
         cardState: cardState, stateBadgeHtml: stateBadgeHtml, fwRows: fwRows,
-        lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl
+        lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl,
+        SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, uptimeParts: uptimeParts, agoText: agoText,
+        activityTotals: activityTotals, activityBarsHtml: activityBarsHtml, benchChips: benchChips, boardCardHtml: boardCardHtml,
+        areaChartSvg: areaChartSvg
     };
 });
