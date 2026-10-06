@@ -194,6 +194,20 @@ def test_ref_pins_a_branch_and_follows_it(bench):
     assert bench.installed() == "0.2.0" and bench.pin() == ""
 
 
+def test_conf_stays_readable_by_the_dashboard_after_pinning(bench):
+    """El api corre como sfypi y lee el PIN de update.conf: conf_set lo reescribía con
+    mktemp (0600) y el dashboard mostraba pin null (sensipi03, update a la misma ref)."""
+    import stat
+    bench.commit("0.2.0", tag="v0.2.0")
+    conf = bench.base / "update.conf"
+    conf.chmod(0o644)
+    assert bench.run("--ref", "main").returncode == 0
+    assert bench.pin() == "main"
+    assert stat.S_IMODE(conf.stat().st_mode) & 0o044 == 0o044      # legible por group/other
+    assert bench.run("--ref", "main").returncode == 0 and bench.status()["state"] == "up_to_date"
+    assert stat.S_IMODE(conf.stat().st_mode) & 0o044 == 0o044
+
+
 def test_ref_can_be_a_tag_or_commit(bench):
     sha = bench.commit("0.2.0")
     bench.commit("0.3.0", tag="v0.3.0")

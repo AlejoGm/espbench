@@ -56,6 +56,7 @@ conf_get() { [ -f "$CONF" ] && sed -n "s/^$1=//p" "$CONF" | tail -1; }
 conf_set() {   # conf_set KEY VALUE: reemplaza la línea o la agrega
     local tmp; tmp="$(mktemp)"
     { [ -f "$CONF" ] && grep -v "^$1=" "$CONF"; echo "$1=$2"; } > "$tmp"
+    chmod 644 "$tmp"   # mktemp crea 0600: el api (sfypi) tiene que poder leer el PIN
     mv "$tmp" "$CONF"
 }
 
