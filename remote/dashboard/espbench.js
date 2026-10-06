@@ -312,11 +312,13 @@
         return who + '\n¿' + action + ' igual? Queda registrado como forzado.';
     }
 
-    // Búsqueda de la home: texto libre, o "@usuario" (solo el usuario del lock;
-    // "@" solo = cualquier placa con lock).
-    function searchMatch(q, text, lockUser) {
+    // Búsqueda de la home: texto libre, "@usuario" (solo el usuario del lock;
+    // "@" solo = cualquier placa con lock) o "lock:reserva" / "lock:flash" (los
+    // contadores del header). lockKind: 'reserva' | 'flash' | ''.
+    function searchMatch(q, text, lockUser, lockKind) {
         q = (q || '').trim().toLowerCase();
         if (!q) return true;
+        if (q === 'lock:reserva' || q === 'lock:flash') return lockKind === q.slice(5);
         if (q.charAt(0) === '@') return !!lockUser && lockUser.toLowerCase().indexOf(q.slice(1)) >= 0;
         return (text || '').indexOf(q) >= 0;
     }
@@ -394,28 +396,57 @@
         var detail = eventDetail(ev);
         var full = ev.type === 'panic' && d.line ? d.line : detail;
         return {
-            type: ev.type, icon: t.icon, label: t.label, cls: 'ev-' + String(ev.type).replace(/_/g, '-'),
+            icon: t.icon, label: t.label, cls: 'ev-' + safeType(ev.type).replace(/_/g, '-'),
             date: ts.slice(0, 10), time: ts.slice(11, 19), detail: detail,
             // release forzado: user es el dueño anterior; "quién" es el que forzó
             who: (ev.type === 'release' && d.forced ? d.by_user || d.by_host : d.user) || '',
             session: cursorSession(ev.cursor), cursor: ev.cursor || null,
             bad: ev.type === 'panic' || ev.type === 'boot_loop' || (ev.type === 'flash' && d.ok === false) ||
                  (ev.type === 'boot' && !!d.abnormal),
+            type: safeType(ev.type),
             title: ts.replace('T', ' ') + ' · ' + t.label + (full ? ': ' + full : '') +
                    (ev.cursor ? '\n' + ev.cursor : '')
         };
     }
 
+    // Tipo usable en una clase o un atributo (los tipos vienen del server).
+    function safeType(type) { return String(type).replace(/[^a-z0-9_-]/gi, ''); }
+
     // [{type, n, icon, label}] en el orden de EVENT_TYPES, solo los que aparecen.
+    // Recibe la lista de eventos o el {tipo: n} de /events?counts=1.
     function eventCounts(events) {
         var n = {};
-        (events || []).forEach(function (e) { n[e.type] = (n[e.type] || 0) + 1; });
+        if (Array.isArray(events) || !events) (events || []).forEach(function (e) { n[e.type] = (n[e.type] || 0) + 1; });
+        else Object.keys(events).forEach(function (k) { n[k] = events[k]; });
         return EVENT_ORDER.concat(Object.keys(n).filter(function (k) { return !EVENT_TYPES[k]; }))
             .filter(function (k) { return n[k]; })
             .map(function (k) {
                 var t = EVENT_TYPES[k] || {icon: '·', label: k};
                 return {type: k, n: n[k], icon: t.icon, label: t.label};
             });
+    }
+
+    // Une dos páginas de /events (la principal y la de tipos raros: boot_loop,
+    // flash, fw), sin repetidos, ordenadas por (sesión, offset) como el server.
+    function mergeEvents(a, b) {
+        var seen = {}, out = [];
+        (a || []).concat(b || []).forEach(function (e) {
+            var k = e.type + '|' + e.cursor + '|' + e.ts;
+            if (!seen[k]) { seen[k] = true; out.push(e); }
+        });
+        function key(e) {
+            var m = /^c:(\d{8}_\d{6}_\d+):(\d+)$/.exec(e.cursor || '');
+            return m ? [m[1], +m[2]] : ['', 0];
+        }
+        return out.sort(function (x, y) {
+            var a1 = key(x), b1 = key(y);
+            return a1[0] < b1[0] ? -1 : a1[0] > b1[0] ? 1 : a1[1] - b1[1];
+        });
+    }
+
+    // Espera del próximo poll: `every` ms, o el doble por cada error seguido, hasta `max`.
+    function backoffMs(every, fails, max) {
+        return Math.min(max === undefined ? 30000 : max, every * Math.pow(2, Math.max(0, fails)));
     }
 
     /*
@@ -442,24 +473,44 @@
         return date && COMPACT_RE.test(line) ? date + ' ' + line : line;
     }
 
-    // Índice de la línea del evento (la que devuelve around=<cursor>&before=0&after=0)
-    // dentro del contexto, o -1. Se compara con la hora (ms) incluida.
-    function findLine(lines, target, date, targetDate) {
-        if (!target) return -1;
-        var t = expandRangeLine(target, targetDate);
-        for (var i = 0; i < lines.length; i++) {
-            if (expandRangeLine(lines[i], date) === t) return i;
+    /*
+     * Índice de la línea del evento dentro del contexto, o -1. `seq` es lo que
+     * devuelve around=<cursor>&before=N&after=0: las N líneas previas y, al
+     * final, la del evento. Se compara con la hora (ms) incluida y, entre líneas
+     * idénticas (mismo texto en el mismo ms), gana la que tiene más líneas
+     * previas iguales a las de `seq`; si empatan, la primera.
+     */
+    function findLine(lines, seq, date, seqDate) {
+        if (!seq || !seq.length) return -1;
+        if (typeof seq === 'string') seq = [seq];
+        var want = seq.map(function (l) { return expandRangeLine(l, seqDate); });
+        var have = lines.map(function (l) { return expandRangeLine(l, date); });
+        var last = want.length - 1, best = -1, bestScore = -1;
+        for (var i = 0; i < have.length; i++) {
+            if (have[i] !== want[last]) continue;
+            var k = 1;
+            while (k <= last && i - k >= 0 && have[i - k] === want[last - k]) k++;
+            if (k > bestScore) { best = i; bestScore = k; }
         }
-        return -1;
+        return best;
+    }
+
+    // Offset de un cursor c:<sesión>:<offset>, o null.
+    function cursorOffset(cursor) {
+        var m = /^c:\d{8}_\d{6}_\d+:(\d+)$/.exec(cursor || '');
+        return m ? +m[1] : null;
     }
 
     // ── Marcas de eventos en el log en vivo ───────────────────────────────
 
+    // Copia de serial_watch._PANIC_RES / _RESET_RE: tests/test_linemark_parity.py
+    // corre los mismos casos en Python y en node y exige el mismo resultado.
     var MARK_PANIC_RE = new RegExp([
-        "Guru Meditation Error: Core\\s+\\d+ panic'ed", 'abort\\(\\) was called', 'Brownout detector was triggered',
-        'Task watchdog got triggered', '\\*\\*\\*ERROR\\*\\*\\* A stack overflow in task', 'assert failed:'
+        "Guru Meditation Error: Core\\s+\\d+ panic'ed \\(([^)]*)\\)", 'abort\\(\\) was called',
+        'Brownout detector was triggered', 'Task watchdog got triggered',
+        '\\*\\*\\*ERROR\\*\\*\\* A stack overflow in task (\\S+)', 'assert failed:'
     ].join('|'));
-    var MARK_BOOT_RE = /rst:0x[0-9a-fA-F]+ \([A-Z0-9_]+\)/;
+    var MARK_BOOT_RE = /rst:0x[0-9a-fA-F]+ \(([A-Z0-9_]+)\)/;
 
     /*
      * Marca de una línea por su contenido: 'boot' (rst:) o 'panic' (el inicio de
@@ -486,17 +537,29 @@
 
     /*
      * Eventos del api (send, command, flash) → la línea del vivo donde marcarlos.
-     * El WebSocket manda texto, sin offsets: cada evento va a la PRIMERA línea con
-     * hora ≥ la del evento − slack. El slack (500 ms) es porque el api registra el
-     * evento después de mandar las teclas y el eco ya puede haber llegado.
+     * El WebSocket manda texto, sin offsets: se ubican por hora.
+     * - Ventana: desde t − back (150 ms: el api registra el evento después de
+     *   mandar las teclas y el eco puede tener hora anterior).
+     * - send con texto: el eco, una línea en [t − back, t + 2 s] que lo contenga.
+     *   Entre varias, la ÚLTIMA con hora ≤ t (el eco llega antes de que el api
+     *   registre el evento; si el firmware imprimió el mismo texto un instante
+     *   antes, queda antes del eco), o si no hay, la primera después de t. Sin
+     *   ninguna, la primera línea de la ventana.
+     * - El resto: la primera línea de la ventana.
+     * - Si la candidata está a más de 5 s, no se marca (la placa estuvo callada:
+     *   la marca caería en una línea que no tiene nada que ver).
      * Aproximado a propósito (ver remote/dashboard/CLAUDE.md).
      *
-     * add(events) → cuántos nuevos; take(lineIso) → los eventos que caen en esa
-     * línea (hay que llamarla en orden de líneas); dropBefore(iso) descarta los
-     * anteriores a la primera línea de la vista (recortada).
+     * add(events) → cuántos nuevos. feed(handle, lineIso, lineText) → [{ev, handle}]
+     * a marcar (handle puede ser el de una línea anterior: el fallback de un send);
+     * hay que llamarla en orden de líneas. flush(nowMs) resuelve los send cuya
+     * ventana de texto ya pasó aunque no haya llegado otra línea.
      */
-    function EventMarks(slackMs) {
-        this.slack = slackMs === undefined ? 500 : slackMs;
+    function EventMarks(opts) {
+        opts = opts || {};
+        this.back = opts.back === undefined ? 150 : opts.back;
+        this.textWindow = opts.textWindow === undefined ? 2000 : opts.textWindow;
+        this.maxGap = opts.maxGap === undefined ? 5000 : opts.maxGap;
         this.reset();
     }
 
@@ -513,31 +576,59 @@
             var t = tsMs(ev.ts);
             if (this._seen[key] || t === null) continue;
             this._seen[key] = true;
-            this._pending.push({t: t - this.slack, ev: ev});
+            var text = ev.type === 'send' && ev.detail && ev.detail.text ? String(ev.detail.text).toLowerCase() : null;
+            this._pending.push({t: t, ev: ev, text: text, fallback: null, best: null});
             added++;
         }
         this._pending.sort(function (a, b) { return a.t - b.t; });
         return added;
     };
 
-    EventMarks.prototype.take = function (lineIso) {
-        var t = tsMs(lineIso);
+    EventMarks.prototype.pending = function () { return this._pending.length; };
+
+    EventMarks.prototype.feed = function (handle, lineIso, lineText) {
+        var lt = tsMs(lineIso);
         var out = [];
-        if (t === null) return out;
-        while (this._pending.length && this._pending[0].t <= t) out.push(this._pending.shift().ev);
+        if (lt === null) return out;
+        var low = String(lineText || '').toLowerCase();
+        var keep = [];
+        for (var i = 0; i < this._pending.length; i++) {
+            var p = this._pending[i];
+            if (lt < p.t - this.back) { keep.push(p); continue; }
+            if (p.fallback === null && lt > p.t + this.maxGap) continue;          // demasiado lejos: sin marca
+            var hit = !!p.text && lt <= p.t + this.textWindow && low.indexOf(p.text) >= 0;
+            if (!p.text) {
+                out.push({ev: p.ev, handle: handle});
+            } else if (hit && lt <= p.t) {
+                p.best = handle;                     // por ahora el último eco antes de t
+                if (p.fallback === null) p.fallback = handle;
+                keep.push(p);
+            } else if (p.best !== null && lt > p.t) {
+                out.push({ev: p.ev, handle: p.best});
+            } else if (hit) {
+                out.push({ev: p.ev, handle: handle});
+            } else if (lt > p.t + this.textWindow) {
+                out.push({ev: p.ev, handle: p.fallback !== null ? p.fallback : handle});
+            } else {
+                if (p.fallback === null) p.fallback = handle;
+                keep.push(p);
+            }
+        }
+        this._pending = keep;
         return out;
     };
 
-    EventMarks.prototype.dropBefore = function (lineIso) {
-        var t = tsMs(lineIso);
-        if (t === null) return;
-        while (this._pending.length && this._pending[0].t < t) this._pending.shift();
-    };
-
-    // Hay algún pendiente que ya cae en una línea con esa hora (o antes).
-    EventMarks.prototype.dueBy = function (lineIso) {
-        var t = tsMs(lineIso);
-        return t !== null && this._pending.length > 0 && this._pending[0].t <= t;
+    EventMarks.prototype.flush = function (nowMs) {
+        var out = [], keep = [];
+        for (var i = 0; i < this._pending.length; i++) {
+            var p = this._pending[i];
+            if (p.best !== null && nowMs > p.t) out.push({ev: p.ev, handle: p.best});
+            else if (p.fallback !== null && nowMs > p.t + this.textWindow) out.push({ev: p.ev, handle: p.fallback});
+            else if (nowMs > p.t + 10 * 60 * 1000) continue;              // nunca llegó una línea: se olvida
+            else keep.push(p);
+        }
+        this._pending = keep;
+        return out;
     };
 
     return {
@@ -545,7 +636,9 @@
         forceConfirmText: forceConfirmText, searchMatch: searchMatch,
         EVENT_TYPES: EVENT_TYPES, EVENT_ORDER: EVENT_ORDER, eventDetail: eventDetail, eventView: eventView,
         eventCounts: eventCounts, eventContext: eventContext, cursorSession: cursorSession,
+        safeType: safeType, mergeEvents: mergeEvents, backoffMs: backoffMs,
         sessionLabel: sessionLabel, sessionFile: sessionFile, expandRangeLine: expandRangeLine, findLine: findLine,
+        cursorOffset: cursorOffset,
         lineMark: lineMark, tsMs: tsMs, EventMarks: EventMarks,
         errorText: errorText, errorCode: errorCode, withToken: withToken,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,

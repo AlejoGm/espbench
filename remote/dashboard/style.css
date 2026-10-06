@@ -924,10 +924,21 @@ body.hide-ts .terminal .ln-ts { display: none; }
 .lock-badge.lock-flash { background: #1e1b14; color: #a08a50; }
 .lock-badge.lock-flash::before { background: #a08a50; }
 .lock-exp { font-variant-numeric: tabular-nums; }
+.lock-user {
+    display: inline-block;
+    max-width: 14ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+.dev-badge.badge-locked { max-width: 100%; }
 .sum-click { cursor: pointer; }
 .sum-click:hover { border-color: #555; }
 .sum-flashlock { border-color: #2e2a1e; } .sum-flashlock b { color: #a08a50; }
-.lock-bar b { color: #f0c040; }
+.lock-bar { top: auto; bottom: 56px; }     /* abajo: no tapa el header ni los botones */
+.lock-bar b { color: #f0c040; display: inline-block; max-width: 20ch; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; vertical-align: bottom; }
 .lock-bar input[name=user] { width: 130px; }
 .lock-bar input[name=token] { width: 130px; }
 .lock-bar-err { color: #ff7b72; flex-basis: 100%; font-size: 0.75rem; }

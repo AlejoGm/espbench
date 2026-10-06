@@ -147,37 +147,58 @@
         // hora (EB.EventMarks: la primera línea con hora ≥ la del evento − 500 ms).
         var marks = new EB.EventMarks();
 
+        function applyMarks(found) {
+            found.forEach(function(x) { markEvent(x.handle, x.ev); });
+        }
+
+        // Cada línea completa pasa por el matcher (en orden): puede marcar esta o una anterior.
         function takeMarks(el) {
-            if (!el._iso) return;
-            marks.take(el._iso).forEach(function(ev) { markEvent(el, ev); });
+            if (el._iso) applyMarks(marks.feed(el, el._iso, el._plain));
         }
 
-        function lastLine() {
-            var el = partialEl ? partialEl.previousSibling : terminal.lastChild;
-            return el && el._iso !== undefined ? el : null;
-        }
-
+        // Eventos nuevos: se repasan las líneas de la vista desde el principio
+        // (solo cuando llegan eventos; los ya marcados no están más pendientes).
         function scanMarks() {
-            var last = lastLine();
-            if (!last || !last._iso || !marks.dueBy(last._iso)) return;
-            var first = true;
-            for (var el = terminal.firstChild; el && el !== partialEl; el = el.nextSibling) {
-                if (!el._iso) continue;
-                if (first) { marks.dropBefore(el._iso); first = false; }   // anteriores a la vista (recortada/limpia)
-                takeMarks(el);
+            for (var el = terminal.firstChild; el && el !== partialEl && marks.pending(); el = el.nextSibling) {
+                if (el._iso !== undefined) takeMarks(el);
             }
         }
 
         function pollMarks() {
-            if (!boardApi) return;
-            fetch(boardApi + '/events?type=send,command,flash&since=session&limit=200')
-                .then(function(r) { return r.ok ? r.json() : null; })
+            if (!boardApi) return Promise.resolve();
+            return fetch(boardApi + '/events?type=send,command,flash&since=session&limit=200')
+                .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function(d) {
-                    if (!d) return;
                     curSession = d.session || curSession;
                     if (marks.add(d.events)) scanMarks();
-                })
-                .catch(function() {});
+                    applyMarks(marks.flush(Date.now()));
+                });
+        }
+
+        /*
+         * Poll sin pedidos superpuestos: fn devuelve una promesa; el próximo sale
+         * `every` ms después de que termine, con backoff ante errores (hasta 30 s),
+         * y en pausa mientras la pestaña está oculta (al volver, uno enseguida).
+         */
+        function poller(fn, every) {
+            var busy = false, fails = 0, timer = null;
+            function schedule() {
+                clearTimeout(timer);
+                timer = setTimeout(tick, EB.backoffMs(every, fails));
+            }
+            function tick() {
+                if (document.hidden) { timer = null; return; }
+                if (busy) return schedule();
+                busy = true;
+                Promise.resolve().then(fn)
+                    .then(function() { fails = 0; }, function() { fails++; })
+                    .then(function() { busy = false; schedule(); });
+            }
+            document.addEventListener('visibilitychange', function() {
+                if (!document.hidden && !busy) { clearTimeout(timer); tick(); }
+            });
+            schedule();
+            return {now: function() { if (!busy) { clearTimeout(timer); tick(); } }};
         }
 
         function visible(el) {
@@ -285,7 +306,7 @@
         function lockBadge(lock) {
             return '<span class="dev-badge badge-locked" title="' + EB.escapeHtml(lock.title) + '">' +
                    '<span class="dev-badge-label">🔒 ' + (lock.reservation ? 'reserva' : 'lock flash') + '</span>' +
-                   '<span class="dev-badge-value">' + EB.escapeHtml(lock.user) + ' · <span class="lock-exp"' +
+                   '<span class="dev-badge-value"><span class="lock-user">' + EB.escapeHtml(lock.user) + '</span> · <span class="lock-exp"' +
                    (lock.expires ? ' data-expires="' + EB.escapeHtml(lock.expires) + '"' : '') + '>' +
                    EB.escapeHtml(lock.text) + '</span></span></span>';
         }
@@ -331,10 +352,11 @@
         }
 
         function release(user, token, remember) {
+            var what = currentLock && !currentLock.reservation ? 'Lock del flash liberado' : 'Reserva liberada';
             return postWrite('/release', {lock_user: user, lock_token: token}).then(function(res) {
                 if (!res[0]) return EB.errorText(res[2], res[1]);
                 if (remember) setPair(user, token);
-                toast('Reserva liberada');
+                toast(what);
                 loadDeviceInfo();
                 return null;
             });
@@ -347,10 +369,14 @@
             var pair = getPair();
             var bar = document.createElement('form');
             bar.className = 'token-bar lock-bar';
-            bar.innerHTML = '<span>Liberar la reserva de <b>' + EB.escapeHtml(lock.user) + '</b></span>' +
+            var mine = !!pair && pair.user === lock.user;
+            bar.innerHTML = '<span>Liberar ' + (lock.reservation ? 'la reserva' : 'el lock del flash') + ' de <b>' +
+                    EB.escapeHtml(lock.user) + '</b></span>' +
                 '<input name="user" placeholder="lock_user" autocomplete="off">' +
                 '<input name="token" type="password" placeholder="lock_token" autocomplete="off">' +
-                '<label class="enter-opt"><input type="checkbox" name="remember"' + (pair ? ' checked' : '') + '> recordar</label>' +
+                '<label class="enter-opt" title="Guardar este lock_user/lock_token en el navegador' +
+                    (pair && !mine ? ' (reemplaza el de ' + EB.escapeHtml(pair.user) + ')' : '') + '">' +
+                    '<input type="checkbox" name="remember"' + (mine ? ' checked' : '') + '> recordar</label>' +
                 '<button type="submit" class="action-btn">Liberar</button>' +
                 '<button type="button" class="tool-btn">Cancelar</button>' +
                 (error ? '<span class="lock-bar-err">' + EB.escapeHtml(error) + '</span>' : '');
@@ -381,11 +407,13 @@
 
         function onForce() {
             if (!currentLock) return;
-            if (!confirm(EB.forceConfirmText(currentLock, 'Soltarla'))) return;
+            var lock = currentLock;
+            if (!confirm(EB.forceConfirmText(lock, lock.reservation ? 'Soltarla' : 'Soltarlo'))) return;
             postWrite('/unlock', {force: true})
                 .then(function(res) {
                     if (!res[0]) { toast(EB.errorText(res[2], res[1]), true); return; }
-                    toast(res[2] && res[2].forced ? 'Reserva de ' + res[2].user + ' soltada (forzado)' : 'No estaba bloqueada');
+                    toast(res[2] && res[2].forced ? (lock.reservation ? 'Reserva' : 'Lock del flash') + ' de ' + res[2].user +
+                          ' soltado (forzado)' : 'No estaba bloqueada');
                     loadDeviceInfo();
                 })
                 .catch(function() { toast('Error de conexión', true); });
@@ -401,11 +429,16 @@
                     var badges = [];
                     var name = tty;
                     deviceLoaded = true;
-                    if (d && d.mac && !boardKey) {
-                        boardKey = d.mac.replace(/[:-]/g, '');
+                    var key = d && d.mac ? d.mac.replace(/[:-]/g, '').toUpperCase() : '';
+                    if (key && key !== boardKey) {
+                        // primera vez, u otra placa en el mismo tty: eventos y marcas de la nueva
+                        boardKey = key;
                         boardApi = '/api/board/' + encodeURIComponent(boardKey);
-                        pollMarks();
-                        if (sideTab === 'events') loadHistory();
+                        marks.reset();
+                        evData = null; evSig = ''; evCounts = []; evFilter = {}; evLimit = EV_PAGE;
+                        curSession = null;
+                        pollMarks().catch(function() {});
+                        if (sideTab === 'events') loadHistory().catch(function() {});
                     }
                     if (d) {
                         name = d.device_key || d.hw_model || tty;
@@ -451,20 +484,19 @@
         function toggleHistory(open) {
             $('side-panel').classList.toggle('hidden', !open);
             $('btn-history').classList.toggle('active', open);
-            if (open) loadHistory();
+            if (open) loadHistory().catch(function() {});
         }
 
+        // Devuelve una promesa que falla si el pedido falló (backoff del poller).
         function loadHistory() {
-            if (!panelOpen()) return;
-            if (sideTab === 'events') {
-                loadEvents();
-            } else if (sideTab === 'jobs') {
-                fetch(api + '/jobs').then(function(r) { return r.json(); }).then(renderJobs)
-                    .catch(function() { $('side-jobs').innerHTML = '<div class="side-empty">Error al leer el historial</div>'; });
-            } else {
-                fetch(api + '/sessions').then(function(r) { return r.json(); }).then(renderSessions)
-                    .catch(function() { $('side-sessions').innerHTML = '<div class="side-empty">Error al leer las sesiones</div>'; });
+            if (!panelOpen()) return Promise.resolve();
+            if (sideTab === 'events') return loadEvents();
+            if (sideTab === 'jobs') {
+                return fetch(api + '/jobs').then(function(r) { return r.json(); }).then(renderJobs)
+                    .catch(function(e) { $('side-jobs').innerHTML = '<div class="side-empty">Error al leer el historial</div>'; throw e; });
             }
+            return fetch(api + '/sessions').then(function(r) { return r.json(); }).then(renderSessions)
+                .catch(function(e) { $('side-sessions').innerHTML = '<div class="side-empty">Error al leer las sesiones</div>'; throw e; });
         }
 
         function renderJobs(jobs) {
@@ -517,6 +549,8 @@
         var evFilter = {};          // tipos elegidos en los chips (vacío = todos)
         var evCounts = [];          // por tipo, de la última carga sin filtro
         var evData = null;
+        var evSig = '';             // lo último que se renderizó: si no cambió, no se re-renderiza
+        var RARE_TYPES = 'boot_loop,flash,fw';   // se piden aparte: no quedan enterrados bajo 150 panics
 
         function getJson(url) {
             return fetch(url).then(function(r) {
@@ -529,26 +563,42 @@
             if (!boardApi) {
                 $('side-events').innerHTML = '<div class="side-empty">' +
                     (deviceLoaded ? 'La placa todavía no tiene MAC: sin eventos' : 'Cargando…') + '</div>';
-                return;
+                return Promise.resolve();
             }
+            var api0 = boardApi;
             var types = Object.keys(evFilter);
-            getJson(boardApi + '/events?limit=' + evLimit + (types.length ? '&type=' + types.join(',') : ''))
+            var main = getJson(boardApi + '/events?counts=1&limit=' + evLimit + (types.length ? '&type=' + types.join(',') : ''));
+            // Sin filtro, los tipos raros aparte: un boot_loop o un flash se ven aunque haya cientos de panics después
+            var rare = types.length ? Promise.resolve(null) : getJson(boardApi + '/events?limit=20&type=' + RARE_TYPES);
+            return Promise.all([main, rare])
                 .then(function(res) {
-                    if (!res.ok) throw new Error(EB.errorText(res.body, res.status));
-                    evData = res.body;
-                    curSession = evData.session || curSession;
-                    if (!types.length) evCounts = EB.eventCounts(evData.events);
+                    if (api0 !== boardApi) return;                    // cambió la placa en el medio
+                    var a = res[0], b = res[1];
+                    if (!a.ok) throw new Error(EB.errorText(a.body, a.status));
+                    var data = a.body;
+                    if (b && b.ok) data = Object.assign({}, data, {events: EB.mergeEvents(data.events, b.body.events)});
+                    curSession = data.session || curSession;
+                    if (data.counts) evCounts = EB.eventCounts(data.counts);
+                    var sig = JSON.stringify([data.events, data.more, data.counts, evFilter, evLimit, curSession]);
+                    if (sig === evSig) return;
+                    evData = data;
+                    evSig = sig;
                     renderEvents();
                 })
-                .catch(function(e) { $('side-events').innerHTML = '<div class="side-empty">Error al leer los eventos: ' + EB.escapeHtml(e.message) + '</div>'; });
+                .catch(function(e) {
+                    evSig = '';
+                    $('side-events').innerHTML = '<div class="side-empty">Error al leer los eventos: ' + EB.escapeHtml(e.message) + '</div>';
+                    throw e;
+                });
         }
 
         function renderEvents() {
             var evs = evData.events;
             var active = Object.keys(evFilter).length > 0;
             var chips = evCounts.map(function(c) {
-                return '<button class="ev-chip ev-' + c.type.replace(/_/g, '-') + (evFilter[c.type] ? ' active' : '') +
-                       '" data-type="' + c.type + '" title="' + c.n + ' en los últimos eventos cargados">' +
+                var t = EB.safeType(c.type);
+                return '<button class="ev-chip ev-' + t.replace(/_/g, '-') + (evFilter[t] ? ' active' : '') +
+                       '" data-type="' + t + '" title="' + c.n + ' en total' + (c.type === 'boot' ? ' (en un boot loop no se registra cada boot)' : '') + '">' +
                        c.icon + ' ' + EB.escapeHtml(c.label) + ' <b>' + c.n + '</b></button>';
             }).join('') + (active ? '<button class="ev-chip ev-all" data-type="">✕ todos</button>' : '');
             var rows = [];
@@ -584,10 +634,10 @@
                 else if (evFilter[t]) delete evFilter[t];
                 else evFilter[t] = true;
                 evLimit = EV_PAGE;
-                loadEvents();
+                loadEvents().catch(function() {});
                 return;
             }
-            if (e.target.id === 'ev-more') { evLimit = Math.min(EV_MAX, evLimit + EV_PAGE); loadEvents(); return; }
+            if (e.target.id === 'ev-more') { evLimit = Math.min(EV_MAX, evLimit + EV_PAGE); loadEvents().catch(function() {}); return; }
             var row = e.target.closest('.ev-item');
             if (row && evData) openEventViewer(evData.events[+row.dataset.i]);
         });
@@ -633,7 +683,8 @@
             showViewer(v.icon + ' ' + v.label + (v.detail ? ' ' + v.detail : '') + ' · ' + (ev.ts || '').replace('T', ' ').slice(0, 19) +
                        (other ? ' · sesión del ' + EB.sessionLabel(v.session) : ''),
                        api + '/sessions/' + encodeURIComponent(EB.sessionFile(v.session, curSession)) + '?download=1');
-            var center = {around: ev.cursor, before: '0', after: '0', raw: '1', max_lines: '1'};
+            // La línea del evento con sus 5 previas: desempata líneas idénticas en el mismo ms
+            var center = {around: ev.cursor, before: '5', after: '0', raw: '1', max_lines: '6'};
             Promise.all([getJson(boardApi + '/log?' + new URLSearchParams(ctx)),
                          getJson(boardApi + '/log?' + new URLSearchParams(center))])
                 .then(function(res) {
@@ -641,17 +692,25 @@
                     if (!a.ok) { viewerError(EB.errorText(a.body, a.status)); return; }
                     var raw = a.body.lines.map(function(l) { return l.replace(/\r+$/, ''); });
                     var els = renderViewer(raw.map(function(l) { return EB.overwrite(EB.expandRangeLine(l, a.body.date)); }));
-                    var target = b.ok && b.body.lines.length ? b.body.lines[0].replace(/\r+$/, '') : null;
-                    var i = EB.findLine(raw, target, a.body.date, b.ok ? b.body.date : null);
+                    // ¿Hay una línea en el cursor? Si no, `end` es el mismo cursor (fin del log).
+                    var hasLine = b.ok && EB.cursorOffset(b.body.end) > EB.cursorOffset(ev.cursor);
+                    var seq = hasLine ? b.body.lines.map(function(l) { return l.replace(/\r+$/, ''); }) : [];
+                    var i = EB.findLine(raw, seq, a.body.date, b.ok ? b.body.date : null);
                     var el;
                     if (i >= 0) {
                         el = els[i];
-                    } else {
+                    } else if (!hasLine) {
                         // Evento del api al final del log (sin línea después todavía)
                         el = document.createElement('div');
                         el.className = 'ln ln-note';
-                        el.textContent = '▸ el evento quedó acá (todavía no hay una línea después)';
+                        el.textContent = '▸ el evento quedó acá: todavía no hay una línea después';
                         $('viewer-body').appendChild(el);
+                    } else {
+                        el = document.createElement('div');
+                        el.className = 'ln ln-note';
+                        el.textContent = '▸ no se encontró la línea exacta del evento en el contexto' +
+                                         (a.body.truncated ? ' (recortado: quedó entre las líneas omitidas)' : '');
+                        $('viewer-body').insertBefore(el, $('viewer-body').firstChild);
                     }
                     el.classList.add('ln-target');
                     markEvent(el, ev);
@@ -738,9 +797,9 @@
 
             connect();
             loadDeviceInfo();
-            setInterval(loadDeviceInfo, 3000);
-            setInterval(loadHistory, 10000);
-            setInterval(pollMarks, 4000);
+            poller(loadDeviceInfo, 3000);
+            poller(loadHistory, 10000);
+            poller(pollMarks, 4000);
 
             $('btn-reset').onclick = function() { sendCommand('reset'); };
             $('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
@@ -794,7 +853,7 @@
                     $('side-events').classList.toggle('hidden', sideTab !== 'events');
                     $('side-jobs').classList.toggle('hidden', sideTab !== 'jobs');
                     $('side-sessions').classList.toggle('hidden', sideTab !== 'sessions');
-                    loadHistory();
+                    loadHistory().catch(function() {});
                 };
             });
             $('side-panel').addEventListener('click', function(e) {
@@ -844,7 +903,7 @@
                 clearView();
                 buffer = new EB.LineBuffer();
                 marks.reset();
-                setTimeout(pollMarks, 1500);
+                setTimeout(function() { pollMarks().catch(function() {}); }, 1500);
             };
             ws.onmessage = function(evt) { appendText(evt.data); };
             ws.onclose   = function() {

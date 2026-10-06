@@ -217,6 +217,11 @@ test('searchMatch: texto libre o @usuario del lock', () => {
     assert.ok(EB.searchMatch('@', 'board1', 'juan'));
     assert.ok(!EB.searchMatch('@', 'board1', null));
     assert.ok(!EB.searchMatch('@ana', 'board1 ana', 'juan'));
+    // los contadores del header: reservas y locks del flash por separado
+    assert.ok(EB.searchMatch('lock:reserva', 'b', 'juan', 'reserva'));
+    assert.ok(!EB.searchMatch('lock:reserva', 'b', 'ana', 'flash'));
+    assert.ok(EB.searchMatch('lock:flash', 'b', 'ana', 'flash'));
+    assert.ok(!EB.searchMatch('lock:flash', 'b', null, ''));
 });
 
 // ── Eventos ───────────────────────────────────────────────────────────
@@ -311,26 +316,98 @@ test('tsMs: milisegundos de la hora del log y de los eventos', () => {
     assert.equal(EB.tsMs('basura'), null);
 });
 
-test('EventMarks: cada evento a la primera línea con hora ≥ la suya (− slack), una sola vez', () => {
-    const m = new EB.EventMarks(500);
-    assert.equal(m.add([ev('send', {text: 'status'}, '2026-10-06T16:02:05.000'),
-                        ev('flash', {ok: true}, '2026-10-06T16:02:10.000')]), 2);
-    assert.equal(m.add([ev('send', {text: 'status'}, '2026-10-06T16:02:05.000')]), 0);   // ya visto
-    assert.deepEqual(m.take('2026-10-06T16:02:04.000'), []);
-    assert.ok(m.dueBy('2026-10-06T16:02:04.600'));
-    // el eco llegó 100 ms antes de que el api registrara el send: cae igual en su línea
-    assert.deepEqual(m.take('2026-10-06T16:02:04.900').map(e => e.type), ['send']);
-    assert.deepEqual(m.take('2026-10-06T16:02:05.100'), []);
-    assert.ok(!m.dueBy('2026-10-06T16:02:09.000'));
-    assert.deepEqual(m.take('2026-10-06T16:02:11.000').map(e => e.type), ['flash']);
-    assert.deepEqual(m.take('sin hora'), []);
+const L = (h) => '2026-10-06T' + h;
+const feedAll = (m, lines) => lines.flatMap(([h, text], i) => m.feed(i, L(h), text).map(x => [x.ev.cursor, x.handle]));
+
+test('EventMarks: send al eco (la línea con su texto), aunque llegue antes del evento', () => {
+    const m = new EB.EventMarks();
+    assert.equal(m.add([{type: 'send', cursor: 's1', ts: L('10:00:01.000'), detail: {text: 'status'}}]), 1);
+    assert.equal(m.add([{type: 'send', cursor: 's1', ts: L('10:00:01.000'), detail: {text: 'status'}}]), 0);  // ya visto
+    assert.deepEqual(feedAll(m, [['10:00:00.700', 'tick'], ['10:00:00.900', 'I (5) otra'],
+                                 ['10:00:00.950', 'esp> status'], ['10:00:01.010', 'OK']]), [['s1', 2]]);
 });
 
-test('EventMarks: dropBefore descarta los anteriores a la vista; reset los vuelve a aceptar', () => {
-    const m = new EB.EventMarks(0);
-    m.add([ev('command', {command: 'reset'}, '2026-10-06T15:00:00.000'), ev('send', {}, '2026-10-06T16:00:00.000')]);
-    m.dropBefore('2026-10-06T15:30:00.000');
-    assert.deepEqual(m.take('2026-10-06T16:00:00.000').map(e => e.type), ['send']);
-    m.reset();
-    assert.equal(m.add([ev('send', {}, '2026-10-06T16:00:00.000')]), 1);
+test('EventMarks: dos sends iguales a 300 ms van cada uno a su eco', () => {
+    const m = new EB.EventMarks();
+    m.add([{type: 'send', cursor: 's1', ts: L('10:00:01.000'), detail: {text: 'status'}},
+           {type: 'send', cursor: 's2', ts: L('10:00:01.300'), detail: {text: 'status'}}]);
+    assert.deepEqual(feedAll(m, [['10:00:00.990', 'status'], ['10:00:01.050', 'OK'],
+                                 ['10:00:01.290', 'status'], ['10:00:01.350', 'OK']]), [['s1', 0], ['s2', 2]]);
+});
+
+test('EventMarks: sin eco, el send va a la primera línea de la ventana (al pasar 2 s o con flush)', () => {
+    const m = new EB.EventMarks();
+    m.add([{type: 'send', cursor: 's1', ts: L('10:00:01.000'), detail: {text: 'nada'}}]);
+    assert.deepEqual(feedAll(m, [['10:00:01.100', 'a'], ['10:00:01.500', 'b']]), []);
+    assert.deepEqual(m.feed(9, L('10:00:03.200'), 'c').map(x => x.handle), [0]);
+    const f = new EB.EventMarks();
+    f.add([{type: 'send', cursor: 's1', ts: L('10:00:01.000'), detail: {text: 'nada'}}]);
+    f.feed('a', L('10:00:01.100'), 'a');
+    assert.deepEqual(f.flush(EB.tsMs(L('10:00:02.000'))), []);
+    assert.deepEqual(f.flush(EB.tsMs(L('10:00:03.100'))).map(x => x.handle), ['a']);
+});
+
+test('EventMarks: command/flash a la primera línea desde t − 150 ms, nunca a una de antes', () => {
+    const m = new EB.EventMarks();
+    m.add([{type: 'command', cursor: 'c1', ts: L('10:00:01.000')}, {type: 'flash', cursor: 'f1', ts: L('10:00:01.300')}]);
+    assert.deepEqual(feedAll(m, [['10:00:00.700', 'x'], ['10:00:01.000', 'rst'], ['10:00:01.300', 'y']]),
+                     [['c1', 1], ['f1', 2]]);
+});
+
+test('EventMarks: evento sin línea después en 5 s no se marca; sin hora tampoco', () => {
+    const m = new EB.EventMarks();
+    m.add([{type: 'command', cursor: 'c3', ts: L('10:00:00.000')}]);
+    assert.deepEqual(m.feed(0, L('10:10:00.000'), 'tick'), []);
+    assert.equal(m.pending(), 0);
+    const n = new EB.EventMarks();
+    n.add([{type: 'command', cursor: 'c4', ts: L('10:00:00.000')}]);
+    assert.deepEqual(n.feed(0, 'sin hora', 'x'), []);
+    assert.equal(n.pending(), 1);                                    // sigue esperando su línea
+});
+
+test('EventMarks: el firmware imprimió el mismo texto justo antes del eco: gana el eco (el último antes de t)', () => {
+    const m = new EB.EventMarks();
+    m.add([{type: 'send', cursor: 's1', ts: L('10:00:00.070'), detail: {text: 'dup'}}]);
+    assert.deepEqual(feedAll(m, [['10:00:00.061', 'dup'], ['10:00:00.061', 'dup'], ['10:00:00.067', 'dup'],
+                                 ['10:00:00.126', "error: comando desconocido 'dup'"]]), [['s1', 2]]);
+    // sin línea después de t: flush lo resuelve con el eco
+    const f = new EB.EventMarks();
+    f.add([{type: 'send', cursor: 's1', ts: L('10:00:00.070'), detail: {text: 'dup'}}]);
+    f.feed('eco', L('10:00:00.067'), 'dup');
+    assert.deepEqual(f.flush(EB.tsMs(L('10:00:00.500'))).map(x => x.handle), ['eco']);
+});
+
+test('findLine: entre líneas idénticas en el mismo ms gana la de las previas iguales', () => {
+    const D = '2026-10-06';
+    const ctx = ['10:00:00.050 > esp> ', '10:00:00.100 > dup', '10:00:00.100 > dup', '10:00:00.100 > dup',
+                 '10:00:00.200 > x'];
+    assert.equal(EB.findLine(ctx, ['10:00:00.050 > esp> ', '10:00:00.100 > dup', '10:00:00.100 > dup',
+                                   '10:00:00.100 > dup'], D, D), 3);
+    assert.equal(EB.findLine(ctx, ['10:00:00.050 > esp> ', '10:00:00.100 > dup'], D, D), 1);
+    assert.equal(EB.findLine(ctx, '10:00:00.200 > x', D, D), 4);       // compat: una sola línea
+    assert.equal(EB.findLine(ctx, [], D, D), -1);
+    assert.equal(EB.cursorOffset('c:20261006_155000_812:48213'), 48213);
+    assert.equal(EB.cursorOffset('now'), null);
+});
+
+test('eventCounts desde /events?counts=1; safeType', () => {
+    assert.deepEqual(EB.eventCounts({panic: 150, boot_loop: 1, send: 2}).map(x => [x.type, x.n]),
+                     [['panic', 150], ['boot_loop', 1], ['send', 2]]);
+    assert.equal(EB.safeType('x" onmouseover="alert(1)'), 'xonmouseoveralert1');
+    assert.equal(EB.eventView({ts: '', type: '<b>', cursor: null}).cls, 'ev-b');
+});
+
+test('mergeEvents: un boot_loop viejo entra en su lugar, sin repetidos', () => {
+    const e = (type, sid, off) => ({type, cursor: `c:${sid}:${off}`, ts: 't' + off});
+    const S1 = '20261006_100000_1', S2 = '20261006_110000_2';
+    const main = [e('panic', S2, 500), e('panic', S2, 900)];
+    const rare = [e('boot_loop', S2, 100), e('flash', S1, 50), e('panic', S2, 900)];
+    assert.deepEqual(EB.mergeEvents(main, rare).map(x => x.type + x.cursor.slice(-3)),
+                     ['flash:50', 'boot_loop100', 'panic500', 'panic900']);
+});
+
+test('backoffMs: duplica por error hasta el tope', () => {
+    assert.equal(EB.backoffMs(4000, 0), 4000);
+    assert.equal(EB.backoffMs(4000, 2), 16000);
+    assert.equal(EB.backoffMs(4000, 5), 30000);
 });

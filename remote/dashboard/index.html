@@ -104,7 +104,7 @@
             if (!lock) return '';
             return '<span class="badge badge-locked lock-badge' + (lock.reservation ? '' : ' lock-flash') +
                    '" data-user="' + escapeHtml(lock.user) + '" title="' + escapeHtml(lock.title) + ' — click: ver sus placas">' +
-                   '&#128274; ' + escapeHtml(lock.user) + ' · <span class="lock-exp"' +
+                   '&#128274; <span class="lock-user">' + escapeHtml(lock.user) + '</span> · <span class="lock-exp"' +
                    (lock.expires ? ' data-expires="' + escapeHtml(lock.expires) + '"' : '') + '>' +
                    escapeHtml(lock.text) + '</span></span>';
         }
@@ -115,7 +115,7 @@
                 var t = EB.expiresText(el.dataset.expires);
                 if (t) { el.textContent = t; return; }
                 var card = el.closest('.device-card');
-                if (card) { card.classList.remove('locked'); card.dataset.lockUser = ''; }
+                if (card) { card.classList.remove('locked'); card.dataset.lockUser = ''; card.dataset.lockKind = ''; }
                 el.closest('.lock-badge').remove();
             });
         }
@@ -136,6 +136,7 @@
             var lock = EB.lockInfo(device);
             card.className = 'device-card' + cardStateClass(device) + (lock ? ' locked' : '');
             card.dataset.lockUser = lock ? lock.user : '';
+            card.dataset.lockKind = lock ? (lock.reservation ? 'reserva' : 'flash') : '';
             card.dataset.search = [title, device.tty_name, device.sn, device.mac, device.hw_model,
                                    device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
                                   .filter(Boolean).join(' ').toLowerCase();
@@ -402,7 +403,8 @@
         function applySearch() {
             var q = document.getElementById('search').value.trim().toLowerCase();
             document.querySelectorAll('.device-card').forEach(function(card) {
-                card.classList.toggle('hidden', !EB.searchMatch(q, card.dataset.search, card.dataset.lockUser));
+                card.classList.toggle('hidden', !EB.searchMatch(q, card.dataset.search, card.dataset.lockUser,
+                                                                card.dataset.lockKind));
             });
         }
 
@@ -411,7 +413,8 @@
         document.addEventListener('click', function(e) {
             var b = e.target.closest('.lock-badge');
             if (b) { setSearch('@' + b.dataset.user); return; }
-            if (e.target.closest('.sum-locked, .sum-flashlock')) setSearch('@');
+            if (e.target.closest('.sum-locked')) setSearch('lock:reserva');
+            else if (e.target.closest('.sum-flashlock')) setSearch('lock:flash');
         });
         setInterval(tickLocks, 1000);
         document.addEventListener('keydown', function(e) {
