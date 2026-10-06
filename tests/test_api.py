@@ -665,11 +665,34 @@ def test_reservation_lost_message_says_why():
             api._check_reservation("ttyUSB0", owner)
         assert err(e) == (423, "reservation_lost")
         cases.append(e.value.detail["message"])
-    assert "venció" in cases[0] and "volvé a reservar" in cases[0]
+    assert "venció" in cases[0] and "espbench reserve" not in cases[0]     # la sugerencia la agrega el CLI
     assert "la tiene 'juan' hasta" in cases[1]
     assert "otro lock_token" in cases[2]
     assert "lock de flash de 'juan'" in cases[3]
     assert not any("nadie" in m for m in cases)
+
+
+def test_slow_subprocess_does_not_block_the_event_loop(monkeypatch):
+    """devremote --reset tarda segundos: corrido directo en el handler async
+    frenaba el event loop (todos los pedidos y el WebSocket del vivo)."""
+    board()
+    monkeypatch.setattr(api.subprocess, "run", lambda cmd, **kw: (time.sleep(0.4), types.SimpleNamespace(
+        returncode=0, stdout="", stderr=""))[1])
+    ticks = []
+
+    async def ticker():
+        for _ in range(15):
+            ticks.append(time.monotonic())
+            await asyncio.sleep(0.02)
+
+    async def both(handler):
+        ticks.clear()
+        await asyncio.gather(handler, ticker())
+        return max(b - a for a, b in zip(ticks, ticks[1:]))
+
+    assert run(both(api.devremote_reset("ttyUSB0"))) < 0.2
+    assert run(both(api.device_send("ttyUSB0", {"text": "x"}))) < 0.2
+    assert run(both(api.device_command("ttyUSB0", "reset"))) < 0.2
 
 
 def test_devremote_reset_respects_reservations(tmux):

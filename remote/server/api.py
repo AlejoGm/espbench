@@ -155,7 +155,7 @@ def _check_reservation(tty: str, body: dict) -> bool:
 
 def _lost_message(lock: Optional[locks.Lock], user: str) -> str:
     if lock is None:
-        return "la reserva venció o la soltaron (no hay lock): volvé a reservar con `espbench reserve`"
+        return "la reserva venció o la soltaron (no hay lock)"     # el CLI agrega cómo volver a reservar
     if not lock.reservation:
         return f"no hay reserva: hay un lock de flash de '{lock.user}' (sin vencimiento)"
     if lock.user == user:
@@ -168,6 +168,13 @@ def _tmux_failed(tty: str, stderr: str):
     está relanzando). session_down, no un error interno."""
     _fail(502, "session_down", f"la sesión esp32_{tty} no responde ({stderr}): el proceso de la placa no "
                                "corre; `espbench restart-session` o esperar a que esp32_tmux.sh la relance")
+
+
+async def _run(cmd: list):
+    """subprocess.run en un thread: un handler async que lo llama directo frena
+    el event loop entero (los demás pedidos, el WebSocket del vivo) mientras dura
+    (`devremote --reset` tarda segundos)."""
+    return await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
 
 
 def _record(state: dict, type_: str, detail: dict, cursor: Optional[str] = None) -> Optional[str]:
@@ -311,7 +318,7 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
     session = f"esp32_{tty}"
     for cmd in send_keys_cmds(session, text, enter):
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True)
+            r = await _run(cmd)
         except FileNotFoundError:
             _fail(502, "unexpected", "tmux no disponible")
         if r.returncode != 0:
@@ -474,7 +481,7 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
     session = f"esp32_{tty}"
     for key in _COMMANDS[command]:
         try:
-            r = subprocess.run(["tmux", "send-keys", "-t", session, key], capture_output=True, text=True)
+            r = await _run(["tmux", "send-keys", "-t", session, key])
         except FileNotFoundError:
             _fail(502, "unexpected", "tmux no disponible")
         if r.returncode != 0:
@@ -502,10 +509,7 @@ async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authoriza
     forced = _check_reservation(tty, body)
     user, _ = _creds(body, required=False)
     cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
-    result = subprocess.run(
-        ["/usr/local/bin/devremote", "--reset", tty],
-        capture_output=True, text=True
-    )
+    result = await _run(["/usr/local/bin/devremote", "--reset", tty])
     if result.returncode == 0 and cursor is not None:
         detail = {"command": "restart-session", "user": user or None}
         if forced:

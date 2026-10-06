@@ -345,6 +345,7 @@ def test_reservation_lost(bench, client, board, tmp_path):
         client.send(b, "status")
     assert errcode(e) == ("reservation_lost", 6)
     assert "venció o la soltaron" in e.value.message and "espbench reserve sim-board" in e.value.message
+    assert e.value.message.count("espbench reserve") == 1                 # sin la sugerencia repetida del server
     assert not client.holds_reservation(b)                           # la olvidó: la próxima no la exige
     assert client.send(b, "status")["ok"]
 
