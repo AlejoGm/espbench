@@ -363,6 +363,40 @@ class TestRuntimeState:
         assert d is not None and d.tty_name == "ttyUSB0"
 
 
+class TestLocks:
+    def _registry(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ESP_BASE", str(tmp_path))
+        registry, dev_dir, _ = make_registry(tmp_path)
+        (dev_dir / "ttyUSB0").touch()
+        (tmp_path / "locks").mkdir()
+        return registry
+
+    def test_reservation_exposes_expiry(self, tmp_path, monkeypatch):
+        import dataclasses, datetime as dt, time
+        registry = self._registry(tmp_path, monkeypatch)
+        future = int(time.time()) + 600
+        (tmp_path / "locks" / "ttyUSB0").write_text(f"alejo:t0k:{future}:AABBCCDDEEFF")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = dataclasses.asdict(registry.get_device("ttyUSB0"))
+        assert d["lock_user"] == "alejo"
+        assert d["lock_expires"] == dt.datetime.fromtimestamp(future).isoformat(timespec="seconds")
+
+    def test_flash_lock_has_no_expiry(self, tmp_path, monkeypatch):
+        registry = self._registry(tmp_path, monkeypatch)
+        (tmp_path / "locks" / "ttyUSB0").write_text("alejo:t0k")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = registry.get_device("ttyUSB0")
+        assert d.lock_user == "alejo" and d.lock_expires is None
+
+    def test_expired_reservation_does_not_exist(self, tmp_path, monkeypatch):
+        registry = self._registry(tmp_path, monkeypatch)
+        (tmp_path / "locks" / "ttyUSB0").write_text("alejo:t0k:1000")
+        with patch("subprocess.run", side_effect=mock_tmux_down):
+            d = registry.get_device("ttyUSB0")
+        assert d.lock_user is None and d.lock_expires is None
+        assert not (tmp_path / "locks" / "ttyUSB0").exists()
+
+
 class TestLiveState:
     """Fase 5: el estado sale de lo que publica el proceso, no de tmux."""
 

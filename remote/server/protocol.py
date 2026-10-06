@@ -38,7 +38,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import recv_msg, send_msg, sha256_file
-from server import paths, taglog
+from server import locks, paths, taglog
 from server.flash import build_esptool_cmd, find_esptool_cmd, read_mac, run_cmd
 from server.device import Device, DeviceState, InvalidTransition
 
@@ -115,24 +115,23 @@ def validate_action(header: dict) -> str:
 # ---------- 2. lock por device ----------
 
 class LockStore:
-    """Lock de uso de un device: archivo "user:token". Un usuario lo toma al
-    flashear y solo él (o un unlock con el mismo par) lo suelta."""
+    """Lock de uso de un device (locks.py): "user:token[:expires[:mac]]". Un
+    usuario lo toma al flashear y solo él (o un unlock con el mismo par) lo
+    suelta. Si ya era suyo (una reserva), conserva el vencimiento y la MAC:
+    flashear no convierte la reserva en un lock permanente. Uno vencido no
+    existe."""
 
-    def __init__(self, lock_file: pathlib.Path):
-        self.lock_file = lock_file
-
-    def _read(self):
-        parts = self.lock_file.read_text().strip().split(":", 1)
-        return parts[0], parts[1] if len(parts) > 1 else ""
+    def __init__(self, tty_name: str):
+        self.tty_name = tty_name
 
     def unlock(self, user: str, token: str) -> dict:
         if not user or not token:
             return {"ok": False, "error": "lock_credentials_required"}
-        if self.lock_file.exists():
-            stored_user, stored_token = self._read()
-            if stored_user != user or stored_token != token:
+        lock = locks.read(self.tty_name)
+        if lock is not None:
+            if not lock.owned_by(user, token):
                 return {"ok": False, "error": "token_mismatch", "message": "Par user/token incorrecto"}
-            self.lock_file.unlink()
+            locks.remove(self.tty_name)
         return {"ok": True, "message": "desbloqueado"}
 
     def acquire(self, user: str, token: str) -> None:
@@ -140,21 +139,22 @@ class LockStore:
             taglog.warn(TAG, "lock_user/lock_token ausente, rechazando")
             raise RequestRejected({"ok": False, "error": "lock_credentials_required",
                                    "message": "Configurá 'lock_user' y 'lock_token' en .flashcfg.json > remote"})
-        if self.lock_file.exists():
-            stored_user, stored_token = self._read()
-            if stored_user != user:
-                taglog.warn(TAG, f"device bloqueado por '{stored_user}', rechazando '{user}'")
+        if not locks.valid_credential(user) or not locks.valid_credential(token):
+            raise RequestRejected({"ok": False, "error": "lock_credentials_required",
+                                   "message": "lock_user y lock_token no pueden tener ':'"})
+        lock = locks.read(self.tty_name)
+        if lock is not None:
+            if lock.user != user:
+                taglog.warn(TAG, f"device bloqueado por '{lock.user}', rechazando '{user}'")
                 raise RequestRejected({"ok": False, "error": "device_locked",
-                                       "message": f"Dispositivo bloqueado por '{stored_user}'"})
-            if stored_token != token:
+                                       "message": f"Dispositivo bloqueado por '{lock.user}'"})
+            if lock.token != token:
                 taglog.warn(TAG, f"token incorrecto para '{user}'")
                 raise RequestRejected({"ok": False, "error": "token_mismatch", "message": "Token incorrecto"})
-        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_file.write_text(f"{user}:{token}")
-        try:
-            self.lock_file.chmod(0o666)
-        except OSError:
-            pass
+            if lock.reservation:
+                taglog.info(TAG, f"lock de '{user}': su reserva sigue (vence {lock.expires_iso()})")
+                return
+        locks.write(self.tty_name, locks.Lock(user, token))
         taglog.info(TAG, f"lock adquirido por '{user}'")
 
 
@@ -394,14 +394,14 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
         header = recv_msg(sock)
         authenticate(header, str(cfg.get("token") or ""))
         action = validate_action(header)
-        locks = LockStore(paths.lock_file(device.tty_name))
+        lock_store = LockStore(device.tty_name)
         user = header.get("lock_user", "").strip()
         token = header.get("lock_token", "").strip()
         if action == "unlock":
-            send_msg(sock, locks.unlock(user, token))
+            send_msg(sock, lock_store.unlock(user, token))
             return
         check_flashable(device)
-        locks.acquire(user, token)
+        lock_store.acquire(user, token)
     except RequestRejected as r:
         send_msg(sock, r.response)
         return

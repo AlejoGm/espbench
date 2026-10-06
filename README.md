@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.16.4
+**Version:** 0.17.0
 
 ---
 
@@ -225,7 +225,7 @@ espbench/
 │   ├── current.elf               last flashed ELF (backtrace decoding)
 │   ├── last_user
 │   └── jobs/<job_id>/            extracted artifact + job.log
-├── locks/<tty>                   device lock (user:token)
+├── locks/<tty>                   device lock (user:token[:expires[:mac]])
 └── VERSION
 ```
 

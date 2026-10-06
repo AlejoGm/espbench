@@ -175,6 +175,19 @@ def test_tmux_releases_lock_on_new_session(infra):
     assert not (infra.base / "locks" / "ttyUSB3").exists()
 
 
+def test_tmux_keeps_reservation_on_new_session(infra):
+    """Una reserva (con vencimiento) sobrevive un replug; remote_esp32.py la
+    borra al arrancar si en el puerto quedó otra placa."""
+    infra.plug("ttyUSB3")
+    (infra.base / "locks" / "ttyUSB3").write_text("alejo:t0k:4102444800:AABBCCDDEEFF")
+    (infra.base / "locks" / "ttyUSB4").write_text("alejo:t0k:4102444800")
+    infra.plug("ttyUSB4")
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB3"))
+    infra.run("esp32_tmux.sh", str(infra.devdir / "ttyUSB4"))
+    assert (infra.base / "locks" / "ttyUSB3").read_text() == "alejo:t0k:4102444800:AABBCCDDEEFF"
+    assert (infra.base / "locks" / "ttyUSB4").exists()
+
+
 # ---------- devremote ----------
 
 def test_devremote_scan_starts_missing(infra):

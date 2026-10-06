@@ -40,8 +40,14 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   fi
 fi
 
-# Liberar lock al iniciar nueva sesión (dispositivo reconectado)
-rm -f "$BASE/locks/$NAME"
+# Liberar el lock del flash al iniciar nueva sesión (dispositivo reconectado).
+# Una reserva ("user:token:expires[:mac]", tercer campo) se conserva: sobrevive
+# un replug, y si en el puerto quedó otra placa la borra remote_esp32.py al
+# arrancar (compara la MAC). Las vencidas se borran al leerlas (locks.py).
+LOCK="$BASE/locks/$NAME"
+if [ -f "$LOCK" ] && [ -z "$(cut -s -d: -f3 "$LOCK")" ]; then
+  rm -f "$LOCK"
+fi
 
 tmux new-session -d -s "$SESSION" \
   "sudo $BASE/venv/bin/python3 $BASE/server/remote_esp32.py -p $PORT_TTY -tcp $PORT --base $BASE"

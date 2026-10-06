@@ -20,6 +20,7 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 | `device_registry.py` | dashboard (+ device) | `DeviceRegistry` (vista de lectura de los devices), `DevicesFile` (`devices.json`, con `flock`) |
 | `history.py` | dashboard | Historial por device: jobs (`result.json`, `job.log`) y sesiones de log rotadas; valida nombres que llegan por URL |
 | `log_streamer.py` | dashboard | Tail del log de cada device → WebSocket |
+| `locks.py` | ambos | `locks/<tty>`: `user:token[:expires[:mac]]` (lock del flash / reserva); vencido = inexistente (se borra al leer) |
 | `runstate.py` | ambos | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
 | `paths.py` | ambos | Todas las rutas bajo `ESP_BASE` (default `/opt/esp`) |
 | `taglog.py` | ambos | Logging `taglog.info(TAG, msg)`, sinks pluggables |

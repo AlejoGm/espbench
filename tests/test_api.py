@@ -100,3 +100,10 @@ def test_static_files_are_revalidated():
     scope = {"type": "http", "method": "GET", "path": "/style.css", "headers": []}
     response = run(static.get_response("style.css", scope))
     assert response.headers["cache-control"] == "no-cache"
+
+
+def test_unlock_expired_reservation_is_like_no_lock():
+    paths.lock_file("ttyUSB0").parent.mkdir(parents=True)
+    paths.lock_file("ttyUSB0").write_text("alejo:t0k:1000")
+    r = run(api.device_unlock("ttyUSB0", {"lock_user": "juan", "lock_token": "x"}))
+    assert r["message"] == "no estaba bloqueado" and not paths.lock_file("ttyUSB0").exists()

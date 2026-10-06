@@ -26,7 +26,7 @@ import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
-from server import paths, runstate, taglog
+from server import locks, paths, runstate, taglog
 from server.device import Device, DeviceManager, DeviceState
 from server.device_registry import DevicesFile
 from server.erase import erase_region_interactive
@@ -62,6 +62,15 @@ def register_mac(mac: str) -> None:
         taglog.info(TAG, f"MAC {mac} (SN {sn}) registrada en devices.json")
     except Exception as e:
         taglog.warn(TAG, f"no se pudo registrar {mac} en devices.json: {e}")
+
+
+def drop_foreign_reservation(device: Device) -> None:
+    """Una reserva de este tty hecha para otra placa (los ttyUSB se renumeraron
+    en un replug) no vale: esp32_tmux.sh la conservó, acá se borra."""
+    dropped = locks.drop_if_other_board(device.tty_name, device.mac)
+    if dropped is not None:
+        taglog.warn(TAG, f"reserva de '{dropped.user}' borrada: era para la placa {dropped.mac}, "
+                         f"en {device.tty_name} está {device.mac}")
 
 
 def elf_for(device: Device):
@@ -105,6 +114,7 @@ def main(argv=None):
     # MAC con esptool antes de arrancar el monitor: el puerto tiene que estar libre.
     if manager.discover(attempts=MAC_READ_ATTEMPTS, delay=MAC_READ_DELAY):
         register_mac(device.mac)
+        drop_foreign_reservation(device)
 
     cfg = {"port": args.control_port, "tty": args.port_tty, "chip": args.chip,
            "flash_baud": args.flash_baud, "token": args.token}

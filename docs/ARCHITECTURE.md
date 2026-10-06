@@ -256,6 +256,27 @@ authenticate → validate_action → check_flashable (FSM) → LockStore
 - **El lock queda por tty**, no por MAC, a propósito: `esp32_tmux.sh` lo libera
   al reconectar, y atarlo a la placa cambiaría ese comportamiento.
 
+### Locks y reservas (`remote/server/locks.py`)
+
+`locks/<tty>` = `user:token[:expires[:mac]]`. Sin vencimiento es el lock que toma
+el flash (permanente hasta un unlock con el mismo par). Con vencimiento (epoch) es
+una **reserva** (`POST /api/device/{tty}/reserve`, §8), con la MAC de la placa
+(12 hex sin `:`, que es el separador del archivo).
+
+- Reserva y flash usan **el mismo par** `lock_user`/`lock_token`: el flash del
+  dueño de la reserva pasa, y `LockStore.acquire` conserva el vencimiento y la MAC
+  (no la convierte en un lock permanente).
+- **Vencido = inexistente** en todos lados (`LockStore`, `DeviceRegistry`, api):
+  `locks.read()` lo borra al leerlo.
+- **Reconexión**: `esp32_tmux.sh` borra solo los locks sin vencimiento (los del
+  flash, como siempre). Una reserva vigente sobrevive el replug; al arrancar,
+  `remote_esp32.py` la borra si su MAC no es la de la placa que encontró (los
+  `ttyUSB` se renumeraron).
+- Ni `user` ni `token` pueden tener `:` (el flash lo rechaza con
+  `lock_credentials_required`).
+- La escritura es atómica (temp + `os.replace`) y el archivo queda 666: lo escribe
+  root (device) y lo borra sfypi (api); `locks/` es 777.
+
 ---
 
 ## 6. Nombres y puertos (`remote/infra/espbench-name`)
@@ -346,7 +367,7 @@ boot ─────► devremote.service ────────────�
 │   ├── last_user
 │   └── jobs/<job_id>/     artefacto extraído + job.log
 ├── devices/unknown-<tty>/ log y eventos de un device sin MAC
-├── locks/<tty>            "user:token"
+├── locks/<tty>            "user:token[:expires[:mac]]" (lock del flash / reserva)
 └── jobs/, logs/, current_<tty>.elf   esquema anterior / devices sin MAC
 ```
 

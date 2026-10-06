@@ -11,7 +11,7 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-from server import history, paths, runstate
+from server import history, locks, paths, runstate
 
 
 class DevicesFile:
@@ -130,6 +130,9 @@ class DeviceInfo:
     health: Optional[dict] = None
     # Cómo terminó el último flasheo (result.json). None si no hay o es anterior a result.json.
     last_flash_ok: Optional[bool] = None
+    # Vencimiento del lock (ISO local) si es una reserva; None si es el lock
+    # permanente del flash o no hay lock. Un lock vencido no aparece.
+    lock_expires: Optional[str] = None
 
 
 class DeviceRegistry:
@@ -233,6 +236,7 @@ class DeviceRegistry:
         last_flash_ts = self._get_last_flash_ts(tty_name, mac)
         latest = history.list_jobs(tty_name, mac, limit=1)
         last_flash_ok = latest[0]["ok"] if latest and latest[0]["ts"] == last_flash_ts else None
+        lock = locks.read(tty_name)
         return DeviceInfo(
             tty=str(self._dev_dir / tty_name),
             tty_name=tty_name,
@@ -247,10 +251,11 @@ class DeviceRegistry:
             fw_project=fw.get("fw_project"),
             fw_version=fw.get("fw_version"),
             fw_idf=fw.get("fw_idf"),
-            lock_user=self._get_lock_user(tty_name),
+            lock_user=lock.user if lock else None,
             state=self._live_state(state),
             health=state.get("health"),
             last_flash_ok=last_flash_ok,
+            lock_expires=lock.expires_iso() if lock else None,
         )
 
     @staticmethod
@@ -262,17 +267,6 @@ class DeviceRegistry:
                     return f.read_text().strip() or None
             except Exception:
                 pass
-        return None
-
-    @staticmethod
-    def _get_lock_user(tty_name: str) -> Optional[str]:
-        try:
-            f = paths.lock_file(tty_name)
-            if f.exists():
-                content = f.read_text().strip()
-                return content.split(":", 1)[0] or None
-        except Exception:
-            pass
         return None
 
     @staticmethod

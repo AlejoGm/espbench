@@ -167,3 +167,26 @@ def test_elf_prefers_device_home(env, monkeypatch):
     (base / "devices" / "AABBCCDDEEFF").mkdir(parents=True, exist_ok=True)
     (base / "devices" / "AABBCCDDEEFF" / "current.elf").write_bytes(b"ELF")
     assert elf_resolver() == base / "devices" / "AABBCCDDEEFF" / "current.elf"
+
+
+def test_startup_drops_reservation_of_other_board(env, monkeypatch):
+    """Los ttyUSB se renumeraron: la reserva de ttyUSB3 era para otra placa."""
+    import time
+    base, tty, seen = env
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    (base / "locks").mkdir()
+    lock = base / "locks" / "ttyUSB3"
+    lock.write_text(f"juan:x:{int(time.time()) + 600}:112233445566")
+    run_main(tty, base, stop_after=0.3)
+    assert not lock.exists()
+
+
+def test_startup_keeps_reservation_of_same_board(env, monkeypatch):
+    import time
+    base, tty, seen = env
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    (base / "locks").mkdir()
+    lock = base / "locks" / "ttyUSB3"
+    lock.write_text(f"juan:x:{int(time.time()) + 600}:AABBCCDDEEFF")
+    run_main(tty, base, stop_after=0.3)
+    assert lock.exists()

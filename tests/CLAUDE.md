@@ -14,6 +14,7 @@ pytest tests/
 | `test_serial_watch.py` | `SerialWatch.on_line`: resets, panics, boot loop, firmware, `\r`/ANSI, chunks por la tubería real; eventos `boot`/`panic`/`fw`/`boot_loop` |
 | `test_device_log.py` | `DeviceLog`: prefijo, chunks y UTF-8 partidos, parcial retenido y `↪`, taglog en medio de una serial, header fuera del buffer, offsets en bytes, rotación por `session_id`, buffer pre-MAC, migración; eventos con cursor exacto (pre-MAC, migración solo de la sesión) |
 | `test_events.py` | `events.jsonl`: dos procesos escribiendo a la vez, lectura, truncado, migración de sesión, cursor del fin del log, `record()` del api |
+| `test_locks.py` | `locks/<tty>`: formato con y sin vencimiento, vencido se borra al leer, reserva de otra placa |
 | `test_runstate.py` | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
 | `test_protocol.py` | Pedido de flash completo por `socketpair`, esptool falso: auth, lock, SHA256, retry sin `--encrypt`, device cambiado, FSM, evento `flash` |
 | `test_remote_esp32.py` | El entrypoint entero con fakes solo en esptool/monitor/TCP: arranque, señal ignorada durante flash, desconexión, MAC por serial |
