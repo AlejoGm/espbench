@@ -17,7 +17,7 @@ import time
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
+from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -41,12 +41,18 @@ async def _startup():
 
 @app.get("/api/version")
 async def get_version():
+    """`auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo
+    si lo hay: `unlock` forzado lo exige)."""
     try:
         version_file = paths.version_file()
         version = version_file.read_text().strip() if version_file.exists() else "dev"
     except Exception:
         version = "dev"
-    return {"version": version}
+    try:
+        has_token = bool(auth.read_token())
+    except auth.AuthConfigError:
+        has_token = True        # falla cerrado: hay archivo, ilegible
+    return {"version": version, "auth": has_token}
 
 
 @app.get("/api/devices")
@@ -119,6 +125,14 @@ def _check_expect_mac(state: dict, expect_mac) -> None:
 def _forced(body: dict) -> bool:
     """Solo el booleano true fuerza ("false", 1 o "yes" no). El CLI nunca lo manda."""
     return body.get("force") is True
+
+
+def _forced_by(body: dict, request) -> dict:
+    """Quién forzó, para el evento: el lock_user del pedido (si vino) y el host.
+    Llamado directo (tests, benchsim) no hay request."""
+    client = getattr(request, "client", None)
+    return {"forced": True, "by_user": str(body.get("lock_user") or "").strip() or None,
+            "by_host": getattr(client, "host", None)}
 
 
 def _check_reservation(tty: str, body: dict) -> bool:
@@ -273,7 +287,8 @@ def send_keys_cmds(session: str, text: str, enter: bool) -> list:
 
 
 @app.post("/api/device/{tty}/send")
-async def device_send(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+async def device_send(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None),
+                      request: Request = None):
     """Manda texto por el serial del device (a través del monitor en tmux).
     Devuelve el cursor del log previo al envío (desde ahí se busca la
     respuesta) y lo registra como evento `send`."""
@@ -305,7 +320,7 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
     if cursor is not None:
         detail = {"text": text, "enter": enter, "user": user or None}
         if forced:
-            detail["forced"] = True
+            detail.update(_forced_by(body, request))
         _record(state, "send", detail, cursor)
     return {"ok": True, "session": session, "sent": text, "enter": enter, "cursor": cursor}
 
@@ -398,15 +413,24 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
 
 
 @app.post("/api/device/{tty}/unlock")
-async def device_unlock(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+async def device_unlock(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None),
+                        request: Request = None):
     """Suelta el lock con el par, como release. `force: true` (solo el booleano;
-    el dashboard, después de confirmar) lo suelta sin el par: con
-    /opt/esp/api_token exige el token de la API, como toda escritura. Queda un
-    evento `release` (con `forced` si se forzó)."""
+    el dashboard, después de confirmar) lo suelta sin el par y **exige** que la
+    Pi tenga /opt/esp/api_token (y el Bearer): sin token cualquiera en la red
+    robaría una reserva → 403 force_disabled. Queda un evento `release` con el
+    dueño anterior (`user`) y, si se forzó, quién (`by_user`, `by_host`)."""
     _require_auth(authorization)
     _check_tty(tty)
     forced = _forced(body)
     if forced:
+        try:
+            has_token = bool(auth.read_token())
+        except auth.AuthConfigError:
+            has_token = True        # _require_auth ya habría fallado
+        if not has_token:
+            _fail(403, "force_disabled", "forzar requiere /opt/esp/api_token (sin token de la API no se fuerza "
+                                         "un unlock): que el dueño la suelte, o `devremote --unlock` en la Pi")
         with locks.exclusive(tty):
             lock = locks.read(tty)
             if lock is not None:
@@ -418,7 +442,7 @@ async def device_unlock(tty: str, body: dict = Body(...), authorization: Optiona
         return {"ok": True, "message": "no estaba bloqueado"}
     detail = {"user": lock.user, "expires": lock.expires_iso()}
     if forced:
-        detail["forced"] = True
+        detail.update(_forced_by(body, request))
     _record(runstate.read(tty) or {}, "release", detail)
     return {"ok": True, "message": "desbloqueado", "user": lock.user, "forced": forced}
 
@@ -430,7 +454,7 @@ _COMMANDS = {
 
 @app.post("/api/device/{tty}/command/{command}")
 async def device_command(tty: str, command: str, body: Optional[dict] = Body(None),
-                         authorization: Optional[str] = Header(None)):
+                         authorization: Optional[str] = Header(None), request: Request = None):
     """Teclas al monitor (reset / bootloader). Body opcional: expect_mac,
     lock_user/lock_token (dueño de la reserva), force."""
     _require_auth(authorization)
@@ -458,25 +482,35 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
         await asyncio.sleep(0.05)
     detail = {"command": command, "user": user or None}
     if forced:
-        detail["forced"] = True
+        detail.update(_forced_by(body, request))
     cursor = _record(state, "command", detail, cursor)
     return {"ok": True, "command": command, "session": session, "cursor": cursor}
 
 
 @app.post("/api/device/{tty}/devremote-reset")
-async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authorization: Optional[str] = Header(None)):
+async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authorization: Optional[str] = Header(None),
+                          request: Request = None):
     """Mata y relanza el proceso de la placa. Como send/command: una reserva
     ajena lo bloquea (423, `force` del dashboard), `require_reservation` y
-    `expect_mac` del CLI."""
+    `expect_mac` del CLI. Queda un evento `command` (command=restart-session,
+    con quién forzó si se forzó), con el cursor previo: es el fin de esa sesión."""
     _require_auth(authorization)
     _check_tty(tty)   # ttyUSBN o esp-slotK: devremote resuelve el nombre.
     body = body if isinstance(body, dict) else {}
-    _check_expect_mac(runstate.read(tty) or {}, body.get("expect_mac"))
-    _check_reservation(tty, body)
+    state = runstate.read(tty) or {}
+    _check_expect_mac(state, body.get("expect_mac"))
+    forced = _check_reservation(tty, body)
+    user, _ = _creds(body, required=False)
+    cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
     result = subprocess.run(
         ["/usr/local/bin/devremote", "--reset", tty],
         capture_output=True, text=True
     )
+    if result.returncode == 0 and cursor is not None:
+        detail = {"command": "restart-session", "user": user or None}
+        if forced:
+            detail.update(_forced_by(body, request))
+        _record(state, "command", detail, cursor)
     return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
 
 

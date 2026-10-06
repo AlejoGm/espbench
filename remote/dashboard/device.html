@@ -87,6 +87,7 @@
         var ws = null;
         var reconnectTimer = null;
         var currentLock = null;     // EB.lockInfo del último /api/device/{tty}
+        var apiAuth = false;        // la Pi tiene token de la API (/api/version): sin él no se fuerza un unlock
         var boardKey = '';          // MAC sin separadores: /api/board/{key} (lecturas por placa)
         var boardApi = '';
         var deviceLoaded = false;
@@ -436,7 +437,7 @@
                     $('device-badges').innerHTML = badges.join('');
                     if (!d) currentLock = null;
                     $('btn-release').classList.toggle('hidden', !currentLock);
-                    $('btn-force').classList.toggle('hidden', !currentLock);
+                    $('btn-force').classList.toggle('hidden', !currentLock || !apiAuth);
                     return d;
                 })
                 .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
@@ -757,6 +758,9 @@
                     .catch(function() { toast('Error de conexión', true); })
                     .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
             };
+            fetch('/api/version').then(function(r) { return r.json(); })
+                .then(function(v) { apiAuth = !!v.auth; $('btn-force').classList.toggle('hidden', !currentLock || !apiAuth); })
+                .catch(function() {});
             $('btn-release').onclick = onRelease;
             $('btn-force').onclick = onForce;
             setInterval(tickLocks, 1000);

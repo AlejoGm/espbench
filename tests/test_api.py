@@ -444,7 +444,17 @@ def test_forced_writes_are_recorded_with_user(tmux):
     send = [e for e in api_events() if e["type"] == "send"][0]
     cmd = [e for e in api_events() if e["type"] == "command"][0]
     assert send["detail"]["forced"] is True and send["detail"]["user"] == "dash"
-    assert cmd["detail"] == {"command": "reset", "user": None, "forced": True}
+    assert send["detail"]["by_user"] == "dash" and send["detail"]["by_host"] is None
+    assert cmd["detail"] == {"command": "reset", "user": None, "forced": True, "by_user": None, "by_host": None}
+
+
+def test_forced_event_records_the_host_of_the_request(tmux):
+    board()
+    reserve()
+    req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.7"))
+    run(api.device_send("ttyUSB0", {"text": "x", "force": True}, request=req))
+    send = [e for e in api_events() if e["type"] == "send"][0]["detail"]
+    assert send["by_host"] == "10.0.0.7" and send["by_user"] is None
 
 
 def test_command_records_event_with_cursor(tmux):
@@ -560,19 +570,25 @@ def test_unlock_errors_are_structured():
 
 def test_unlock_records_release_and_force_drops_without_the_pair():
     """El dashboard: 'liberar' con el par y 'forzar' (force: true, con el token de
-    la API si la Pi lo tiene) sin el par. Los dos quedan como evento release."""
+    la API) sin el par. Los dos quedan como evento release: el dueño anterior y
+    quién forzó."""
     from server import locks
     board()
     reserve()
+    set_token("s3cret")
+    bearer = "Bearer s3cret"
     with pytest.raises(HTTPException) as e:
-        run(api.device_unlock("ttyUSB0", {"force": "yes"}))       # solo el booleano fuerza
+        run(api.device_unlock("ttyUSB0", {"force": "yes"}, authorization=bearer))   # solo el booleano fuerza
     assert err(e) == (400, "bad_request") and locks.read("ttyUSB0") is not None
-    r = run(api.device_unlock("ttyUSB0", {"force": True}))
+    req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.9"))
+    r = run(api.device_unlock("ttyUSB0", {"force": True, "lock_user": "dash"}, authorization=bearer, request=req))
     assert r["ok"] and r["forced"] and r["user"] == "alejo" and locks.read("ttyUSB0") is None
     rel = [e for e in api_events() if e["type"] == "release"]
-    assert rel[-1]["detail"]["user"] == "alejo" and rel[-1]["detail"]["forced"] is True
-    assert rel[-1]["detail"]["expires"]
-    assert run(api.device_unlock("ttyUSB0", {"force": True}))["message"] == "no estaba bloqueado"
+    d = rel[-1]["detail"]
+    assert d["user"] == "alejo" and d["forced"] is True and d["expires"]
+    assert d["by_user"] == "dash" and d["by_host"] == "10.0.0.9"
+    assert run(api.device_unlock("ttyUSB0", {"force": True}, authorization=bearer))["message"] == "no estaba bloqueado"
+    paths.api_token_file().unlink()
     locks.write("ttyUSB0", locks.Lock("juan", "x"))                 # lock del flash, con el par
     assert run(api.device_unlock("ttyUSB0", {"lock_user": "juan", "lock_token": "x"}))["ok"]
     last = [e for e in api_events() if e["type"] == "release"][-1]["detail"]
@@ -580,13 +596,36 @@ def test_unlock_records_release_and_force_drops_without_the_pair():
 
 
 def test_forced_unlock_needs_the_api_token(tmux):
+    """Sin token de la API, forzar un unlock es robar la reserva desde la red:
+    403 force_disabled. Con token, exige el Bearer."""
+    from server import locks
     board()
     reserve()
+    with pytest.raises(HTTPException) as e:
+        run(api.device_unlock("ttyUSB0", {"force": True}))
+    assert err(e) == (403, "force_disabled") and locks.read("ttyUSB0") is not None
+    assert run(api.get_version())["auth"] is False
     set_token("s3cret")
+    assert run(api.get_version())["auth"] is True
     with pytest.raises(HTTPException) as e:
         run(api.device_unlock("ttyUSB0", {"force": True}))
     assert err(e) == (401, "auth")
     assert run(api.device_unlock("ttyUSB0", {"force": True}, authorization="Bearer s3cret"))["forced"]
+
+
+def test_devremote_reset_records_event_with_who_forced(tmux):
+    board()
+    reserve()
+    req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.3"))
+    r = run(api.devremote_reset("ttyUSB0", {"force": True, "lock_user": "dash"}, request=req))
+    assert r["ok"]
+    (ev,) = [e for e in api_events() if e["type"] == "command"]
+    assert ev["detail"] == {"command": "restart-session", "user": "dash", "forced": True,
+                            "by_user": "dash", "by_host": "10.0.0.3"}
+    assert ev["cursor"].startswith(f"c:{SID}:")
+    run(api.devremote_reset("ttyUSB0", {"lock_user": "alejo", "lock_token": "t0k"}))       # el dueño: sin forced
+    assert [e for e in api_events() if e["type"] == "command"][-1]["detail"] == \
+        {"command": "restart-session", "user": "alejo"}
 
 
 def test_send_tmux_session_missing_is_session_down(monkeypatch):

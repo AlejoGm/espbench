@@ -340,13 +340,14 @@ boot ─────► devremote.service ────────────�
 
 | Endpoint | |
 |---|---|
+| `GET /api/version` | Versión y `auth` (hay token de la API) |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
-| `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar; con token de la API si la Pi lo tiene) lo suelta sin el par. Evento `release` (con `forced`) |
+| `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar) lo suelta sin el par y **exige** token de la API (sin `/opt/esp/api_token` → 403 `force_disabled`). Evento `release` con el dueño anterior y, si se forzó, `by_user`/`by_host` |
 | `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
 | `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
 | `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`; 409 `busy` si flashea/borra, 502 si tmux falla; evento `command`. Body opcional: `expect_mac`, par del lock, `force`, `require_reservation` |
-| `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>`; mismas reglas de reserva que `command` (423 `locked`, `force`, `require_reservation`, `expect_mac`) |
+| `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>`; mismas reglas de reserva que `command` (423 `locked`, `force`, `require_reservation`, `expect_mac`); evento `command` con `command: restart-session` |
 | `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
@@ -374,7 +375,8 @@ boot ─────► devremote.service ────────────�
 - **Reservas (A3)**: una reserva vigente bloquea `send`/`command` de cualquiera que
   no mande el mismo par (423 `locked`). El lock permanente del flash no bloquea.
   `force: true` (solo el booleano) la saltea: el dashboard lo manda después de
-  confirmar, el CLI nunca; queda `forced: true` en el evento. `require_reservation:
+  confirmar, el CLI nunca; queda `forced: true` en el evento, con `by_user` (el
+  `lock_user` del pedido) y `by_host`. Forzar un `unlock` exige token de la API. `require_reservation:
   true` (el CLI): la escritura sale solo si el par tiene la reserva vigente, chequeado
   en el mismo pedido → 423 `reservation_lost`.
 - `send`, `reserve` y `release` (también `unlock`) quedan en `events.jsonl` (`events.record`, cursor =

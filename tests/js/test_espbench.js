@@ -227,7 +227,14 @@ test('eventView: icono, hora, detalle corto y quién', () => {
     assert.equal(EB.eventDetail(ev('flash', {ok: true, status: 'exitoso'})), '✓ exitoso');
     assert.equal(EB.eventDetail(ev('fw', {project: 'simfw', version: '1.0.0', idf: 'v5.3'})), 'simfw 1.0.0 · IDF v5.3');
     assert.equal(EB.eventDetail(ev('reserve', {user: 'juan', expires: '2026-10-06T16:30:00'})), 'hasta 2026-10-06 16:30');
-    assert.equal(EB.eventDetail(ev('release', {user: 'juan', forced: true})), 'forzada');
+    assert.equal(EB.eventDetail(ev('release', {user: 'juan'})), '');
+    // release forzado: el dueño anterior en el detalle y quién forzó como "quién"
+    const rel = EB.eventView(ev('release', {user: 'juan', forced: true, by_user: 'dash', by_host: '10.0.0.9'}));
+    assert.equal(rel.detail, 'de juan · forzada por dash (10.0.0.9)');
+    assert.equal(rel.who, 'dash');
+    assert.equal(EB.eventView(ev('release', {user: 'juan', forced: true, by_host: '10.0.0.9'})).who, '10.0.0.9');
+    assert.equal(EB.eventDetail(ev('send', {text: 'x', forced: true, by_host: '10.0.0.3'})), '"x" · forzado por 10.0.0.3');
+    assert.equal(EB.eventDetail(ev('command', {command: 'restart-session', user: 'dash'})), 'reiniciar sesión');
     assert.equal(EB.eventView({ts: 'x', type: 'nuevo', cursor: null}).icon, '·');   // tipo desconocido
 });
 

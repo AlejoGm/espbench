@@ -327,9 +327,17 @@
     var STATE_NAMES = {monitoring: 'monitoreando', flashing: 'flasheando', erasing: 'borrando',
                        discovering: 'iniciando', unknown: 'sin MAC', disconnected: 'desconectado'};
 
+    // "dash (10.0.0.3)": quién forzó (lock_user del pedido y host), o ''.
+    function forcedBy(d) {
+        if (!d.by_user && !d.by_host) return '';
+        return d.by_user ? d.by_user + (d.by_host ? ' (' + d.by_host + ')' : '') : d.by_host;
+    }
+
+    var COMMAND_NAMES = {'restart-session': 'reiniciar sesión'};
+
     function eventDetail(ev) {
         var d = ev.detail || {};
-        var forced = d.forced ? ' · forzado' : '';
+        var forced = d.forced ? ' · forzado' + (forcedBy(d) ? ' por ' + forcedBy(d) : '') : '';
         switch (ev.type) {
         case 'boot': return (d.reason || '') + (d.abnormal ? ' ⚠' : '');
         case 'panic': return (PANIC_KINDS[d.kind] || d.kind || 'panic') + (d.reason ? ' (' + d.reason + ')' : '');
@@ -338,9 +346,10 @@
         case 'state': return (STATE_NAMES[d.from] || d.from || '?') + ' → ' + (STATE_NAMES[d.to] || d.to || '?');
         case 'flash': return d.ok ? '✓ ' + (d.status || 'ok') : '✗ ' + String(d.error || d.status || 'falló').replace(/_/g, ' ');
         case 'send': return '"' + (d.text || '') + '"' + (d.enter ? ' ⏎' : '') + forced;
-        case 'command': return (d.command || '') + forced;
+        case 'command': return (COMMAND_NAMES[d.command] || d.command || '') + forced;
         case 'reserve': return d.expires ? 'hasta ' + d.expires.replace('T', ' ').slice(0, 16) : '';
-        case 'release': return d.forced ? 'forzada' : '';
+        case 'release': return d.forced ? 'de ' + (d.user || '?') + ' · forzada' +
+                                          (forcedBy(d) ? ' por ' + forcedBy(d) : '') : '';
         case 'session': return [d.tty, d.pid ? 'pid ' + d.pid : ''].filter(Boolean).join(' · ');
         }
         return '';
@@ -373,7 +382,9 @@
         return {
             type: ev.type, icon: t.icon, label: t.label, cls: 'ev-' + String(ev.type).replace(/_/g, '-'),
             date: ts.slice(0, 10), time: ts.slice(11, 19), detail: detail,
-            who: d.user || '', session: cursorSession(ev.cursor), cursor: ev.cursor || null,
+            // release forzado: user es el dueño anterior; "quién" es el que forzó
+            who: (ev.type === 'release' && d.forced ? d.by_user || d.by_host : d.user) || '',
+            session: cursorSession(ev.cursor), cursor: ev.cursor || null,
             bad: ev.type === 'panic' || ev.type === 'boot_loop' || (ev.type === 'flash' && d.ok === false) ||
                  (ev.type === 'boot' && !!d.abnormal),
             title: ts.replace('T', ' ') + ' · ' + t.label + (full ? ': ' + full : '') +
