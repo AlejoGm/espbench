@@ -242,6 +242,7 @@ def cmd_release(c: lib.Client, a, out: Out) -> int:
 
 
 def cmd_restart_session(c: lib.Client, a, out: Out) -> int:
+    # El proceso puede estar caído (justo para eso es): alcanza con que la Pi conozca el tty
     board = c.resolve(a.dev, write=False, need_mac=False)
     if not board.tty:
         raise EspbenchError("not_found", f"no hay placa '{a.dev}' en la Pi")

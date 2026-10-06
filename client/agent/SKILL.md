@@ -64,7 +64,7 @@ Los logs se comen tokens. Pedí lo justo:
 | 4 | `timeout` | no apareció el `until`: mirá `lines` (¿salió otra cosa?) antes de subir el `--timeout` |
 | 5 | `busy` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos |
 | 6 | `locked`, `reservation_lost`, `token_mismatch` | otra persona tiene la placa, o tu reserva venció. Pará y avisale al usuario: `espbench who <dev> --json` dice quién |
-| 7 | `not_found`, `device_changed` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo |
+| 7 | `not_found`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |
 | 9 | `session_ended` | la placa se desconectó o su proceso se relanzó: `espbench ls --json`; si volvió, seguí desde `--since session` |
 | 10 | `network`, `auth`, `auth_config` | sin conexión con la Pi o token de la API faltante/incorrecto (`ESPBENCH_TOKEN`): avisale al usuario |

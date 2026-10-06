@@ -3,6 +3,7 @@ hay httpx): se llaman los handlers directo."""
 import asyncio
 import pathlib
 import sys
+import time
 import types
 
 import pytest
@@ -12,7 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
 from fastapi import HTTPException
 
-from server import api, paths, runstate
+from server import api, locks, paths, runstate
 
 MAC = "AA:BB:CC:DD:EE:FF"
 
@@ -476,7 +477,7 @@ def test_command_tmux_failure_is_502(monkeypatch):
                         lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="no session"))
     with pytest.raises(HTTPException) as e:
         run(api.device_command("ttyUSB0", "reset"))
-    assert err(e) == (502, "unexpected") and "no session" in e.value.detail["message"]
+    assert err(e) == (502, "session_down") and "no session" in e.value.detail["message"]
     assert api_events() == []
 
 
@@ -555,3 +556,55 @@ def test_unlock_errors_are_structured():
     with pytest.raises(HTTPException) as e:
         run(api.device_unlock("ttyUSB0", {}))
     assert err(e) == (400, "bad_request")
+
+
+def test_send_tmux_session_missing_is_session_down(monkeypatch):
+    board()
+    monkeypatch.setattr(api.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(
+        returncode=1, stdout="", stderr="can't find session: esp32_ttyUSB0"))
+    with pytest.raises(HTTPException) as e:
+        run(api.device_send("ttyUSB0", {"text": "x"}))
+    assert err(e) == (502, "session_down") and "restart-session" in e.value.detail["message"]
+
+
+def test_reservation_lost_message_says_why():
+    """Antes: "la reserva ya no es tuya (la tiene nadie)" también cuando venció."""
+    board()
+    owner = {"lock_user": "alejo", "lock_token": "t0k", "require_reservation": True}
+    cases = []
+    for setup in (lambda: None,
+                  lambda: locks.write("ttyUSB0", locks.Lock("juan", "j", int(time.time()) + 600)),
+                  lambda: locks.write("ttyUSB0", locks.Lock("alejo", "otro", int(time.time()) + 600)),
+                  lambda: locks.write("ttyUSB0", locks.Lock("juan", "j"))):
+        locks.remove("ttyUSB0")
+        setup()
+        with pytest.raises(HTTPException) as e:
+            api._check_reservation("ttyUSB0", owner)
+        assert err(e) == (423, "reservation_lost")
+        cases.append(e.value.detail["message"])
+    assert "venció" in cases[0] and "volvé a reservar" in cases[0]
+    assert "la tiene 'juan' hasta" in cases[1]
+    assert "otro lock_token" in cases[2]
+    assert "lock de flash de 'juan'" in cases[3]
+    assert not any("nadie" in m for m in cases)
+
+
+def test_devremote_reset_respects_reservations(tmux):
+    """restart-session mata el proceso de la placa: una reserva ajena lo bloquea
+    como a send/command."""
+    board()
+    paths.lock_file("ttyUSB0").parent.mkdir(parents=True, exist_ok=True)
+    locks.write("ttyUSB0", locks.Lock("juan", "j", int(time.time()) + 600, "AABBCCDDEEFF"))
+    with pytest.raises(HTTPException) as e:
+        run(api.devremote_reset("ttyUSB0"))
+    assert err(e) == (423, "locked") and tmux == []
+    with pytest.raises(HTTPException) as e:
+        run(api.devremote_reset("ttyUSB0", {"lock_user": "alejo", "lock_token": "t0k",
+                                            "require_reservation": True}))
+    assert err(e) == (423, "reservation_lost")
+    with pytest.raises(HTTPException) as e:
+        run(api.devremote_reset("ttyUSB0", {"expect_mac": "11:22:33:44:55:66", "force": True}))
+    assert err(e) == (409, "device_changed")
+    assert run(api.devremote_reset("ttyUSB0", {"lock_user": "juan", "lock_token": "j"}))["ok"]
+    assert run(api.devremote_reset("ttyUSB0", {"force": True}))["ok"]
+    assert tmux[-1] == ["/usr/local/bin/devremote", "--reset", "ttyUSB0"]

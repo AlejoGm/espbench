@@ -433,10 +433,14 @@
                 if (!confirm('¿Reiniciar la sesión de ' + tty + '? Mata y relanza el proceso del device.')) return;
                 var btn = $('btn-devremote-reset');
                 btn.disabled = true;
-                EBAuth.fetch(api + '/devremote-reset', {method: 'POST'})
-                    .then(function(r) { return r.json(); })
-                    .then(function(d) { toast(d.ok ? 'Sesión reiniciada' : 'Falló: ' + (d.stderr || ''), !d.ok); })
-                    .catch(function() {})
+                // postJson: ante una reserva ajena (423) pregunta y reintenta con force
+                postJson('/devremote-reset')
+                    .then(function(res) {
+                        var d = res[2] || {};
+                        if (!res[0]) { toast(EB.errorText(d, res[1]), true); return; }
+                        toast(d.ok ? 'Sesión reiniciada' : 'Falló: ' + (d.stderr || ''), !d.ok);
+                    })
+                    .catch(function() { toast('Error de conexión', true); })
                     .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
             };
             $('btn-unlock').onclick = function() {

@@ -572,3 +572,19 @@ def test_against_uvicorn(bench, client, board, tmp_path):
     r, v = flash_and_verify(client, tmp_path, window=0.3)
     assert v["ok"]
     client.release(b)
+
+
+def test_restart_session_respects_reservation_and_session_down(bench, client, board, tmp_path):
+    other = make_client(bench, tmp_path, user="juan", token="j", state="juan")
+    other.reserve(other.resolve("sim-board", write=True), 600)
+    with pytest.raises(lib.EspbenchError) as e:
+        client.restart_session(client.resolve("sim-board", write=True))
+    assert errcode(e) == ("locked", 6)
+    other.release(other.resolve("sim-board", write=True))
+    del bench.boards["ttyUSB0"]                     # tmux ya no tiene la sesión
+    try:
+        with pytest.raises(lib.EspbenchError) as e:
+            client.send(client.resolve("sim-board", write=True), "status")
+        assert errcode(e) == ("session_down", 7)
+    finally:
+        bench.boards["ttyUSB0"] = board

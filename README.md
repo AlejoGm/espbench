@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.25.1
+**Version:** 0.25.2
 
 ---
 
@@ -166,7 +166,7 @@ espbench release mi-board --json
 | 4 | `timeout` |
 | 5 | `busy` |
 | 6 | `locked` / `reservation_lost` / `token_mismatch` |
-| 7 | `not_found` / `device_changed` |
+| 7 | `not_found` / `device_changed` / `session_down` |
 | 8 | `bad_anchor` / `cursor_expired` |
 | 9 | `session_ended` |
 | 10 | `network` / `auth` / `auth_config` |

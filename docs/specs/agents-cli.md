@@ -244,7 +244,7 @@ Comunes: `--json`, `--host`, `--profile`, `--expect-panic` (un panic en la venta
 | 4 | `timeout` | no apareció `until` | |
 | 5 | `busy` | flasheando/borrando, o placa todavía sin MAC (409) | sí, en segundos |
 | 6 | `locked` / `reservation_lost` / `token_mismatch` | lock o reserva de otro (423/409); la reserva ya no es tuya (423); par user/token incorrecto (403) | no |
-| 7 | `not_found` / `device_changed` | placa inexistente o desconectada para escritura; en el tty hay otra placa (`expect_mac`, 409) | no (resolver de nuevo con `/api/devices`) |
+| 7 | `not_found` / `device_changed` / `session_down` | placa inexistente o desconectada para escritura; en el tty hay otra placa (`expect_mac`, 409); la sesión tmux del device no está (502) | no (resolver de nuevo con `/api/devices`; `session_down`: `restart-session`) |
 | 8 | `bad_anchor` / `cursor_expired` | anchor o cursor inválido | |
 | 9 | `session_ended` | la placa se desconectó o el proceso se relanzó durante la espera | |
 | 10 | `network` / `auth` / `auth_config` | sin conexión, 401, o el token de la Pi ilegible (500) | |
@@ -322,10 +322,12 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - `max_lines` < 100: la cabeza es `max_lines // 2`. Una línea de otra fecha que `date` lleva la fecha completa.
 - `events` de la respuesta incluye `detail` (motivo del boot, tipo de panic).
 - `/events?since=<tiempo>` compara la hora del evento (cruza sesiones); con otro anchor, (sesión, offset).
-- **Errores**: `{"detail": {"error", "message"}}` en las escrituras y en `/api/board`. `bad_anchor`/`bad_request` 400, `cursor_expired` 410, `not_found` 404, `device_changed` 409, `busy` 409, `locked` (423 en `send`/`command`, 409 en `reserve`), `token_mismatch` 403, `auth` 401.
+- **Errores**: `{"detail": {"error", "message"}}` en las escrituras y en `/api/board`. `bad_anchor`/`bad_request` 400, `cursor_expired` 410, `not_found` 404, `device_changed` 409, `busy` 409, `locked` (423 en `send`/`command`, 409 en `reserve`), `token_mismatch` 403, `auth` 401, `session_down` 502 (tmux sin la sesión del device en `send`/`command`).
 - **Reserva**: `ttl_s` default 1800, máximo 7 días; reservar de nuevo renueva; exige que la placa tenga MAC (si no, 409 `busy`); contra un lock permanente ajeno el mensaje sugiere `unlock`. `release` suelta cualquier lock del par (también el del flash), como `unlock`. `user` y `token` no pueden tener `:`. Un lock vencido se ignora (no se borra al leerlo) y todo leer-decidir-escribir va bajo `flock` (`locks/<tty>.lck`).
 - **`force: true`** (solo el booleano) en `send`/`command` saltea una reserva ajena: lo manda el dashboard después de confirmar; **el CLI nunca lo manda**. Queda `forced: true` y el `user` en el evento. `reserve` no tiene `force`.
 - **`require_reservation: true`** en `send`/`command`: la escritura sale solo si el par tiene la reserva vigente, chequeado en el mismo pedido → 423 `reservation_lost`. Es lo que implementa `reservation_lost` (el server no lo detecta solo).
+- `devremote-reset` (`espbench restart-session`) sigue las mismas reglas de reserva que `send`/`command` (423 `locked` ante una reserva ajena, `force` del dashboard, `require_reservation` y `expect_mac` del CLI): mata el proceso de la placa.
+- `reservation_lost` dice por qué: venció o la soltaron (sin lock: volver a reservar), la tiene otro (hasta cuándo), mismo user con otro token, o hay un lock de flash sin vencimiento.
 - `/command` registra un evento **`command`** (tipo nuevo: command, user, forced?) y devuelve su `cursor`, tomado **antes** de mandar las teclas (como `send`: el `rst:` de un reset sale en milisegundos y si no quedaba antes del cursor); 409 `busy` si flashea/borra, 502 si tmux falla.
 - **Token**: se lee en cada pedido (API) y en cada conexión (flash): crearlo no requiere reiniciar nada.
 - El evento `send` solo se registra si tmux lo mandó; su cursor se toma antes de mandar.

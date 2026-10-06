@@ -132,14 +132,30 @@ def _check_reservation(tty: str, body: dict) -> bool:
     user, token = _creds(body, required=False)
     if body.get("require_reservation") is True:
         if lock is None or not lock.reservation or not lock.owned_by(user, token):
-            who = f"'{lock.user}'" if lock is not None else "nadie"
-            _fail(423, "reservation_lost", f"la reserva ya no es tuya (la tiene {who})")
+            _fail(423, "reservation_lost", _lost_message(lock, user))
         return False
     if lock is None or not lock.reservation or lock.owned_by(user, token):
         return False
     if _forced(body):
         return True
     _fail(423, "locked", f"reservada por '{lock.user}' hasta {lock.expires_iso()}")
+
+
+def _lost_message(lock: Optional[locks.Lock], user: str) -> str:
+    if lock is None:
+        return "la reserva venció o la soltaron (no hay lock): volvé a reservar con `espbench reserve`"
+    if not lock.reservation:
+        return f"no hay reserva: hay un lock de flash de '{lock.user}' (sin vencimiento)"
+    if lock.user == user:
+        return f"la reserva es de '{lock.user}' pero con otro lock_token (hasta {lock.expires_iso()})"
+    return f"la reserva ya no es tuya: la tiene '{lock.user}' hasta {lock.expires_iso()}"
+
+
+def _tmux_failed(tty: str, stderr: str):
+    """tmux sin la sesión del device: el proceso de la placa no corre (o se
+    está relanzando). session_down, no un error interno."""
+    _fail(502, "session_down", f"la sesión esp32_{tty} no responde ({stderr}): el proceso de la placa no "
+                               "corre; `espbench restart-session` o esperar a que esp32_tmux.sh la relance")
 
 
 def _record(state: dict, type_: str, detail: dict, cursor: Optional[str] = None) -> Optional[str]:
@@ -285,7 +301,7 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
         except FileNotFoundError:
             _fail(502, "unexpected", "tmux no disponible")
         if r.returncode != 0:
-            _fail(502, "unexpected", f"tmux: {r.stderr.strip() or r.returncode}")
+            _tmux_failed(tty, r.stderr.strip() or str(r.returncode))
     if cursor is not None:
         detail = {"text": text, "enter": enter, "user": user or None}
         if forced:
@@ -422,7 +438,7 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
         except FileNotFoundError:
             _fail(502, "unexpected", "tmux no disponible")
         if r.returncode != 0:
-            _fail(502, "unexpected", f"tmux: {r.stderr.strip() or r.returncode}")
+            _tmux_failed(tty, r.stderr.strip() or str(r.returncode))
         await asyncio.sleep(0.05)
     detail = {"command": command, "user": user or None}
     if forced:
@@ -432,9 +448,15 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
 
 
 @app.post("/api/device/{tty}/devremote-reset")
-async def devremote_reset(tty: str, authorization: Optional[str] = Header(None)):
+async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authorization: Optional[str] = Header(None)):
+    """Mata y relanza el proceso de la placa. Como send/command: una reserva
+    ajena lo bloquea (423, `force` del dashboard), `require_reservation` y
+    `expect_mac` del CLI."""
     _require_auth(authorization)
     _check_tty(tty)   # ttyUSBN o esp-slotK: devremote resuelve el nombre.
+    body = body if isinstance(body, dict) else {}
+    _check_expect_mac(runstate.read(tty) or {}, body.get("expect_mac"))
+    _check_reservation(tty, body)
     result = subprocess.run(
         ["/usr/local/bin/devremote", "--reset", tty],
         capture_output=True, text=True

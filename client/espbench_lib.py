@@ -58,7 +58,7 @@ EXIT_CODES = {
     "timeout": 4,
     "busy": 5,
     "locked": 6, "reservation_lost": 6, "token_mismatch": 6,
-    "not_found": 7, "device_changed": 7,
+    "not_found": 7, "device_changed": 7, "session_down": 7,
     "bad_anchor": 8, "cursor_expired": 8,
     "session_ended": 9,
     "network": 10, "auth": 10, "auth_config": 10,
@@ -680,7 +680,7 @@ class Client:
         return r
 
     def restart_session(self, board: Board) -> dict:
-        r = self.request("POST", f"/api/device/{board.tty}/devremote-reset", body={})
+        r = self.request("POST", f"/api/device/{board.tty}/devremote-reset", body=self._write_body(board))
         if not (r or {}).get("ok"):
             raise EspbenchError("unexpected", f"devremote --reset falló: {(r or {}).get('stderr') or r}")
         return r
