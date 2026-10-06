@@ -11,7 +11,7 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | `devremote` | bash | CLI de sesiones (ver abajo). Siempre corre como `sfypi` | `/usr/local/bin/` |
 | `99-esp32.rules` | udev | Symlink `/dev/esp-slotK` + hotplug vía systemd | `/etc/udev/rules.d/` |
 | `espbench-attach@.service` | systemd | Hotplug: `devremote --start %I` como `sfypi` | `/etc/systemd/system/` |
-| `devremote.service` | systemd | Al boot: levanta las sesiones de lo que ya esté enchufado | `/etc/systemd/system/` |
+| `devremote.service` | systemd | Al boot: levanta las sesiones de lo que ya esté enchufado. Espera a `time-sync.target` (la Pi no tiene RTC); `install.sh` habilita `systemd-time-wait-sync` con tope de 90 s | `/etc/systemd/system/` |
 | `dashboard.service` | systemd | `uvicorn server.api:app` en el puerto 8080 | `/etc/systemd/system/` |
 | `update.sh` | bash | Actualizar una Pi: fetch/pull + `install.sh` + restart dashboard + `devremote --reset` | (se corre desde el clone) |
 

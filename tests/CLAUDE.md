@@ -10,11 +10,12 @@ pytest tests/
 
 | Archivo | Qué cubre |
 |---|---|
-| `test_device.py` | FSM de `Device`, `TtyPort`, `DeviceManager` (reintentos de MAC, MAC por serial, watcher del tty), publicación de estado |
-| `test_serial_watch.py` | `SerialWatch`: resets, panics, boot loop, firmware, serial partido en chunks |
-| `test_device_log.py` | `DeviceLog`: buffer, rotación por sesión, hogar provisorio sin MAC, migración, UTF-8 partido |
+| `test_device.py` | FSM de `Device`, `TtyPort`, `DeviceManager` (reintentos de MAC, MAC por serial, watcher del tty), publicación de estado, eventos `state` y del serial apuntando a su línea |
+| `test_serial_watch.py` | `SerialWatch.on_line`: resets, panics, boot loop, firmware, `\r`/ANSI, chunks por la tubería real; eventos `boot`/`panic`/`fw`/`boot_loop` |
+| `test_device_log.py` | `DeviceLog`: prefijo, chunks y UTF-8 partidos, parcial retenido y `↪`, taglog en medio de una serial, header fuera del buffer, offsets en bytes, rotación por `session_id`, buffer pre-MAC, migración; eventos con cursor exacto (pre-MAC, migración solo de la sesión) |
+| `test_events.py` | `events.jsonl`: dos procesos escribiendo a la vez, lectura, truncado, migración de sesión, cursor del fin del log, `record()` del api |
 | `test_runstate.py` | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
-| `test_protocol.py` | Pedido de flash completo por `socketpair`, esptool falso: auth, lock, SHA256, retry sin `--encrypt`, device cambiado, FSM |
+| `test_protocol.py` | Pedido de flash completo por `socketpair`, esptool falso: auth, lock, SHA256, retry sin `--encrypt`, device cambiado, FSM, evento `flash` |
 | `test_remote_esp32.py` | El entrypoint entero con fakes solo en esptool/monitor/TCP: arranque, señal ignorada durante flash, desconexión, MAC por serial |
 | `test_erase.py` | Modo Erase Region con un monitor falso que solo tiene la interfaz pública; `EspMonitor` (sink, elf) |
 | `test_partition_table.py` | Parseo de la tabla de particiones del bootloader |
@@ -23,7 +24,7 @@ pytest tests/
 | `test_api.py` | Endpoints de historial y `send` llamando los handlers directo (no hay httpx): validación, 409 si ocupado, orden de rutas |
 | `test_log_streamer.py` | WebSocket: contenido inicial, stream, rotación, `log_path` desde el estado runtime |
 | `test_dashboard_js.py` | Corre `tests/js/test_*.js` con `node --test` (lógica del frontend en `espbench.js`); se saltea sin node |
-| `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos |
+| `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos; `devremote.service` espera a `time-sync.target` |
 | `test_flash.py`, `test_common.py`, `test_artifact.py`, `test_paths.py`, `test_taglog.py` | Utilidades |
 
 ## Criterio

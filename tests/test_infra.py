@@ -257,3 +257,15 @@ def test_devremote_reset_all_kills_surviving_sessions(infra):
     assert "kill-session -t esp32_ttyUSB0" in infra.log("tmux")
     assert "otra_cosa" not in infra.log("tmux").replace("ls -F", "")
     assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB0")
+
+
+def test_devremote_service_waits_for_time_sync():
+    """La Pi no tiene RTC: las sesiones del boot no arrancan con la hora de
+    fake-hwclock (session_id y horas del log). Lo demás solo se ve en la Pi."""
+    unit = (INFRA / "devremote.service").read_text().splitlines()
+    assert "After=time-sync.target" in unit and "Wants=time-sync.target" in unit
+    attach = (INFRA / "espbench-attach@.service").read_text().splitlines()
+    assert "After=devremote.service" in attach      # al boot, el hotplug también espera
+    install = (INFRA.parent / "install.sh").read_text()
+    assert "systemctl enable systemd-time-wait-sync.service" in install
+    assert "TimeoutStartSec=90" in install           # sin red no se cuelga el boot

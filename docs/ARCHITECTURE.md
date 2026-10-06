@@ -13,7 +13,7 @@ client/deploy.py ──TCP 5000+K──►  remote_esp32.py   (un proceso por de
                                     └─ control_server (protocol.py)
                                             │ escribe
                                             ▼
-                                  /opt/esp/devices/<mac>/   log, jobs, .elf
+                                  /opt/esp/devices/<mac>/   log, events.jsonl, jobs, .elf
                                   /opt/esp/run/<tty>.json   estado runtime
                                             │ lee
 Browser ◄──HTTP/WS 8080──────────  api.py (dashboard, proceso aparte)
@@ -109,9 +109,10 @@ leen el dashboard (`DeviceRegistry`, `LogStreamer`), `esp32_tmux.sh` y
  "fw": {"project": "app", "version": "v1.2.3", "idf": "v5.3.2"}}
 ```
 
-`health` y `fw` los arma `SerialWatch` (`serial_watch.py`) leyendo el mismo serial
-que va al log: cuenta reinicios y panics, detecta boot loop (3 boots en 2 min) y
-toma nombre/versión del firmware de lo que imprime `app_init`. Cuando cambian, el
+`health` y `fw` los arma `SerialWatch` (`serial_watch.py`) leyendo las mismas
+líneas que van al log (se las pasa `DeviceLog`, §4): cuenta reinicios y panics,
+detecta boot loop (3 boots en 2 min) y toma nombre/versión del firmware de lo que
+imprime `app_init`. Lo mismo queda como eventos en `events.jsonl` (§4). Cuando cambian, el
 `Device` republica sin transición (`publish()`). Al empezar un flash o un erase los
 contadores vuelven a cero: esos reinicios son a propósito.
 
@@ -129,19 +130,89 @@ cuando el tty vuelve.
 
 ### `DeviceLog` — único escritor del log de un device
 
-Recibe el serial crudo (`EspMonitor` → `write_bytes`) y las líneas de `taglog`
+Recibe el serial crudo (`EspMonitor` → `write_serial`) y las líneas de `taglog`
 (flash, esptool, transiciones). Todo queda en un archivo, que es lo que muestra
-el dashboard.
+el dashboard. Una sola tubería de líneas:
 
+```
+EspMonitor ─bytes→ DeviceLog.write_serial   decoder UTF-8 incremental, corte en \n
+taglog ──────────→ DeviceLog.write_taglog
+                     ├ escribe "<prefijo><línea>\n" (archivo binario, offset en bytes propio)
+                     └ line_sink(texto, cursor, ts) = SerialWatch.on_line   (solo serial)
+```
+
+**Formato de línea**: `YYYY-MM-DD HH:MM:SS.mmm <origen> <cuerpo>`. Origen: `>`
+serial, `|` taglog, `↪` continuación de una línea serial. El cuerpo de taglog es
+`INFO  | tag            | msg` (en stdout/tmux el formato no cambió). La hora es la
+del primer byte de la línea en la Pi. Los `\r` internos y el ANSI quedan como
+llegaron (el dashboard y `SerialWatch` se quedan con el último segmento).
+
+```
+2026-10-05 16:02:03.123 | INFO  | devicelog      | sesión 20261005_160203_812 tty=esp-slot3
+2026-10-05 16:02:03.130 > rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+2026-10-05 16:02:05.002 | INFO  | device         | esp-slot3 (mac=…): monitoring -> flashing
+2026-10-05 16:02:07.410 > esp>
+2026-10-05 16:02:09.950 ↪ help
+```
+
+- **Línea parcial**: la línea serial en curso se retiene en memoria hasta el `\n`
+  o hasta 150 ms sin bytes nuevos (un prompt de `esp_console` no termina en `\n`).
+  Lo que llegue después de esa línea sale con `↪`. Así una línea de taglog de otro
+  hilo nunca queda pegada a una serial. El flush por tiempo lo hace un hilo por
+  `DeviceLog` que duerme en una `Condition` hasta el vencimiento (no hay que
+  depender de que llegue otro byte ni de un tick externo). Una línea de más de
+  4096 caracteres se corta (sigue con `↪`).
+- **Sesión** = una ejecución del proceso: `session_id = YYYYMMDD_HHMMSS_<pid>` (el
+  pid evita colisiones si el reloj salta). La primera línea del archivo es el
+  header de sesión, escrito al abrir el archivo (fuera del buffer pre-MAC).
+- **Cursor** = `c:<session_id>:<offset>`, offset en bytes, siempre en fin de
+  línea. El cursor de una línea (y de un evento) es el **inicio** de esa línea,
+  que es el fin de la anterior: `--since <cursor>` la incluye.
 - **Un archivo por sesión**: `devices/<mac>/output.log` es la sesión actual. Al
-  arrancar una nueva, la anterior rota a `output_<ts>.log`.
-- **Antes de saber la MAC**, el log queda en memoria, con tope de 256 KB.
+  arrancar una nueva, la anterior rota a `output_<session_id>.log` (el id sale de
+  su header; un log viejo sin header usa la hora actual).
+- **Antes de saber la MAC**, las líneas quedan en memoria, con tope de 256 KB (se
+  descarta desde el principio). Al adoptar: header, buffer y después el marcador
+  `--- adoptado desde … ---`, así los offsets relativos al buffer siguen valiendo.
 - **Si la MAC no se lee nunca** (`UNKNOWN`), el log va a
   `devices/unknown-<tty>/output.log`. Si la MAC aparece más tarde, ese contenido
-  migra al archivo de la MAC y el provisorio se borra.
+  se copia al **principio** del archivo de la MAC (los offsets no cambian) y el
+  provisorio se borra.
 
 Reemplazó a `tmux pipe-pane`, que copiaba a ciegas lo que salía por la terminal,
 y al `serial.log` que escribía `EspMonitor` y nadie leía.
+
+### Eventos (`remote/server/events.py`) — `devices/<mac>/events.jsonl`
+
+Una línea JSON por evento, con la hora y el cursor del log donde pasó:
+
+```json
+{"ts":"2026-10-05T16:02:03.123","type":"panic","cursor":"c:20261005_155000_812:48213",
+ "detail":{"kind":"panic","reason":"LoadProhibited","line":"Guru Meditation Error: ..."},"by":"device"}
+```
+
+| type | Lo escribe | detail |
+|---|---|---|
+| `session` | `DeviceLog`, al abrir el archivo (cursor = offset 0) | tty, tcp_port, pid |
+| `boot` | `SerialWatch`, en cada línea `rst:` | reason, abnormal |
+| `fw` | `SerialWatch`, solo si cambió (al ver la línea `ESP-IDF:`, o en el siguiente `rst:`) | project, version, idf |
+| `panic` | `SerialWatch` | kind, reason, line |
+| `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots |
+| `state` | `Device` (FSM), en cada transición | from, to |
+| `flash` | `protocol.py`, al armar la respuesta final | job_id, ok, status, error, user |
+| `send` / `reserve` / `release` | api (fase 2, `events.record`) | |
+
+- **Boot loop**: mientras está activo no se registran los `boot` sueltos (solo
+  `start` con el conteo y `end`). El `end` se registra con la primera línea que
+  llega después de que el loop venció, o al empezar un flash/erase.
+- **Antes de la MAC** los eventos se retienen con su posición en el buffer y se
+  recalculan al volcarlo. En la migración `unknown-<tty>` → MAC pasan **solo los
+  eventos de la sesión actual** (el provisorio puede tener sesiones de otra placa).
+- **Escritura**: `O_APPEND` y un solo `os.write()` por línea (< 4 KB), atómico en
+  Linux entre procesos. Sin `flock`, sin ids, sin rotación. El archivo se crea con
+  modo 666: el proceso del api (sfypi) también va a escribir.
+- El proceso del api escribe con `events.record(log_path, type, detail)`: cursor =
+  fin de la última línea completa del `output.log` en ese momento.
 
 ### `taglog` (`remote/server/taglog.py`)
 
@@ -261,12 +332,13 @@ boot ─────► devremote.service ────────────�
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/
-│   ├── output.log         log de la sesión actual
-│   ├── output_<ts>.log    sesiones anteriores
+│   ├── output.log         log de la sesión actual (con header de sesión)
+│   ├── output_<session_id>.log  sesiones anteriores (output_<ts>.log: logs viejos)
+│   ├── events.jsonl       eventos de la placa (todas las sesiones)
 │   ├── current.elf        para decodificar backtraces
 │   ├── last_user
 │   └── jobs/<job_id>/     artefacto extraído + job.log
-├── devices/unknown-<tty>/ log de un device sin MAC
+├── devices/unknown-<tty>/ log y eventos de un device sin MAC
 ├── locks/<tty>            "user:token"
 └── jobs/, logs/, current_<tty>.elf   esquema anterior / devices sin MAC
 ```
@@ -283,7 +355,7 @@ así que ningún test toca el `/opt/esp` real.
 
 | Qué | Cómo |
 |---|---|
-| Modelo, FSM, `DeviceLog`, `runstate`, `taglog`, `paths` | unitarios |
+| Modelo, FSM, `DeviceLog`, `SerialWatch`, `events`, `runstate`, `taglog`, `paths` | unitarios (eventos: dos procesos escribiendo el mismo archivo) |
 | `protocol.py` | pedido completo por `socketpair`, esptool falso (`test_protocol.py`) |
 | Entrypoint | `remote_esp32.main()` con fakes solo en esptool/monitor/TCP (`test_remote_esp32.py`) |
 | Scripts de infra | los scripts reales con `tmux`/`udevadm`/`pkill` falsos (`test_infra.py`) |
@@ -294,4 +366,9 @@ así que ningún test toca el `/opt/esp` real.
 el comportamiento real de `esp_idf_monitor`/esptool con hardware (flash, erase,
 MAC por serial, desconexión física). Del dashboard: que `SerialWatch` cuente un
 panic real (y vuelva a cero al flashear), y que la consola serie (`tmux send-keys`)
-le llegue al firmware a través de `esp_idf_monitor`.
+le llegue al firmware a través de `esp_idf_monitor`. Del log y los eventos: que
+los offsets de los cursores caigan en la línea correcta con `esp_idf_monitor` real
+(sus `\r\n`, colores y líneas decodificadas de backtrace), que el prompt de
+`esp_console` salga a los 150 ms y el eco con `↪`, que el `boot` coincida con cada
+reset real, y que tras un reboot sin red `devremote.service` arranque igual
+(drop-in de 90 s a `systemd-time-wait-sync`) y con red espere a NTP.

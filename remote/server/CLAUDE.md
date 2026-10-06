@@ -8,8 +8,9 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 |---|---|---|
 | `remote_esp32.py` | device | Entrypoint: arma `DeviceManager`, identifica por MAC, levanta monitor + control server + fallback de MAC por serial + watcher del tty |
 | `device.py` | device | `TtyPort` / `Device` (FSM) / `DeviceManager` |
-| `serial_watch.py` | device | `SerialWatch`: lee el serial y detecta resets, panics, boot loop y versión de firmware → `health`/`fw` en `run/<tty>.json` |
-| `device_log.py` | device | `DeviceLog`: único escritor del log del device (`devices/<mac>/output.log`) |
+| `serial_watch.py` | device | `SerialWatch.on_line`: detecta resets, panics, boot loop y versión de firmware en las líneas que le pasa `DeviceLog` → `health`/`fw` en `run/<tty>.json` y eventos |
+| `device_log.py` | device | `DeviceLog`: único escritor del log del device (`devices/<mac>/output.log`): líneas con prefijo de hora y origen, sesión, cursores en bytes, eventos con el cursor exacto |
+| `events.py` | ambos | `events.jsonl` por placa (append atómico entre procesos, lectura, migración de sesión), cursores `c:<sesión>:<offset>`, `record()` para el api |
 | `monitor.py` | device | `EspMonitor`: `esp_idf_monitor` en un PTY; serial → stdout + `DeviceLog`; Ctrl-C / Ctrl-E |
 | `protocol.py` | device | Servidor TCP de flasheo, partido en fases (`authenticate`, `LockStore`, `receive_artifact`, `run_flash`...) |
 | `erase.py` | device | Modo Erase Region (Ctrl-E) |
@@ -32,6 +33,8 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 - **Puertos**: no derivarlos. `remote_esp32.py` los recibe por `--control-port` (los decide `infra/espbench-name`). `TtyPort.from_tty_path` y `DeviceRegistry._parse_tty_number` existen solo como fallback y para tests.
 - **Datos por device**: si `device.mac` está, en `devices/<mac>/` (jobs, `current.elf`, `last_user`). Si no, en las rutas por tty. El lock va siempre por tty (a propósito, ver ARCHITECTURE §5).
 - **Escrituras compartidas entre procesos**: atómicas (`runstate.write`) o con `flock` + `flush` + `fsync` **antes** de soltar el lock (`DevicesFile._update`). Sin eso, `devices.json` ya se corrompió una vez.
+- **Log del device**: todo lo que va a `output.log` pasa por `DeviceLog` (`write_serial` / `write_taglog`), que pone el prefijo `YYYY-MM-DD HH:MM:SS.mmm <origen> `. Nada escribe el archivo por otro lado: los cursores son offsets en bytes y dependen de eso. Formato y eventos: ARCHITECTURE §4.
+- **Locks entre `DeviceLog` y el resto**: `DeviceLog` nunca llama hacia afuera con su lock tomado (`line_sink` se llama después de soltarlo). Si no, `SerialWatch` → `Device.publish` y `Device._set_state` → taglog → `DeviceLog` se bloquean entre sí.
 - Python 3.9 en la Pi: nada de `X | None` en firmas de función ni en anotaciones a nivel módulo (`Optional[X]`).
 
 ## Tests

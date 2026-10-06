@@ -199,10 +199,25 @@ udevadm trigger
 # ---------------------------------------------------------------------------
 # 11. Enable systemd services
 # ---------------------------------------------------------------------------
+# devremote.service espera a time-sync.target (la Pi no tiene RTC). Ese target
+# solo espera de verdad si systemd-time-wait-sync está habilitado. Sin red la
+# espera sería infinita (TimeoutStartSec=infinity en el unit original): el
+# drop-in la limita y, vencida, devremote arranca igual (Wants=, no Requires=).
+if systemctl cat systemd-time-wait-sync.service &>/dev/null; then
+    mkdir -p /etc/systemd/system/systemd-time-wait-sync.service.d
+    printf '[Service]\nTimeoutStartSec=90\n' \
+        > /etc/systemd/system/systemd-time-wait-sync.service.d/espbench.conf
+else
+    warn "systemd-time-wait-sync no está: devremote no va a esperar a NTP al boot."
+fi
+
 info "Habilitando servicios systemd..."
 systemctl daemon-reload
 systemctl enable devremote
 systemctl enable dashboard
+if systemctl cat systemd-time-wait-sync.service &>/dev/null; then
+    systemctl enable systemd-time-wait-sync.service
+fi
 
 # ---------------------------------------------------------------------------
 # 12. Summary

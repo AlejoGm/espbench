@@ -2,6 +2,13 @@
 Description=Start remote_esp32 tmux sessions for ttyUSB devices (one-shot)
 After=dev-ttyUSB0.device
 Wants=dev-ttyUSB0.device
+# La Pi no tiene RTC: sin esperar a NTP, las primeras sesiones arrancan con la
+# hora de fake-hwclock y el reloj salta después (session_id y horas del log).
+# time-sync.target lo demora systemd-time-wait-sync (lo habilita install.sh,
+# con tope de espera para que una Pi sin red igual levante las sesiones).
+# espbench-attach@ va After=devremote.service: al boot también espera.
+After=time-sync.target
+Wants=time-sync.target
 
 [Service]
 Type=oneshot
