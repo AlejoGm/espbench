@@ -469,6 +469,89 @@ def test_list_events_crosses_sessions(b):
     assert le(since="session")["events"][0]["type"] == "boot"
 
 
+# ---------- events.jsonl sin tope: una lectura por pedido, de atrás para adelante ----------
+
+def _old_session_events(b, n):
+    """n eventos de una sesión anterior al principio de events.jsonl (meses de uso)."""
+    path = b.home / "events.jsonl"
+    current = path.read_bytes()
+    with open(path, "wb") as f:
+        for i in range(n):
+            f.write(events.encode(events.make("panic", f"c:{OLD}:{i}", {"kind": "guru", "line": "x" * 100})))
+        f.write(current)
+
+
+def test_events_are_read_once_per_request(b, monkeypatch):
+    """Antes read_range leía events.jsonl 2 o 3 veces por pedido (resolve,
+    _find_event y los eventos del rango)."""
+    reads = []
+    for name in ("read", "read_back"):
+        real = getattr(events, name)
+        monkeypatch.setattr(events, name, lambda *a, _r=real, _n=name, **k: (reads.append(_n), _r(*a, **k))[1])
+    b.event("send", "app1")
+    for kw in ({"since": "panic", "until": "send"}, {"since": "boot~1", "until": "boot"}, {"around": "panic"},
+               {"since": b.cursor("app0"), "until": "re:temperatura"}, {}):
+        reads.clear()
+        rr(**kw)
+        assert len(reads) == 1, (kw, reads)
+
+
+def test_poll_near_the_end_does_not_parse_the_whole_events_file(b, monkeypatch):
+    """El poll de una espera (since = el end anterior) en la sesión actual lee la
+    cola de events.jsonl: no parsea los eventos de las sesiones anteriores."""
+    _old_session_events(b, 5000)
+    b.event("send", "app1")
+    parsed = []
+    real = json.loads
+    monkeypatch.setattr(json, "loads", lambda raw, *a, **k: (parsed.append(1), real(raw, *a, **k))[1])
+    r = rr(since=b.cursor("app0"), until="send")
+    assert r["until_found"] and [e["type"] for e in r["events"]] == ["panic", "boot", "send"]
+    assert len(parsed) < logrange.EVENT_SLACK + 20      # la cola + el margen, no las 5000 anteriores
+    parsed.clear()
+    assert [e["type"] for e in rr(since="session")["events"]] == ["boot", "panic", "boot", "send"]
+    assert len(parsed) < logrange.EVENT_SLACK + 20      # la cola + el margen, no las 5000 anteriores
+    parsed.clear()
+    r = le(limit=3)                                     # los últimos N: la cola
+    assert [e["type"] for e in r["events"]] == ["panic", "boot", "send"] and r["more"] is True
+    assert len(parsed) < logrange.EVENT_SLACK + 20      # la cola + el margen, no las 5000 anteriores
+    parsed.clear()
+    assert [e["type"] for e in le(since="session", types="send")["events"]] == ["send"]   # marcas del dashboard
+    assert len(parsed) < logrange.EVENT_SLACK + 20      # la cola + el margen, no las 5000 anteriores
+
+
+def test_last_events_tolerates_disorder_and_old_sessions(b):
+    """Los últimos N leyendo hacia atrás dan lo mismo que ordenar todo (el api
+    puede escribir un evento con cursor anterior después de otros)."""
+    _old_session_events(b, 300)
+    b.event("send", "app1")
+    b.event("command", "app0")                          # escrito último, cursor anterior
+    path = paths.device_home(MAC) / "events.jsonl"
+    full = logrange.sort_events(events.read(path))
+    for limit in (1, 2, 5, 50, 400):
+        for types in (None, "panic", "send,command"):
+            wanted = types.split(",") if types else []
+            ref = [e for e in full if not wanted or e["type"] in wanted]
+            r = le(limit=limit, types=types)
+            assert [e["cursor"] for e in r["events"]] == [e["cursor"] for e in ref[-limit:]], (limit, types)
+            assert r["more"] == (len(ref) > limit), (limit, types)
+
+
+def test_counts_are_incremental_and_survive_a_replaced_file(b):
+    path = paths.device_home(MAC) / "events.jsonl"
+    assert le(counts=True)["counts"] == {"boot": 2, "panic": 1}
+    b.event("send", "app1")
+    with open(path, "ab") as f:
+        f.write(b'{"ts":"2026-10-05T16:00:09.000","type":"panic"')     # a medio escribir: todavía no cuenta
+    assert le(counts=True)["counts"] == {"boot": 2, "panic": 1, "send": 1}
+    with open(path, "ab") as f:
+        f.write(b',"cursor":"c:' + SID.encode() + b':5","detail":{},"by":"device"}\n')
+    assert le(counts=True)["counts"] == {"boot": 2, "panic": 2, "send": 1}
+    tmp = path.with_name("e.tmp")                       # migración: otro archivo (otro inode), más chico
+    tmp.write_bytes(path.read_bytes().splitlines(keepends=True)[0])
+    tmp.replace(path)
+    assert le(counts=True)["counts"] == {"boot": 1}
+
+
 # ---------- con el DeviceLog real ----------
 
 def test_with_real_device_log():

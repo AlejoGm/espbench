@@ -25,12 +25,19 @@ la línea, y un poll que viera la línea sin el evento seguiría desde un `end`
 posterior y no lo encontraría nunca. Los demás tipos salen de events.jsonl,
 leído DESPUÉS de fijar el tamaño del log: un evento que todavía no estaba
 tiene cursor >= ese tamaño, y lo encuentra el próximo poll.
+
+events.jsonl no tiene tope (sin rotación, §4): se lee UNA vez por pedido
+(_Events) y, para la sesión actual, de atrás para adelante hasta pasar el
+rango pedido (sus eventos son los últimos del archivo). Los últimos N de
+/events, igual. El conteo por tipo de todo el archivo (`counts`) se lleva de
+forma incremental (el archivo solo crece).
 """
 import collections
 import datetime as dt
 import os
 import pathlib
 import re
+import threading
 import time
 from typing import Optional
 
@@ -47,6 +54,10 @@ MAX_MAX_LINES = 5000
 HEAD_LINES = 50
 SLACK = 2.0              # s; > MAX_HOLD de DeviceLog: las horas del archivo no son monótonas
 LINE_TYPES = ("boot", "panic")   # until que se buscan en las líneas
+# Leyendo events.jsonl hacia atrás: eventos seguidos fuera de lo pedido antes de
+# dejar de leer. Device y api escriben en paralelo y el orden del archivo no es
+# exactamente el del log; el desorden es de unos pocos eventos.
+EVENT_SLACK = 64
 
 _PREFIX_RE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3}) ([>|↪]) ")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -246,6 +257,114 @@ def _event_key(ev: dict):
     return cur if cur else ("", 0)
 
 
+class _Events:
+    """events.jsonl leído una sola vez por pedido, y DESPUÉS de fijar el tamaño
+    del log (lo pide el primero que lo necesita, que ya abrió la sesión).
+
+    session(sid, lo): eventos de la sesión `sid` con offset >= lo, ordenados.
+    De la sesión actual se lee hacia atrás hasta EVENT_SLACK eventos seguidos
+    que no son del rango; de otra, el archivo entero (pedidos raros: un cursor
+    de una sesión anterior). Un pedido con un `lo` mayor sale de lo ya leído."""
+
+    def __init__(self, board: "BoardLog", current: Optional[str]):
+        self.board, self.current = board, current
+        self._key = None              # (sid, lo) de lo leído
+        self._evs: list = []
+        self.reads = 0
+
+    def session(self, sid: str, lo: int = 0) -> list:
+        if self._key is None or self._key[0] != sid or self._key[1] > lo:
+            self.reads += 1
+            if sid == self.current:
+                evs = _session_tail(self.board.events_path, sid, lo)
+            else:
+                evs = [e for e in self.board.read_events() if _event_key(e)[0] == sid and _event_key(e)[1] >= lo]
+            self._key, self._evs = (sid, lo), sort_events(evs)
+        return [e for e in self._evs if _event_key(e)[1] >= lo]
+
+
+def _session_tail(path, sid: str, lo: int, wanted: Optional[list] = None) -> list:
+    """Eventos de la sesión `sid` con offset >= lo (de los tipos `wanted`),
+    leyendo hacia atrás. El cursor se saca de los bytes (events.encode escribe
+    `"cursor":"c:…"` antes de `detail`): las líneas de otras sesiones o de otros
+    tipos no se parsean (con o sin espacios: un archivo escrito a mano también)."""
+    cur_rx = re.compile(rb'"cursor":\s*"c:' + re.escape(sid.encode()) + rb':(\d+)"')
+    keep = _type_filter(wanted or [])
+    out, miss = [], 0
+    for raw in events.read_back(path):
+        m = cur_rx.search(raw)
+        if m is None or int(m.group(1)) < lo:
+            miss += 1
+            if miss >= EVENT_SLACK:
+                break
+            continue
+        miss = 0
+        ev = events.parse_line(raw) if keep(raw) else None
+        if ev is not None and _event_key(ev) == (sid, int(m.group(1))) and (not wanted or ev.get("type") in wanted):
+            out.append(ev)
+    return out
+
+
+def _type_filter(wanted: list):
+    """Filtro previo sobre los bytes (events.encode escribe `"type":"x"` sin
+    espacios): las líneas de otros tipos no se parsean."""
+    if not wanted:
+        return lambda raw: True
+    tags = [f'"type":"{t}"'.encode() for t in wanted]
+    return lambda raw: b'"type":"' not in raw or any(t in raw for t in tags)
+
+
+def _last_events(path, wanted: list, limit: int):
+    """Los últimos `limit` eventos (de los tipos `wanted`) leyendo hacia atrás →
+    (ordenados, more). Sigue hasta tener limit+1 (para saber si hay más) y
+    EVENT_SLACK líneas de margen por el desorden."""
+    keep = _type_filter(wanted)
+    out, countdown = [], None
+    for raw in events.read_back(path):
+        if countdown is not None:
+            countdown -= 1
+            if countdown < 0:
+                break
+        ev = events.parse_line(raw) if keep(raw) else None
+        if ev is None or (wanted and ev.get("type") not in wanted):
+            continue
+        out.append(ev)
+        if countdown is None and len(out) > limit:
+            countdown = EVENT_SLACK
+    out = sort_events(out)
+    return out[-limit:], len(out) > limit
+
+
+_counts_lock = threading.Lock()
+_counts_cache: dict = {}        # ruta → (inode, bytes contados, {tipo: n})
+
+
+def all_counts(path) -> dict:
+    """{tipo: n} de todo events.jsonl, incremental: el archivo solo crece (append),
+    así que cada pedido cuenta solo lo nuevo. Un inode distinto o un archivo más
+    chico (migración unknown → MAC, borrado a mano) arranca de cero."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {}
+    with _counts_lock:
+        ino, done, counts = _counts_cache.get(str(path), (None, 0, {}))
+        if ino != st.st_ino or st.st_size < done:
+            done, counts = 0, {}
+        if st.st_size > done:
+            with open(path, "rb") as f:
+                f.seek(done)
+                data = f.read(st.st_size - done)
+            cut = data.rfind(b"\n") + 1           # una línea a medio escribir, en el próximo
+            for raw in data[:cut].splitlines():
+                ev = events.parse_line(raw)
+                if ev is not None:
+                    counts[ev.get("type")] = counts.get(ev.get("type"), 0) + 1
+            done += cut
+        _counts_cache[str(path)] = (st.st_ino, done, counts)
+        return dict(counts)
+
+
 def sort_events(evs: list) -> list:
     """Por (sesión, offset): device y api escriben en paralelo y el orden del
     archivo no es el del log."""
@@ -322,7 +441,7 @@ class Point:
         return self.sess.cursor(self.offset)
 
 
-def resolve(board: BoardLog, anchor: str, now: float, evs: Optional[list] = None) -> Point:
+def resolve(board: BoardLog, anchor: str, now: float, evs: Optional[_Events] = None) -> Point:
     anchor = (anchor or "").strip()
     if not anchor:
         raise RangeError("bad_anchor", "anchor vacío")
@@ -344,8 +463,8 @@ def resolve(board: BoardLog, anchor: str, now: float, evs: Optional[list] = None
     m = _EVENT_RE.fullmatch(anchor)
     if m and m.group(1) in events.TYPES:
         etype, n = m.group(1), int(m.group(2) or 0)
-        mine = [e for e in sort_events(evs if evs is not None else board.read_events())
-                if e.get("type") == etype and _event_key(e)[0] == sess.sid and _event_key(e)[1] <= sess.size]
+        evs = evs if evs is not None else _Events(board, board.current_session())
+        mine = [e for e in evs.session(sess.sid) if e.get("type") == etype and _event_key(e)[1] <= sess.size]
         if n >= len(mine):
             raise RangeError("bad_anchor", f"no hay {anchor} en la sesión actual ({len(mine)} {etype})")
         return Point(sess, _align_start(sess.f, _event_key(mine[-1 - n])[1]), etype)
@@ -564,7 +683,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
 
     with BoardLog(home) as board:
         current = board.current_session()
-        evs = board.read_events()
+        evs = _Events(board, current)
         until_found = match = matcher = match_at = None
         if around:
             start, limit = _around(board, around, before, after, now, evs)
@@ -577,7 +696,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
                 skip_at = start.offset if start.etype == until else None
                 if kind == "event":
                     # events.jsonl se relee después de fijar el tamaño del log (ver docstring)
-                    hit = _find_event(board, start, what, skip_at)
+                    hit = _find_event(evs, start, what, skip_at)
                     if hit is not None:
                         until_found, limit, match_line = True, hit[0], hit[1]
                         if match_line is not None:
@@ -598,10 +717,10 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
         lines, truncated = out.finish()
         if match is not None and out.date is not None:
             match = match if not match.startswith(out.date + " ") else match[len(out.date) + 1:]
-        evs_in = [compact_event(e) for e in sort_events(board.read_events())
-                  if _event_key(e)[0] == sess.sid and start.offset <= _event_key(e)[1] < end]
+        mine = evs.session(sess.sid, start.offset)
+        evs_in = [compact_event(e) for e in mine if _event_key(e)[1] < end]
         if until_found and until in events.TYPES and not any(e["cursor"] == sess.cursor(end) for e in evs_in):
-            evs_in += [compact_event(e) for e in board.read_events()
+            evs_in += [compact_event(e) for e in mine
                        if e.get("type") == until and e.get("cursor") == sess.cursor(end)]
         echo_seen = None
         if matcher is not None and matcher.echo_seen is not None:
@@ -633,12 +752,12 @@ def _render_logical(head: Line, text: str, raw: bool, last: Line) -> str:
     return f"{head.date} {head.time} {head.origin} {text}"
 
 
-def _find_event(board: BoardLog, start: Point, etype: str, skip_at: Optional[int]):
+def _find_event(evs: _Events, start: Point, etype: str, skip_at: Optional[int]):
     """Primer evento `etype` desde start → (fin del rango, línea o None)."""
     sess = start.sess
-    for ev in sort_events(board.read_events()):
+    for ev in evs.session(sess.sid, start.offset):
         sid, off = _event_key(ev)
-        if ev.get("type") != etype or sid != sess.sid or off < start.offset or off == skip_at:
+        if ev.get("type") != etype or off == skip_at:
             continue
         if off > sess.size:
             return None                   # después del tamaño fijado: lo ve el próximo poll
@@ -649,7 +768,7 @@ def _find_event(board: BoardLog, start: Point, etype: str, skip_at: Optional[int
     return None
 
 
-def _around(board: BoardLog, anchor: str, before, after, now: float, evs: list):
+def _around(board: BoardLog, anchor: str, before, after, now: float, evs: _Events):
     """--around E: del boot anterior a E (inclusive) al siguiente (exclusive), o
     before/after líneas alrededor de E (E incluida)."""
     center = resolve(board, anchor, now, evs)
@@ -705,16 +824,32 @@ def list_events(home, types: Optional[str] = None, since: Optional[str] = None,
     if unknown:
         raise RangeError("bad_request", f"tipos desconocidos: {', '.join(unknown)}")
     with BoardLog(home) as board:
-        evs = board.read_events()
         current = board.current_session()
-        out = sort_events(evs)
+        if not since and order == "desc":
+            # Lo más común (el dashboard, el CLI): los últimos N, leyendo la cola
+            page, more = _last_events(board.events_path, wanted, limit)
+            resp = {"events": [compact_event(e) for e in page], "more": more,
+                    "session": current, "server_time": _server_time(now)}
+            if counts:
+                resp["counts"] = all_counts(board.events_path)
+            return resp
+        out = None
         if since:
             t = parse_time(since, now) if not since.startswith("c:") else None
-            if t is not None:
-                out = [e for e in out if _event_epoch(e) is not None and _event_epoch(e) >= t]
-            else:
+            if t is None:
+                evs = _Events(board, current)
                 p = resolve(board, since, now, evs)
-                out = [e for e in out if _event_key(e) >= (p.sess.sid, p.offset)]
+                if p.sess.sid == current and not counts:     # la actual: sus eventos son la cola del archivo
+                    out = sort_events(_session_tail(board.events_path, current, p.offset, wanted))
+                elif p.sess.sid == current:
+                    out = evs.session(current, p.offset)
+                else:
+                    out = [e for e in sort_events(board.read_events()) if _event_key(e) >= (p.sess.sid, p.offset)]
+            else:
+                out = [e for e in sort_events(board.read_events())
+                       if _event_epoch(e) is not None and _event_epoch(e) >= t]
+        else:
+            out = sort_events(board.read_events())
         by_type = {}
         if counts:
             for e in out:

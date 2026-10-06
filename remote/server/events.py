@@ -138,21 +138,45 @@ def _append_raw(path: pathlib.Path, data: bytes) -> None:
         os.close(fd)
 
 
+def parse_line(raw: bytes) -> Optional[dict]:
+    """Una línea de events.jsonl → evento, o None si no es válida."""
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        return None
+    return ev if isinstance(ev, dict) else None
+
+
 def read(path) -> list:
     """Todos los eventos del archivo, en orden. Las líneas inválidas se saltean."""
-    out = []
     try:
         raw = pathlib.Path(path).read_bytes()
     except OSError:
-        return out
-    for line in raw.splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(ev, dict):
-            out.append(ev)
-    return out
+        return []
+    return [ev for ev in map(parse_line, raw.splitlines()) if ev is not None]
+
+
+def read_back(path, chunk: int = 65536):
+    """Las líneas de events.jsonl de la última a la primera (bytes, sin el \\n),
+    sin cargar el archivo entero: los pedidos frecuentes (el poll del CLI, los
+    últimos N del dashboard) solo necesitan la cola."""
+    try:
+        f = open(path, "rb")
+    except OSError:
+        return
+    with f:
+        pos = f.seek(0, os.SEEK_END)
+        rest = b""                       # principio (quizás cortado) de lo ya leído
+        while pos > 0:
+            start = max(0, pos - chunk)
+            f.seek(start)
+            lines = (f.read(pos - start) + rest).split(b"\n")
+            pos, rest = start, lines[0]
+            for line in reversed(lines[1:]):
+                if line:
+                    yield line
+        if rest:
+            yield rest
 
 
 def record(log_path, type_: str, detail: Optional[dict] = None, by: str = "api") -> Optional[dict]:
