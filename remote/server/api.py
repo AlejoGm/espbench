@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
+from server import benchinfo
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
@@ -527,6 +528,23 @@ async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authoriza
             detail.update(_forced_by(body, request))
         _record(state, "command", detail, cursor)
     return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
+
+
+# ---------- el bench entero: salud de la máquina y actividad de las placas ----------
+
+@app.get("/api/bench/health")
+async def bench_health():
+    """Temperatura, RAM, disco, carga y uptime de la máquina del bench."""
+    return await asyncio.to_thread(benchinfo.health)
+
+
+@app.get("/api/activity")
+async def bench_activity(hours: int = 24):
+    """Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y
+    los eventos recientes que merecen un aviso."""
+    hours = max(1, min(hours, 168))
+    devices = [dataclasses.asdict(d) for d in registry.list_devices()]
+    return await asyncio.to_thread(benchinfo.activity, devices, hours)
 
 
 # ---------- update del bench (espbench-update) ----------

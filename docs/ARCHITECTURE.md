@@ -349,6 +349,8 @@ boot ─────► devremote.service ────────────�
 
 | Endpoint | |
 |---|---|
+| `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
+| `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`) |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
 | `GET /api/version` | `{app: "espbench", version, name, auth}`: identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |

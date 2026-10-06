@@ -161,6 +161,9 @@ class DeviceInfo:
     # vencido no aparece.
     lock_expires: Optional[str] = None
     lock_expires_epoch: Optional[int] = None
+    # Última escritura del log de la sesión (epoch): el dashboard marca "sin log"
+    # una placa que monitorea pero no imprime nada hace rato.
+    last_log_epoch: Optional[float] = None
 
 
 class DeviceRegistry:
@@ -260,7 +263,15 @@ class DeviceRegistry:
             last_flash_ok=last_flash_ok,
             lock_expires=lock.expires_iso_tz() if lock else None,
             lock_expires_epoch=lock.expires if lock else None,
+            last_log_epoch=self._log_mtime(state),
         )
+
+    @staticmethod
+    def _log_mtime(state: dict) -> Optional[float]:
+        try:
+            return os.stat(state["log_path"]).st_mtime if state.get("log_path") else None
+        except OSError:
+            return None
 
     @staticmethod
     def _get_last_flash_user(tty_name: str, mac: Optional[str] = None) -> Optional[str]:
