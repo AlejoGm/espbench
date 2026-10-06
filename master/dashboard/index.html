@@ -109,11 +109,11 @@
             var direct = device.bench_url + '/device.html?tty=' + encodeURIComponent(device.tty_name);
 
             var card = document.createElement('div');
-            card.className = 'device-card ' + EB.cardState(device) + (device.mac ? '' : ' card-unknown') +
+            card.className = 'device-card ' + EB.cardState(device, catalog) + (device.mac ? '' : ' card-unknown') +
                              (device.lock_user ? ' locked' : '');
             card.dataset.search = [title, device.bench, device.tty_name, device.sn, device.mac, device.hw_model,
                                    device.fw_project, device.fw_version, device.last_flash_user, device.lock_user,
-                                   device.note, device.note_by]
+                                   device.note, device.note_by, EB.propsSearchText(device.props)]
                                   .filter(Boolean).join(' ').toLowerCase();
             card.dataset.props = JSON.stringify(device.props || {});
             var note = EB.noteHtml(device);
@@ -277,7 +277,7 @@
         }
 
         function renderSummary(devices) {
-            var c = EB.summarize(devices);
+            var c = EB.summarize(devices, undefined, catalog);
             var online = lastBenches.filter(function(b) { return b.online; }).length;
             function chip(n, cls, label, title) {
                 return n ? '<span class="sum-chip ' + cls + '" title="' + title + '"><b>' + n + '</b> ' + label + '</span>' : '';
@@ -290,6 +290,7 @@
                 chip(c.busy, 'sum-busy', 'ocupados', 'Flasheando, borrando o iniciando') +
                 chip(c.bad, 'sum-bad', 'con problemas', 'Panic, boot loop o reset anormal desde el último flash') +
                 chip(c.down, 'sum-down', 'caídos', 'Sin proceso vivo') +
+                chip(c.avoid, 'sum-avoid', 'no tocar / rotas', 'Con estado no-tocar o roto: no se eligen') +
                 chip(c.reserved, 'sum-locked', c.reserved === 1 ? 'reservada' : 'reservadas',
                      'Reservas vigentes:\n' + esc(c.who.join('\n'))) +
                 chip(c.flashLocked, 'sum-flashlock', 'con lock de flash', 'Lock del último flash, sin vencimiento');

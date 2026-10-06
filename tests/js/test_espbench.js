@@ -436,7 +436,7 @@ test('summarize: sin MAC solo cuenta en el total; reservas y locks del flash apa
         {status: 'DOWN', lock_user: 'x', lock_expires: '2026-10-06T15:00:00'},            // reserva vencida
         {status: 'RUNNING', state: 'unknown'},
     ], NOW);
-    assert.deepEqual(c, {total: 4, ok: 1, busy: 1, bad: 0, down: 1, reserved: 1, flashLocked: 1,
+    assert.deepEqual(c, {total: 4, ok: 1, busy: 1, bad: 0, down: 1, avoid: 0, reserved: 1, flashLocked: 1,
                          who: ['juan → b1 (hasta 16:20)']});
 });
 
@@ -554,4 +554,25 @@ test('eventView: note y props', () => {
     const p = EB.eventView(ev('props', {changes: {chip: {from: null, to: 'esp32'}, uso: {from: ['ci'], to: null}}}));
     assert.equal(p.detail, 'chip=esp32 · uso quitada');
     assert.equal(p.icon, '◇');
+});
+
+test('searchMatch: una MAC u hora con ":" es texto, no una propiedad', () => {
+    const text = 'board1 aa:bb:cc:dd:ee:01 conectividad:lte';
+    assert.ok(EB.searchMatch('aa:bb:cc', text, null, '', {}));
+    assert.ok(EB.searchMatch('AA:BB:CC:DD:EE:01', text, null, '', {}));
+    assert.ok(!EB.searchMatch('aa:bb:ff', text, null, '', {}));
+    assert.ok(EB.searchMatch('lte', text, null, '', {conectividad: ['lte']}));   // el valor suelto (data-search)
+    assert.deepEqual(EB.PROP_CATEGORIES, ['estado', 'uso', 'chip', 'conectividad', 'perifericos']);
+});
+
+test('avoided / cardState / summarize: estado no-tocar o roto no cuenta como ok', () => {
+    const base = {status: 'RUNNING', state: 'monitoring', mac: 'AA', health: {boots: 1, panics: 0}};
+    const nt = {...base, props: {estado: 'no-tocar'}};
+    assert.ok(EB.avoided(nt) && !EB.avoided({...base, props: {estado: 'testeando'}}));
+    assert.equal(EB.cardState(nt), 'st-avoid');
+    assert.equal(EB.cardState({...base, props: {estado: 'prestada'}}, CAT), 'st-ok');
+    const cat = [{id: 'estado', values: [{id: 'prestada', exclude_pick: true}]}];
+    assert.equal(EB.cardState({...base, props: {estado: 'prestada'}}, cat), 'st-avoid');
+    const c = EB.summarize([nt, base, {...base, props: {estado: 'roto'}}]);
+    assert.equal(c.ok, 1); assert.equal(c.avoid, 2);
 });

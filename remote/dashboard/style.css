@@ -1149,3 +1149,15 @@ body.hide-ts .terminal .ln-ts { display: none; }
 }
 .device-meta .meta-editor { flex-basis: 100%; }
 .device-meta .props-edit { max-width: 720px; }
+
+/* Estado no-tocar / roto (EB.avoided): sana pero no se elige */
+.device-card.st-avoid { border-left-color: #f85149; border-left-style: dashed; }
+.sum-avoid { border-color: #4d1b1b; } .sum-avoid b { color: #ff7b72; }
+
+/* Celular: botones de nota/propiedades con área táctil de 32 px */
+@media (max-width: 760px), (pointer: coarse) {
+    .meta-btn, .prop-chip { min-height: 32px; min-width: 32px; display: inline-flex; align-items: center;
+                            justify-content: center; }
+    .meta-btn { font-size: 0.9rem; padding: 4px 10px; }
+    .rename-ok, .rename-cancel { min-height: 32px; min-width: 32px; }
+}

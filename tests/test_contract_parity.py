@@ -110,3 +110,12 @@ def test_session_name_device_log_history_and_js_agree():
     assert node("sessionStart", names) == [time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(epoch))] * 3
     assert node("sessionStart", bad) == [None] * len(bad)
     assert not any(history.SESSION_RE.fullmatch(n) for n in bad[1:])
+
+
+@needs_node
+def test_property_categories_are_the_same_in_the_dashboard():
+    """EB.PROP_CATEGORIES (searchMatch decide si "x:" es una propiedad) = board_meta.CATEGORY_IDS."""
+    from server import board_meta
+    script = "process.stdout.write(JSON.stringify(require(process.argv[1]).PROP_CATEGORIES))"
+    r = subprocess.run(["node", "-e", script, str(EB)], capture_output=True, text=True, check=True)
+    assert json.loads(r.stdout) == board_meta.CATEGORY_IDS

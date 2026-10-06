@@ -327,7 +327,8 @@
         var rest = [];
         var ok = q.split(/\s+/).every(function (tok) {
             var m = /^([a-z_]+):(.*)$/.exec(tok);
-            if (!m || m[1] === 'lock') { rest.push(tok); return true; }
+            // Solo una categoría de propiedades: "aa:bb:cc..." (una MAC) o "10:30" son texto.
+            if (!m || PROP_CATEGORIES.indexOf(m[1]) < 0) { rest.push(tok); return true; }
             var have = propValues((props || {})[m[1]]);
             return m[2] ? have.indexOf(m[2]) >= 0 : have.length > 0;
         });
@@ -336,7 +337,28 @@
 
     // ── Nota y propiedades de la placa (/api/devices: note*, props; /api/properties) ──
 
+    // Las categorías son fijas, en el código del server (board_meta.CATEGORIES): copia a propósito
+    // (searchMatch la necesita sin pedir el catálogo); tests/test_contract_parity.py compara las dos.
+    var PROP_CATEGORIES = ['estado', 'uso', 'chip', 'conectividad', 'perifericos'];
+    // Sin catálogo (bench viejo, o todavía no llegó): los valores que excluyen de pick.
+    var DEFAULT_EXCLUDE = {estado: ['no-tocar', 'roto']};
+
     function propValues(v) { return Array.isArray(v) ? v : (v ? [v] : []); }
+
+    // ¿La placa tiene una propiedad que la excluye (estado no-tocar / roto: exclude_pick)?
+    function avoided(device, catalog) {
+        var props = (device && device.props) || {};
+        var excl = DEFAULT_EXCLUDE;
+        if (catalog && catalog.length) {
+            excl = {};
+            catalog.forEach(function (c) {
+                excl[c.id] = (c.values || []).filter(function (v) { return v.exclude_pick; }).map(function (v) { return v.id; });
+            });
+        }
+        return Object.keys(props).some(function (cat) {
+            return propValues(props[cat]).some(function (v) { return (excl[cat] || []).indexOf(v) >= 0; });
+        });
+    }
 
     // Nota para mostrar, o null: {text, by, ago, title}. note_at viene con la zona de la Pi.
     function noteInfo(d, now) {
@@ -798,12 +820,13 @@
     // ── Cards (compartido con bench-master) ───────────────────────────────
 
     // Clase de la franja de color de la card según estado de la FSM y salud.
-    function cardState(device) {
+    // Una placa sana con estado no-tocar/roto (avoided) no es "ok": st-avoid (no se elige).
+    function cardState(device, catalog) {
         if (device.status !== 'RUNNING') return 'st-down';
         if (device.state === 'flashing' || device.state === 'erasing' || device.state === 'discovering') return 'st-busy';
         if (device.state === 'unknown') return 'st-unknown';
         var lvl = healthLevel(device.health);
-        return lvl === 'bad' ? 'st-bad' : lvl === 'warn' ? 'st-warn' : 'st-ok';
+        return lvl === 'bad' ? 'st-bad' : lvl === 'warn' ? 'st-warn' : avoided(device, catalog) ? 'st-avoid' : 'st-ok';
     }
 
     // Estado de la FSM (run/<tty>.json). "monitoring" es lo normal y no lleva badge.
@@ -841,13 +864,14 @@
 
     // Contadores del header. Los devices sin MAC (st-unknown) cuentan en el total y nada más.
     // Locks: reservas vigentes (con `who` para el tooltip) y locks del flash, por separado.
-    function summarize(devices, now) {
-        var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, reserved: 0, flashLocked: 0, who: []};
+    function summarize(devices, now, catalog) {
+        var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, avoid: 0, reserved: 0, flashLocked: 0, who: []};
         devices.forEach(function (d) {
-            var st = cardState(d);
+            var st = cardState(d, catalog);
             if (st === 'st-down') c.down++;
             else if (st === 'st-busy') c.busy++;
             else if (st === 'st-bad' || st === 'st-warn') c.bad++;
+            else if (st === 'st-avoid') c.avoid++;
             else if (st !== 'st-unknown') c.ok++;
         });
         devices.forEach(function (d) {
@@ -880,7 +904,7 @@
     return {
         fmtDur: fmtDur, secondsUntil: secondsUntil, expiresText: expiresText, lockInfo: lockInfo,
         forceConfirmText: forceConfirmText, searchMatch: searchMatch,
-        propValues: propValues, noteInfo: noteInfo, noteHtml: noteHtml, noteCheck: noteCheck, NOTE_MAX: NOTE_MAX,
+        propValues: propValues, PROP_CATEGORIES: PROP_CATEGORIES, avoided: avoided, noteInfo: noteInfo, noteHtml: noteHtml, noteCheck: noteCheck, NOTE_MAX: NOTE_MAX,
         mergeCatalogs: mergeCatalogs, propChips: propChips, propChipsHtml: propChipsHtml,
         propsSearchText: propsSearchText, propsEditModel: propsEditModel, propsPatch: propsPatch, propValueId: propValueId,
         EVENT_TYPES: EVENT_TYPES, EVENT_ORDER: EVENT_ORDER, eventDetail: eventDetail, eventView: eventView,

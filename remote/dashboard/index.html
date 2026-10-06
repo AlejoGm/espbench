@@ -59,7 +59,7 @@
         var stateBadge = EB.stateBadgeHtml;
 
         // Clase de la franja de color de la izquierda (estado de la FSM y salud).
-        function cardStateClass(device) { return ' ' + EB.cardState(device); }
+        function cardStateClass(device) { return ' ' + EB.cardState(device, EBMeta.catalog()); }
 
         var _renamingTty = null;
 
@@ -103,7 +103,7 @@
             card.dataset.lockKind = lock ? (lock.reservation ? 'reserva' : 'flash') : '';
             card.dataset.search = [title, device.tty_name, device.sn, device.mac, device.hw_model,
                                    device.fw_project, device.fw_version, device.last_flash_user, device.lock_user,
-                                   device.note, device.note_by]
+                                   device.note, device.note_by, EB.propsSearchText(device.props)]
                                   .filter(Boolean).join(' ').toLowerCase();
             card.dataset.props = JSON.stringify(device.props || {});
 
@@ -364,7 +364,7 @@
 
         // Contadores del header: de un vistazo, cuántos andan y cuántos tienen problemas.
         function renderSummary(devices) {
-            var c = EB.summarize(devices);
+            var c = EB.summarize(devices, undefined, EBMeta.catalog());
             var who = c.who;
             function chip(n, cls, label, title) {
                 // title ya viene escapado
@@ -376,6 +376,7 @@
                 chip(c.busy, 'sum-busy', 'ocupados', 'Flasheando, borrando o iniciando') +
                 chip(c.bad, 'sum-bad', 'con problemas', 'Panic, boot loop o reset anormal desde el último flash') +
                 chip(c.down, 'sum-down', 'caídos', 'Sin proceso vivo') +
+                chip(c.avoid, 'sum-avoid', 'no tocar / rotas', 'Con estado no-tocar o roto: no se eligen') +
                 chip(c.reserved, 'sum-locked sum-click', c.reserved === 1 ? 'reservada' : 'reservadas',
                      'Reservas vigentes (click: filtrar):\n' + escapeHtml(who.join('\n'))) +
                 chip(c.flashLocked, 'sum-flashlock sum-click', 'con lock de flash',
