@@ -102,7 +102,7 @@ class BenchState:
 
     def summary(self) -> dict:
         b = self.bench
-        return {"name": b.name, "url": b.url, "address": b.address, "port": b.port, "source": b.source,
+        return {"name": b.name, "id": b.id, "url": b.url, "address": b.address, "port": b.port, "source": b.source,
                 "version": b.version, "online": self.online, "last_seen": self.last_seen,
                 "error": self.error, "device_count": len(b.devices)}
 
@@ -117,33 +117,52 @@ class BenchCache:
         self.last_scan: Optional[str] = None
 
     def update(self, found: List[Bench]) -> None:
+        """Por identidad del bench (MAC del host, `Bench.key`), no por nombre: un bench
+        renombrado sigue siendo el mismo, con el nombre nuevo."""
         now = self._now()
         seen = set()
         for b in found:
-            seen.add(b.name)
-            # Un bench que cambió de nombre (bench_name) contesta desde la misma
-            # dirección: es el mismo, no uno nuevo. Sin esto el nombre viejo quedaba
-            # como caído, con la foto vieja de sus placas (duplicadas en la grilla).
-            for old in [n for n, st in self._states.items() if n != b.name and st.bench.url == b.url]:
+            k = b.key
+            seen.add(k)
+            # El mismo host bajo otra clave: un bench viejo (sin id, por nombre) que se
+            # actualizó o se renombró contesta desde la misma URL. Si no se borra, queda
+            # como caído con la foto vieja de sus placas (duplicadas en la grilla).
+            for old in [o for o, st in self._states.items() if o != k and st.bench.url == b.url]:
                 del self._states[old]
-            prev = self._states.get(b.name)
+            prev = self._states.get(k)
             if b.ok:
-                self._states[b.name] = BenchState(b, online=True, last_seen=now)
+                self._states[k] = BenchState(b, online=True, last_seen=now)
             elif prev:
                 # Contestó /api/version pero no /api/devices: se queda el snapshot anterior.
                 prev.online, prev.error = False, b.error
             else:
-                self._states[b.name] = BenchState(b, online=False, last_seen=None, error=b.error)
-        for name, st in self._states.items():
-            if name not in seen:
+                self._states[k] = BenchState(b, online=False, last_seen=None, error=b.error)
+        for k, st in self._states.items():
+            if k not in seen:
                 st.online, st.error = False, "no responde"
+        self._unique_names()
         self.last_scan = now
+
+    def _unique_names(self) -> None:
+        """El nombre va en las URLs (/bench/<nombre>/): dos máquinas que se llaman igual
+        (el hostname por defecto, por ejemplo) se distinguen con el final de su MAC."""
+        by_name: Dict[str, List[BenchState]] = {}
+        for st in self._states.values():
+            by_name.setdefault(st.bench.name, []).append(st)
+        for name, group in by_name.items():
+            if len(group) > 1:
+                for st in group:
+                    if st.bench.id:
+                        st.bench.name = f"{name}-{st.bench.id.replace(':', '')[-4:]}"
 
     async def refresh(self) -> None:
         self.update(await asyncio.get_running_loop().run_in_executor(None, self._scan))
 
     def get(self, name: str) -> Optional[BenchState]:
-        return self._states.get(name)
+        for st in self._states.values():
+            if st.bench.name == name:
+                return st
+        return None
 
     def states(self) -> List[BenchState]:
         # Online primero, después por nombre.

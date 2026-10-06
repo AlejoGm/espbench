@@ -32,9 +32,9 @@ DEV_B = {"tty_name": "ttyUSB0", "port_tcp": 5000, "mac": "AA:BB:CC:DD:EE:FF", "s
          "device_key": "medidor-b", "status": "RUNNING"}
 
 
-def bench(name, *devices, ok=True, url=None, error=None):
+def bench(name, *devices, ok=True, url=None, error=None, id=None):
     return Bench(name=name, url=url or f"http://{name}:8080", address=name, port=8080, source="tailscale",
-                 version="0.14.0", ok=ok, error=error, devices=list(devices))
+                 version="0.14.0", ok=ok, error=error, devices=list(devices), id=id)
 
 
 class Clock:
@@ -81,6 +81,31 @@ def test_cache_bench_renamed_replaces_old_name():
     cache.update([bench("dev", DEV_A, url="http://100.1.1.3:8080"), bench("pi2", DEV_B)])
     assert [st.bench.name for st in cache.states()] == ["dev", "pi2"]
     assert [d["bench"] for d in cache.devices()] == ["dev", "pi2"]
+
+
+def test_cache_same_host_renamed_and_seen_by_another_address():
+    """Por MAC del host: renombrado y visto por otra URL (LAN → Tailscale) es el mismo bench."""
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://192.168.1.20:8080", id="dc:a6:32:00:00:01")])
+    cache.update([bench("dev", DEV_A, url="http://100.1.1.3:8080", id="dc:a6:32:00:00:01")])
+    assert [(st.bench.name, st.online) for st in cache.states()] == [("dev", True)]
+    assert cache.get("dev") is not None and cache.get("sensipi03") is None
+
+
+def test_cache_legacy_bench_upgraded_to_id():
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080")])                      # sin id
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080", id="dc:a6:32:00:00:01")])
+    assert len(cache.states()) == 1 and cache.states()[0].bench.id == "dc:a6:32:00:00:01"
+
+
+def test_cache_two_hosts_same_name_get_distinct_names():
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("raspberrypi", DEV_A, url="http://10.0.0.1:8080", id="aa:00:00:00:00:01"),
+                  bench("raspberrypi", DEV_B, url="http://10.0.0.2:8080", id="aa:00:00:00:00:02")])
+    names = sorted(st.bench.name for st in cache.states())
+    assert names == ["raspberrypi-0001", "raspberrypi-0002"]
+    assert cache.get("raspberrypi-0002").bench.devices == [DEV_B]
 
 
 def test_cache_devices_failure_keeps_previous_snapshot():

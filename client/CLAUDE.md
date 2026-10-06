@@ -53,7 +53,7 @@ Solo stdlib: lo usan `deploy.py` y bench-master (`master/`). El CLI `espbench` t
 - Candidatos: peers **online** de `tailscale status --json` + `hosts` de `~/.config/espbench-benches.json`
   (`ESPBENCH_BENCHES_CONFIG` para otra ruta): `{"tailscale": true, "hosts": ["10.0.0.5", "lab:8080"], "timeout_s": 2}`.
 - Es bench si `GET /api/version` devuelve `app: "espbench"` (o solo `{"version"}`, benches sin actualizar).
-  El nombre lo declara el bench (`name`); dos caminos al mismo bench cuentan una vez.
+  Lo identifica la MAC de la máquina (`id`, `Bench.key`; sin ella, el nombre): dos caminos al mismo bench cuentan una vez.
 - `resolve(key)`: key = device_key, SN, MAC o `<bench>/<tty>`. `ResolveError` si no está o si está en más de un bench.
 
 En `.flashcfg.json`, un remote de `deploy.py` **sin `host`** (o `"host": "auto"`) se resuelve así: `{"name": "medidor-a", "lock_user": ..., "lock_token": ...}`.

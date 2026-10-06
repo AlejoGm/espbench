@@ -208,3 +208,28 @@ def test_deploy_host_auto_resolves_bench(monkeypatch):
 def test_deploy_explicit_host_and_port_untouched():
     from client import deploy
     assert deploy._resolve_device_port({"host": "sensipi01", "port": 5003}) == (5003, None)
+
+
+def test_probe_reads_host_id_and_scan_dedups_by_it():
+    lan, ts = "http://192.168.1.20:8080", "http://100.75.179.122:8080"
+    net = fake_net({
+        lan + "/api/version": {"app": "espbench", "version": "1", "name": "lab", "id": "DC:A6:32:00:00:01"},
+        lan + "/api/devices": [DEV_A],
+        ts + "/api/version": {"app": "espbench", "version": "1", "name": "lab", "id": "dc:a6:32:00:00:01"},
+        ts + "/api/devices": [DEV_A],
+    })
+    found = benches.scan({"hosts": ["192.168.1.20"], "tailscale": True}, TS_STATUS, net)
+    assert [(b.name, b.id, b.key) for b in found] == [("lab", "dc:a6:32:00:00:01", "dc:a6:32:00:00:01")]
+
+
+def test_scan_keeps_two_hosts_with_the_same_name():
+    a, b = "http://10.0.0.1:8080", "http://10.0.0.2:8080"
+    net = fake_net({a + "/api/version": {"app": "espbench", "version": "1", "name": "raspberrypi", "id": "aa:00:00:00:00:01"},
+                    a + "/api/devices": [], b + "/api/devices": [],
+                    b + "/api/version": {"app": "espbench", "version": "1", "name": "raspberrypi", "id": "aa:00:00:00:00:02"}})
+    found = benches.scan({"hosts": ["10.0.0.1", "10.0.0.2"], "tailscale": False}, None, net)
+    assert sorted(x.id for x in found) == ["aa:00:00:00:00:01", "aa:00:00:00:00:02"]
+
+
+def test_legacy_bench_key_is_its_name():
+    assert _bench("pi1").key == "name:pi1"

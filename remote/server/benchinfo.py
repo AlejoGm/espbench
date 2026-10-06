@@ -13,8 +13,10 @@ import datetime as dt
 import os
 import pathlib
 import shutil
+import functools
 import socket
 import time
+import uuid
 from typing import Dict, List, Optional
 
 from server import events, paths
@@ -74,6 +76,36 @@ def health(root: str = "/", disk_path: Optional[str] = None) -> dict:
         "load": load,
         "uptime_s": int(float(uptime.split()[0])) if uptime else None,
     }
+
+
+# Interfaces que no son la placa de red de la máquina (la MAC cambia o no existe).
+_VIRTUAL = ("lo", "tailscale", "docker", "veth", "br-", "virbr", "wg", "tun", "tap", "zt")
+
+
+def host_id(root: str = "/") -> Optional[str]:
+    """MAC de la máquina: la identidad del bench para bench-master, que no cambia
+    si se renombra (bench_name), cambia de IP o se lo ve por LAN y por Tailscale.
+    eth0/end0/wlan0 primero; si no hay /sys (Mac), la que da uuid.getnode()."""
+    net = pathlib.Path(root) / "sys/class/net"
+    try:
+        names = sorted(p.name for p in net.iterdir())
+    except OSError:
+        names = []
+    for n in [n for n in ("eth0", "end0", "wlan0") if n in names] + [n for n in names if not n.startswith(_VIRTUAL)]:
+        mac = _read(pathlib.Path(root), f"sys/class/net/{n}/address")
+        if mac and mac != "00:00:00:00:00:00":
+            return mac.lower()
+    if root != "/":
+        return None
+    node = uuid.getnode()
+    if (node >> 40) & 1:            # bit multicast: uuid lo inventó, no es una MAC real
+        return None
+    return ":".join(f"{(node >> s) & 0xff:02x}" for s in range(40, -1, -8))
+
+
+@functools.lru_cache(maxsize=1)
+def this_host_id() -> Optional[str]:
+    return host_id()
 
 
 # ---------- actividad por hora ----------

@@ -729,7 +729,9 @@ def test_version_identifies_bench(monkeypatch):
     monkeypatch.setattr(api.socket, "gethostname", lambda: "sensipi02")
     paths.version_file().parent.mkdir(parents=True, exist_ok=True)
     paths.version_file().write_text("0.13.0\n")
-    assert run(api.get_version()) == {"app": "espbench", "version": "0.13.0", "name": "sensipi02", "auth": False}
+    monkeypatch.setattr(api.benchinfo, "this_host_id", lambda: "dc:a6:32:01:02:03")
+    assert run(api.get_version()) == {"app": "espbench", "version": "0.13.0", "name": "sensipi02",
+                                      "id": "dc:a6:32:01:02:03", "auth": False}
     paths.bench_name_file().write_text("lab-cordoba\n")
     assert run(api.get_version())["name"] == "lab-cordoba"
 

@@ -118,3 +118,23 @@ def test_last_log_epoch_none_without_log(tmp_path):
     (dev / "ttyUSB0").touch()
     runstate.write("ttyUSB0", {"mac": MAC, "state": "monitoring", "log_path": str(tmp_path / "no.log")})
     assert DeviceRegistry(dev_dir=str(dev)).list_devices()[0].last_log_epoch is None
+
+
+def net_root(tmp_path, ifaces):
+    r = tmp_path / "netroot"
+    for name, mac in ifaces.items():
+        d = r / "sys/class/net" / name
+        d.mkdir(parents=True)
+        (d / "address").write_text(mac + "\n")
+    return str(r)
+
+
+def test_host_id_prefers_physical_interface(tmp_path):
+    root = net_root(tmp_path, {"lo": "00:00:00:00:00:00", "tailscale0": "", "docker0": "02:42:aa:bb:cc:dd",
+                               "wlan0": "DC:A6:32:00:00:02", "eth0": "DC:A6:32:00:00:01"})
+    assert benchinfo.host_id(root) == "dc:a6:32:00:00:01"
+
+
+def test_host_id_wlan_only_and_none(tmp_path):
+    assert benchinfo.host_id(net_root(tmp_path, {"lo": "00:00:00:00:00:00", "wlan0": "dc:a6:32:00:00:02"})) == "dc:a6:32:00:00:02"
+    assert benchinfo.host_id(str(tmp_path / "vacio")) is None

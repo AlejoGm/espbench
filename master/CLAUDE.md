@@ -17,7 +17,7 @@ master/bench-master --open        # arma master/.venv la primera vez; http://loc
 ## Cómo funciona
 
 - **Discovery**: `client/benches.py` (Tailscale + `~/.config/espbench-benches.json`), cada `--poll` segundos en un thread.
-- **`BenchCache`**: por nombre de bench. Un bench que deja de contestar queda `online: false` con el **último snapshot** de sus devices y `last_seen`. Nada en disco: al reiniciar el master se pierde.
+- **`BenchCache`**: por identidad del bench (MAC del host, `Bench.key`), no por nombre: renombrado o con otra IP sigue siendo el mismo. Un bench viejo sin `id` va por nombre, y si aparece con `id` en la misma URL lo reemplaza. Nombres repetidos entre máquinas distintas llevan el final de la MAC. Un bench que deja de contestar queda `online: false` con el **último snapshot** de sus devices y `last_seen`. Nada en disco: al reiniciar el master se pierde.
 - **API**: `GET /api/benches`, `GET /api/devices` (cada device con `bench`, `bench_url`, `bench_online`), `GET /api/resolve/{key}` (solo benches online; 404 / 409 si es ambiguo), `POST /api/rescan`, `GET /api/version`.
 - **Proxy**: `/bench/<nombre>/<path>` → `http://<bench>:8080/<path>` (todos los métodos), `/bench/<nombre>/ws/<path>` → WebSocket del bench. Así el `device.html` del bench (log en vivo, consola, historial) anda a través del master. Requiere benches con el frontend de URLs relativas (≥ 0.13.0); los viejos se abren con el link directo `↗`.
 - **Datos de cada bench**: el master solo pollea `/api/devices`; la página pide por el proxy, cada 30 s, `/api/bench/health`, `/api/activity` y `/api/update` de cada bench online.

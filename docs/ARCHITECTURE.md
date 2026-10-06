@@ -352,7 +352,7 @@ boot ─────► devremote.service ────────────�
 | `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
 | `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`) |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
-| `GET /api/version` | `{app: "espbench", version, name, auth}`: identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
+| `GET /api/version` | `{app: "espbench", version, name, id, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
 | `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar) lo suelta sin el par y **exige** token de la API (sin `/opt/esp/api_token` → 403 `force_disabled`). Evento `release` con el dueño anterior y, si se forzó, `by_user`/`by_host` |
@@ -577,8 +577,10 @@ client/benches.py ── tailscale status --json (peers online) + ~/.config/espb
                           └─ /bench/<nombre>/... → proxy HTTP + WS al dashboard de ese bench
 ```
 
-- **Identidad**: la declara el bench (`/opt/esp/bench_name` o hostname), no la fuente. El mismo bench visto
-  por LAN y por Tailscale cuenta una vez; renombrarlo en la tailnet no lo cambia. Un bench sin actualizar
+- **Identidad**: la MAC de la máquina (`id` en `/api/version`, `benchinfo.host_id`: eth0/end0/wlan0 antes que las
+  virtuales). El mismo bench visto por LAN y por Tailscale cuenta una vez, y renombrarlo (`/opt/esp/bench_name`) o
+  cambiarle la IP no lo convierte en otro. El nombre es para mostrar y para las URLs `/bench/<nombre>/`: dos
+  máquinas con el mismo nombre se distinguen con el final de su MAC (`raspberrypi-0001`). Un bench sin actualizar
   (`/api/version` solo con `version`, o `version` + `auth`) se acepta con el nombre de la fuente.
 - **Tailscale**: se prueban todos los peers online (sin patrón de nombre: un bench puede no llamarse `sensipi*`).
   Los offline no se prueban (sería un timeout por cada uno).

@@ -47,7 +47,8 @@ def _read_first_line(path: pathlib.Path) -> str:
 @app.get("/api/version")
 async def get_version():
     """También es la identidad del bench para bench-master: `app` dice que es un
-    espbench (lo distingue de otros hosts de la tailnet) y `name`, cómo se llama.
+    espbench (lo distingue de otros hosts de la tailnet), `name`, cómo se llama, e
+    `id`, la MAC de la máquina (lo que lo identifica aunque cambie de nombre o de IP).
     `auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo si lo
     hay: `unlock` forzado lo exige)."""
     try:
@@ -58,6 +59,7 @@ async def get_version():
         "app": "espbench",
         "version": _read_first_line(paths.version_file()) or "dev",
         "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
+        "id": benchinfo.this_host_id(),
         "auth": has_token,
     }
 
