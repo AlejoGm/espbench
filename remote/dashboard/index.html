@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench</title>
-    <link rel="stylesheet" href="/style.css">
-    <script src="/espbench.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <script src="espbench.js"></script>
 </head>
 <body>
     <header class="home-header">
@@ -53,48 +53,12 @@
             }).join('') + '</div>';
         }
 
-        // "app v1.2.3 · IDF v5.3.2", con lo que haya.
-        function firmwareText(device) {
-            var parts = [];
-            if (device.fw_project) parts.push(escapeHtml(device.fw_project));
-            if (device.fw_version) parts.push('<span class="fw-version nowrap">' + escapeHtml(device.fw_version) + '</span>');
-            var main = parts.join(' ');
-            if (device.fw_idf) main += (main ? ' <span class="dim">·</span> ' : '') + '<span class="dim nowrap">IDF ' + escapeHtml(device.fw_idf) + '</span>';
-            return main;
-        }
+        var firmwareText = EB.firmwareHtml;
+        var lastFlashHtml = function(device) { return EB.lastFlashHtml(device); };
+        var stateBadge = EB.stateBadgeHtml;
 
-        function lastFlashHtml(device) {
-            if (!device.last_flash_ts) return '<span class="dim">nunca</span>';
-            var icon = device.last_flash_ok === true ? '<span class="ok-mark">✓</span> '
-                     : device.last_flash_ok === false ? '<span class="fail-mark">✗</span> ' : '';
-            var who = device.last_flash_user ? ' <span class="dim">·</span> ' + escapeHtml(device.last_flash_user) : '';
-            return icon + escapeHtml(EB.relTime(device.last_flash_ts) || device.last_flash_ts) + who;
-        }
-
-        // Clases de la card según estado de la FSM y salud: la franja de color de la izquierda.
-        function cardStateClass(device) {
-            if (device.status !== 'RUNNING') return ' st-down';
-            if (device.state === 'flashing' || device.state === 'erasing') return ' st-busy';
-            if (device.state === 'discovering') return ' st-busy';
-            if (device.state === 'unknown') return ' st-unknown';
-            var lvl = EB.healthLevel(device.health);
-            return lvl === 'bad' ? ' st-bad' : lvl === 'warn' ? ' st-warn' : ' st-ok';
-        }
-
-        // Estado de la FSM del device (run/<tty>.json). "monitoring" es lo normal
-        // y no lleva badge; el resto sí, para ver de un vistazo qué está pasando.
-        var STATE_BADGES = {
-            discovering: ['badge-busy',    'INICIANDO'],
-            flashing:    ['badge-busy',    'FLASHEANDO'],
-            erasing:     ['badge-busy',    'BORRANDO'],
-            unknown:     ['badge-unknown', 'SIN MAC'],
-            disconnected:['badge-down',    'DESCONECTADO']
-        };
-
-        function stateBadge(device) {
-            var b = STATE_BADGES[device.state];
-            return b ? '<span class="badge ' + b[0] + '">' + b[1] + '</span>' : '';
-        }
+        // Clase de la franja de color de la izquierda (estado de la FSM y salud).
+        function cardStateClass(device) { return ' ' + EB.cardState(device); }
 
         var _renamingTty = null;
 
@@ -142,7 +106,7 @@
                     snRow + ttyRow +
                 '</div>' +
                 '<div class="card-footer">' +
-                    '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
+                    '<a class="btn-monitor" href="device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
                     '<button class="btn-copy" id="copy-btn-' + tty + '">⎘ Config</button>' +
                 '</div>';
 
@@ -213,7 +177,7 @@
             var newKey = inp.value.trim();
             if (!newKey) return;
 
-            fetch('/api/devices/' + mac, {
+            fetch('api/devices/' + mac, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({device_key: newKey})
@@ -232,7 +196,7 @@
         function copyConfig(device) {
             var snippet = {
                 name: device.device_key || device.tty_name,
-                host: window.location.hostname,
+                host: EB.basePath(location.pathname) === '/' ? location.hostname : 'auto',
                 token: "",
                 lock_user: "",
                 lock_token: ""
@@ -294,7 +258,7 @@
                     snRow + row('Puerto TCP', escapeHtml(String(device.port_tcp))) +
                 '</div>' +
                 '<div class="card-footer">' +
-                    '<a class="btn-monitor" href="/device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
+                    '<a class="btn-monitor" href="device.html?tty=' + encodeURIComponent(device.tty_name) + '">Ver monitor</a>' +
                 '</div>';
 
             return card;
@@ -332,16 +296,7 @@
 
         // Contadores del header: de un vistazo, cuántos andan y cuántos tienen problemas.
         function renderSummary(devices) {
-            var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, locked: 0};
-            devices.forEach(function(d) {
-                var cls = cardStateClass(d);
-                if (cls === ' st-down') c.down++;
-                else if (cls === ' st-busy') c.busy++;
-                else if (cls === ' st-bad' || cls === ' st-warn') c.bad++;
-                else if (cls === ' st-unknown') return;
-                else c.ok++;
-                if (d.lock_user) c.locked++;
-            });
+            var c = EB.summarize(devices);
             function chip(n, cls, label, title) {
                 return n ? '<span class="sum-chip ' + cls + '" title="' + title + '"><b>' + n + '</b> ' + label + '</span>' : '';
             }
@@ -372,13 +327,13 @@
         });
 
         function fetchDevices() {
-            fetch('/api/devices')
+            fetch('api/devices')
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function(devices) { renderSummary(devices || []); renderDevices(devices); })
                 .catch(function(err) { console.error('Error:', err); });
         }
 
-        fetch('/api/version')
+        fetch('api/version')
             .then(function(r) { return r.json(); })
             .then(function(d) {
                 var el = document.getElementById('version-badge');

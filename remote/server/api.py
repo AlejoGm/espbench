@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import pathlib
 import re
+import socket
 import subprocess
 from typing import Any
 from urllib.parse import unquote
@@ -37,14 +38,22 @@ async def _startup():
     streamer.scan_all()
 
 
+def _read_first_line(path: pathlib.Path) -> str:
+    try:
+        return path.read_text().strip() if path.exists() else ""
+    except OSError:
+        return ""
+
+
 @app.get("/api/version")
 async def get_version():
-    try:
-        version_file = paths.version_file()
-        version = version_file.read_text().strip() if version_file.exists() else "dev"
-    except Exception:
-        version = "dev"
-    return {"version": version}
+    """También es la identidad del bench para bench-master: `app` dice que es un
+    espbench (lo distingue de otros hosts de la tailnet) y `name`, cómo se llama."""
+    return {
+        "app": "espbench",
+        "version": _read_first_line(paths.version_file()) or "dev",
+        "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
+    }
 
 
 @app.get("/api/devices")

@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench — monitor</title>
-    <link rel="stylesheet" href="/style.css">
-    <script src="/espbench.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <script src="espbench.js"></script>
 </head>
 <body class="device-page">
 
     <div class="device-header">
-        <a class="back-link" href="/">← inicio</a>
+        <a class="back-link" href="./">← inicio</a>
         <span class="separator">/</span>
         <span class="device-name" id="device-name"></span>
         <div class="device-badges" id="device-badges"></div>
@@ -76,7 +76,7 @@
     <script>
         var params = new URLSearchParams(window.location.search);
         var tty = params.get('tty') || '';
-        var api = '/api/device/' + encodeURIComponent(tty);
+        var api = 'api/device/' + encodeURIComponent(tty);
         var $ = function(id) { return document.getElementById(id); };
         var terminal = $('terminal');
         var ws = null;
@@ -498,8 +498,7 @@
         function connect() {
             if (ws) { ws.onclose = null; ws.close(); }
             setStatus('reconnecting');
-            var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(wsProto + '//' + location.host + '/ws/device/' + encodeURIComponent(tty));
+            ws = new WebSocket(EB.wsUrl(location, 'ws/device/' + encodeURIComponent(tty)));
             ws.onopen = function() {
                 setStatus('connected');
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }

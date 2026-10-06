@@ -185,10 +185,83 @@
     // Lo que se muestra de la línea en curso.
     LineBuffer.prototype.partialView = function () { return overwrite(this.partial); };
 
+    // ── Cards (compartido con bench-master) ───────────────────────────────
+
+    // Clase de la franja de color de la card según estado de la FSM y salud.
+    function cardState(device) {
+        if (device.status !== 'RUNNING') return 'st-down';
+        if (device.state === 'flashing' || device.state === 'erasing' || device.state === 'discovering') return 'st-busy';
+        if (device.state === 'unknown') return 'st-unknown';
+        var lvl = healthLevel(device.health);
+        return lvl === 'bad' ? 'st-bad' : lvl === 'warn' ? 'st-warn' : 'st-ok';
+    }
+
+    // Estado de la FSM (run/<tty>.json). "monitoring" es lo normal y no lleva badge.
+    var STATE_BADGES = {
+        discovering: ['badge-busy',    'INICIANDO'],
+        flashing:    ['badge-busy',    'FLASHEANDO'],
+        erasing:     ['badge-busy',    'BORRANDO'],
+        unknown:     ['badge-unknown', 'SIN MAC'],
+        disconnected:['badge-down',    'DESCONECTADO']
+    };
+
+    function stateBadgeHtml(device) {
+        var b = STATE_BADGES[device.state];
+        return b ? '<span class="badge ' + b[0] + '">' + b[1] + '</span>' : '';
+    }
+
+    // "app v1.2.3 · IDF v5.3.2", con lo que haya.
+    function firmwareHtml(device) {
+        var parts = [];
+        if (device.fw_project) parts.push(escapeHtml(device.fw_project));
+        if (device.fw_version) parts.push('<span class="fw-version nowrap">' + escapeHtml(device.fw_version) + '</span>');
+        var main = parts.join(' ');
+        if (device.fw_idf) main += (main ? ' <span class="dim">·</span> ' : '') + '<span class="dim nowrap">IDF ' + escapeHtml(device.fw_idf) + '</span>';
+        return main;
+    }
+
+    function lastFlashHtml(device, now) {
+        if (!device.last_flash_ts) return '<span class="dim">nunca</span>';
+        var icon = device.last_flash_ok === true ? '<span class="ok-mark">✓</span> '
+                 : device.last_flash_ok === false ? '<span class="fail-mark">✗</span> ' : '';
+        var who = device.last_flash_user ? ' <span class="dim">·</span> ' + escapeHtml(device.last_flash_user) : '';
+        return icon + escapeHtml(relTime(device.last_flash_ts, now) || device.last_flash_ts) + who;
+    }
+
+    // Contadores del header. Los devices sin MAC (st-unknown) cuentan en el total y nada más.
+    function summarize(devices) {
+        var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, locked: 0};
+        devices.forEach(function (d) {
+            var st = cardState(d);
+            if (st === 'st-down') c.down++;
+            else if (st === 'st-busy') c.busy++;
+            else if (st === 'st-bad' || st === 'st-warn') c.bad++;
+            else if (st === 'st-unknown') return;
+            else c.ok++;
+            if (d.lock_user) c.locked++;
+        });
+        return c;
+    }
+
+    // ── URLs ──────────────────────────────────────────────────────────────
+
+    // Directorio de la página: "/" servida directo por el bench, "/bench/<nombre>/"
+    // a través de bench-master. Todas las URLs del dashboard son relativas a esto.
+    function basePath(pathname) {
+        return pathname.replace(/[^/]*$/, '') || '/';
+    }
+
+    function wsUrl(loc, rel) {
+        var proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+        return proto + '//' + loc.host + basePath(loc.pathname) + rel;
+    }
+
     return {
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         healthBadges: healthBadges, healthLevel: healthLevel,
         stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem, ansiLineToHtml: ansiLineToHtml,
-        LineBuffer: LineBuffer
+        LineBuffer: LineBuffer,
+        cardState: cardState, stateBadgeHtml: stateBadgeHtml, firmwareHtml: firmwareHtml,
+        lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl
     };
 });

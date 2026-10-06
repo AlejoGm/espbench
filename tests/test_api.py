@@ -100,3 +100,17 @@ def test_static_files_are_revalidated():
     scope = {"type": "http", "method": "GET", "path": "/style.css", "headers": []}
     response = run(static.get_response("style.css", scope))
     assert response.headers["cache-control"] == "no-cache"
+
+
+def test_version_identifies_bench(monkeypatch):
+    monkeypatch.setattr(api.socket, "gethostname", lambda: "sensipi02")
+    paths.version_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.version_file().write_text("0.13.0\n")
+    assert run(api.get_version()) == {"app": "espbench", "version": "0.13.0", "name": "sensipi02"}
+    paths.bench_name_file().write_text("lab-cordoba\n")
+    assert run(api.get_version())["name"] == "lab-cordoba"
+
+
+def test_version_without_files():
+    r = run(api.get_version())
+    assert r["app"] == "espbench" and r["version"] == "dev" and r["name"]

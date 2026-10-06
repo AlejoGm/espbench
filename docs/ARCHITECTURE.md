@@ -225,6 +225,7 @@ boot ─────► devremote.service ────────────�
 
 | Endpoint | |
 |---|---|
+| `GET /api/version` | `{app: "espbench", version, name}`: identidad del bench para bench-master. `name` sale de `/opt/esp/bench_name` o del hostname |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
 | `POST /api/device/{tty}/unlock` | Liberar lock |
@@ -241,6 +242,7 @@ boot ─────► devremote.service ────────────�
   `ttyUSB` al que apunta). El estado, la MAC y el puerto salen de
   `run/<tty>.json`. Sin estado runtime, cae al esquema anterior (`tmux
   has-session`, `logs/<tty>/mac`).
+- **URLs relativas** en todo el frontend (`api/...`, `style.css`, `ws/...` vía `EB.wsUrl`): la misma página funciona servida directo (`/`) o a través del proxy de bench-master (`/bench/<nombre>/`).
 - `LogStreamer` sigue el `log_path` que publica el device. Cuando el archivo rota
   (cambió el inode), lo lee desde el principio.
 - `devices.json` (MAC → nombre amigable + modelo de HW) lo comparten todos los

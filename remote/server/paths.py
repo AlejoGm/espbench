@@ -56,6 +56,11 @@ def version_file() -> pathlib.Path:
     return esp_base() / "VERSION"
 
 
+def bench_name_file() -> pathlib.Path:
+    """(opcional) Nombre del bench para bench-master. Sin él, el hostname."""
+    return esp_base() / "bench_name"
+
+
 def run_dir() -> pathlib.Path:
     return esp_base() / "run"
 
