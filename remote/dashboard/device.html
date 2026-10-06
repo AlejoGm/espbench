@@ -36,7 +36,7 @@
         <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)">⏸ Pausar</button>
         <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)">⌫ Limpiar</button>
         <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa">⤓ Log</a>
-        <button class="tool-btn" id="btn-history" title="Flasheos y sesiones anteriores">☰ Historial</button>
+        <button class="tool-btn" id="btn-history" title="Eventos, flasheos y sesiones anteriores">☰ Historial</button>
     </div>
 
     <div class="device-main">
@@ -46,11 +46,13 @@
         </div>
         <aside class="side-panel hidden" id="side-panel">
             <div class="side-tabs">
-                <button class="side-tab active" data-tab="jobs">Flasheos</button>
+                <button class="side-tab active" data-tab="events">Eventos</button>
+                <button class="side-tab" data-tab="jobs">Flasheos</button>
                 <button class="side-tab" data-tab="sessions">Sesiones</button>
                 <button class="side-close" id="side-close" title="Cerrar">✕</button>
             </div>
-            <div class="side-body" id="side-jobs"></div>
+            <div class="side-body" id="side-events"></div>
+            <div class="side-body hidden" id="side-jobs"></div>
             <div class="side-body hidden" id="side-sessions"></div>
         </aside>
     </div>
@@ -84,6 +86,10 @@
         var ws = null;
         var reconnectTimer = null;
         var currentLockUser = '';
+        var boardKey = '';          // MAC sin separadores: /api/board/{key} (lecturas por placa)
+        var boardApi = '';
+        var deviceLoaded = false;
+        var curSession = null;      // sesión actual de la placa (de /events)
 
         var MAX_LINES = 20000;   // tope de líneas en la vista; el archivo completo se descarga
 
@@ -104,18 +110,72 @@
         // Cada línea del archivo trae "YYYY-MM-DD HH:MM:SS.mmm <origen> " (DeviceLog).
         // La hora va en su propio span (toggle "Hora"); clase, filtro y colores
         // miran el cuerpo. Los logs viejos no tienen prefijo y se ven como antes.
-        function makeLine(text, el) {
+        // Marca al costado: panic/boot por el contenido de la línea (lineMark);
+        // send/command/flash se agregan después, por evento (markEvent).
+        var MARK_ICONS = {panic: '⚠', boot: '↻'};
+
+        function makeLine(text, el, noFilter) {
             el = el || document.createElement('div');
             var p = EB.splitPrefix(text);
             var plain = EB.stripAnsi(p.body);
             var cls = EB.lineClass(EB.stripAnsi(text));
-            el.className = 'ln' + (cls ? ' ' + cls : '') + (p.origin === '\u21aa' ? ' ln-cont' : '');
+            var mk = EB.lineMark(text);
+            el.className = 'ln' + (cls ? ' ' + cls : '') + (p.origin === '\u21aa' ? ' ln-cont' : '') +
+                           (mk ? ' mk mk-' + mk : '');
+            if (mk) el.dataset.mk = MARK_ICONS[mk]; else delete el.dataset.mk;
             var ts = p.time ? '<span class="ln-ts" title="' + p.date + ' ' + p.time + '">' + p.time + '</span>' : '';
             el.innerHTML = ts + '<span class="ln-body">' + (EB.ansiLineToHtml(p.body) || '\u200b') + '</span>';
             el._plain = plain.toLowerCase();
             el._cls = cls;
-            applyFilterTo(el);
+            el._iso = p.time ? p.date + 'T' + p.time : null;
+            if (!noFilter) applyFilterTo(el);
             return el;
+        }
+
+        function markEvent(el, ev) {
+            var v = EB.eventView(ev);
+            el.dataset.mk = v.icon;
+            el.classList.add('mk', 'mk-ev', 'mk-' + ev.type);
+            var what = v.label + (v.detail ? ' ' + v.detail : '') + (v.who ? ' · ' + v.who : '');
+            el.title = (el.title ? el.title + '\n' : '') + what;
+        }
+
+        // ── Marcas de send/command/flash en el vivo ───────────────────────────
+        // El WebSocket manda texto sin offsets: los eventos del api se ubican por
+        // hora (EB.EventMarks: la primera línea con hora ≥ la del evento − 500 ms).
+        var marks = new EB.EventMarks();
+
+        function takeMarks(el) {
+            if (!el._iso) return;
+            marks.take(el._iso).forEach(function(ev) { markEvent(el, ev); });
+        }
+
+        function lastLine() {
+            var el = partialEl ? partialEl.previousSibling : terminal.lastChild;
+            return el && el._iso !== undefined ? el : null;
+        }
+
+        function scanMarks() {
+            var last = lastLine();
+            if (!last || !last._iso || !marks.dueBy(last._iso)) return;
+            var first = true;
+            for (var el = terminal.firstChild; el && el !== partialEl; el = el.nextSibling) {
+                if (!el._iso) continue;
+                if (first) { marks.dropBefore(el._iso); first = false; }   // anteriores a la vista (recortada/limpia)
+                takeMarks(el);
+            }
+        }
+
+        function pollMarks() {
+            if (!boardApi) return;
+            fetch(boardApi + '/events?type=send,command,flash&since=session&limit=200')
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    if (!d) return;
+                    curSession = d.session || curSession;
+                    if (marks.add(d.events)) scanMarks();
+                })
+                .catch(function() {});
         }
 
         function visible(el) {
@@ -136,6 +196,7 @@
                 lines.forEach(function(l) {
                     var el = makeLine(l);
                     if (el._cls === 'ln-panic') lastPanicEl = el;
+                    takeMarks(el);
                     frag.appendChild(el);
                 });
                 terminal.insertBefore(frag, partialEl);
@@ -227,6 +288,13 @@
                 .then(function(d) {
                     var badges = [];
                     var name = tty;
+                    deviceLoaded = true;
+                    if (d && d.mac && !boardKey) {
+                        boardKey = d.mac.replace(/[:-]/g, '');
+                        boardApi = '/api/board/' + encodeURIComponent(boardKey);
+                        pollMarks();
+                        if (sideTab === 'events') loadHistory();
+                    }
                     if (d) {
                         name = d.device_key || d.hw_model || tty;
                         if (d.state && STATE_LABELS[d.state]) badges.push(makeBadge('estado', STATE_LABELS[d.state], 'badge-state-' + d.state));
@@ -261,7 +329,7 @@
         }
 
         // ── Historial: flasheos y sesiones ────────────────────────────────────
-        var sideTab = 'jobs';
+        var sideTab = 'events';
 
         function panelOpen() { return !$('side-panel').classList.contains('hidden'); }
 
@@ -273,7 +341,9 @@
 
         function loadHistory() {
             if (!panelOpen()) return;
-            if (sideTab === 'jobs') {
+            if (sideTab === 'events') {
+                loadEvents();
+            } else if (sideTab === 'jobs') {
                 fetch(api + '/jobs').then(function(r) { return r.json(); }).then(renderJobs)
                     .catch(function() { $('side-jobs').innerHTML = '<div class="side-empty">Error al leer el historial</div>'; });
             } else {
@@ -326,24 +396,153 @@
         }
 
 
-        // ── Visor (log de un job o una sesión anterior) ──────────────────────
-        function openViewer(title, url, downloadUrl) {
+        // ── Eventos (/api/board/{key}/events) ────────────────────────────────
+        var EV_PAGE = 100, EV_MAX = 1000;
+        var evLimit = EV_PAGE;
+        var evFilter = {};          // tipos elegidos en los chips (vacío = todos)
+        var evCounts = [];          // por tipo, de la última carga sin filtro
+        var evData = null;
+
+        function getJson(url) {
+            return fetch(url).then(function(r) {
+                return r.json().catch(function() { return null; })
+                        .then(function(d) { return {ok: r.ok, status: r.status, body: d}; });
+            });
+        }
+
+        function loadEvents() {
+            if (!boardApi) {
+                $('side-events').innerHTML = '<div class="side-empty">' +
+                    (deviceLoaded ? 'La placa todavía no tiene MAC: sin eventos' : 'Cargando…') + '</div>';
+                return;
+            }
+            var types = Object.keys(evFilter);
+            getJson(boardApi + '/events?limit=' + evLimit + (types.length ? '&type=' + types.join(',') : ''))
+                .then(function(res) {
+                    if (!res.ok) throw new Error(EB.errorText(res.body, res.status));
+                    evData = res.body;
+                    curSession = evData.session || curSession;
+                    if (!types.length) evCounts = EB.eventCounts(evData.events);
+                    renderEvents();
+                })
+                .catch(function(e) { $('side-events').innerHTML = '<div class="side-empty">Error al leer los eventos: ' + EB.escapeHtml(e.message) + '</div>'; });
+        }
+
+        function renderEvents() {
+            var evs = evData.events;
+            var active = Object.keys(evFilter).length > 0;
+            var chips = evCounts.map(function(c) {
+                return '<button class="ev-chip ev-' + c.type.replace(/_/g, '-') + (evFilter[c.type] ? ' active' : '') +
+                       '" data-type="' + c.type + '" title="' + c.n + ' en los últimos eventos cargados">' +
+                       c.icon + ' ' + EB.escapeHtml(c.label) + ' <b>' + c.n + '</b></button>';
+            }).join('') + (active ? '<button class="ev-chip ev-all" data-type="">✕ todos</button>' : '');
+            var rows = [];
+            var prevSess = null;
+            for (var i = evs.length - 1; i >= 0; i--) {     // más nuevo arriba
+                var v = EB.eventView(evs[i]);
+                if (v.session && v.session !== prevSess) {
+                    rows.push('<div class="ev-sess">' + (v.session === curSession ? '● sesión actual' : '▤ sesión') +
+                              ' <span class="dim">desde ' + EB.sessionLabel(v.session) + '</span></div>');
+                    prevSess = v.session;
+                }
+                rows.push('<div class="ev-item ' + v.cls + (v.bad ? ' ev-bad' : '') + (v.cursor ? '' : ' ev-nocursor') +
+                          '" data-i="' + i + '" title="' + EB.escapeHtml(v.title) + '">' +
+                            '<span class="ev-icon">' + v.icon + '</span>' +
+                            '<span class="ev-time">' + v.time + '</span>' +
+                            '<span class="ev-main"><span class="ev-label">' + EB.escapeHtml(v.label) + '</span> ' +
+                              '<span class="ev-detail">' + EB.escapeHtml(v.detail) + '</span></span>' +
+                            (v.who ? '<span class="ev-who">' + EB.escapeHtml(v.who) + '</span>' : '') +
+                          '</div>');
+            }
+            var more = '';
+            if (evData.more && evLimit < EV_MAX) more = '<button class="tool-btn ev-more" id="ev-more">cargar más</button>';
+            else if (evData.more) more = '<div class="side-empty">Hay más: <code>espbench events --since</code></div>';
+            $('side-events').innerHTML = (chips ? '<div class="ev-chips">' + chips + '</div>' : '') +
+                (rows.length ? rows.join('') : '<div class="side-empty">Sin eventos' + (active ? ' de ese tipo' : '') + '</div>') + more;
+        }
+
+        $('side-events').addEventListener('click', function(e) {
+            var chip = e.target.closest('.ev-chip');
+            if (chip) {
+                var t = chip.dataset.type;
+                if (!t) evFilter = {};
+                else if (evFilter[t]) delete evFilter[t];
+                else evFilter[t] = true;
+                evLimit = EV_PAGE;
+                loadEvents();
+                return;
+            }
+            if (e.target.id === 'ev-more') { evLimit = Math.min(EV_MAX, evLimit + EV_PAGE); loadEvents(); return; }
+            var row = e.target.closest('.ev-item');
+            if (row && evData) openEventViewer(evData.events[+row.dataset.i]);
+        });
+
+        // ── Visor (log de un job, una sesión anterior o un evento en contexto) ─
+        function showViewer(title, downloadUrl) {
             $('viewer-title').textContent = title;
             $('viewer-body').innerHTML = '<div class="side-empty">Cargando…</div>';
-            $('viewer-download').href = downloadUrl || url;
+            $('viewer-download').href = downloadUrl;
             $('viewer').classList.remove('hidden');
+        }
+
+        // Líneas completas → DOM del visor (sin el filtro de la vista en vivo). Devuelve los elementos.
+        function renderViewer(lines) {
+            var frag = document.createDocumentFragment();
+            var els = lines.map(function(l) { var el = makeLine(l, null, true); frag.appendChild(el); return el; });
+            $('viewer-body').innerHTML = '';
+            $('viewer-body').appendChild(frag);
+            return els;
+        }
+
+        function viewerError(msg) {
+            $('viewer-body').innerHTML = '<div class="side-empty">Error: ' + EB.escapeHtml(msg) + '</div>';
+        }
+
+        function openViewer(title, url, downloadUrl) {
+            showViewer(title, downloadUrl || url);
             fetch(url).then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-                .then(function(text) {
-                    var lb = new EB.LineBuffer();
-                    var lines = lb.push(text + '\n');
-                    var frag = document.createDocumentFragment();
-                    lines.forEach(function(l) { frag.appendChild(makeLine(l)); });
-                    $('viewer-body').innerHTML = '';
-                    $('viewer-body').appendChild(frag);
-                    // makeLine aplica el filtro de la vista en vivo: acá se ve todo
-                    Array.prototype.forEach.call($('viewer-body').children, function(el) { el.classList.remove('hidden'); });
+                .then(function(text) { renderViewer(new EB.LineBuffer().push(text + '\n')); })
+                .catch(function(e) { viewerError(e.message); });
+        }
+
+        /*
+         * Evento en contexto: /log?around=<cursor> (EB.eventContext) y, aparte,
+         * la línea exacta del evento (around con before=after=0) para resaltarla.
+         * El cursor lleva la sesión: sirve para sesiones anteriores.
+         */
+        function openEventViewer(ev) {
+            var v = EB.eventView(ev);
+            var ctx = EB.eventContext(ev);
+            if (!ctx) { toast('Ese evento no tiene cursor en el log', true); return; }
+            var other = v.session && v.session !== curSession;
+            showViewer(v.icon + ' ' + v.label + (v.detail ? ' ' + v.detail : '') + ' · ' + (ev.ts || '').replace('T', ' ').slice(0, 19) +
+                       (other ? ' · sesión del ' + EB.sessionLabel(v.session) : ''),
+                       api + '/sessions/' + encodeURIComponent(EB.sessionFile(v.session, curSession)) + '?download=1');
+            var center = {around: ev.cursor, before: '0', after: '0', raw: '1', max_lines: '1'};
+            Promise.all([getJson(boardApi + '/log?' + new URLSearchParams(ctx)),
+                         getJson(boardApi + '/log?' + new URLSearchParams(center))])
+                .then(function(res) {
+                    var a = res[0], b = res[1];
+                    if (!a.ok) { viewerError(EB.errorText(a.body, a.status)); return; }
+                    var raw = a.body.lines.map(function(l) { return l.replace(/\r+$/, ''); });
+                    var els = renderViewer(raw.map(function(l) { return EB.overwrite(EB.expandRangeLine(l, a.body.date)); }));
+                    var target = b.ok && b.body.lines.length ? b.body.lines[0].replace(/\r+$/, '') : null;
+                    var i = EB.findLine(raw, target, a.body.date, b.ok ? b.body.date : null);
+                    var el;
+                    if (i >= 0) {
+                        el = els[i];
+                    } else {
+                        // Evento del api al final del log (sin línea después todavía)
+                        el = document.createElement('div');
+                        el.className = 'ln ln-note';
+                        el.textContent = '▸ el evento quedó acá (todavía no hay una línea después)';
+                        $('viewer-body').appendChild(el);
+                    }
+                    el.classList.add('ln-target');
+                    markEvent(el, ev);
+                    el.scrollIntoView({block: 'center'});
                 })
-                .catch(function(e) { $('viewer-body').innerHTML = '<div class="side-empty">Error: ' + e.message + '</div>'; });
+                .catch(function(e) { viewerError(e.message); });
         }
 
         function closeViewer() { $('viewer').classList.add('hidden'); }
@@ -426,6 +625,7 @@
             loadDeviceInfo();
             setInterval(loadDeviceInfo, 3000);
             setInterval(loadHistory, 10000);
+            setInterval(pollMarks, 4000);
 
             $('btn-reset').onclick = function() { sendCommand('reset'); };
             $('btn-bootloader').onclick = function() { sendCommand('bootloader'); };
@@ -488,6 +688,7 @@
                 tab.onclick = function() {
                     sideTab = tab.dataset.tab;
                     document.querySelectorAll('.side-tab').forEach(function(t) { t.classList.toggle('active', t === tab); });
+                    $('side-events').classList.toggle('hidden', sideTab !== 'events');
                     $('side-jobs').classList.toggle('hidden', sideTab !== 'jobs');
                     $('side-sessions').classList.toggle('hidden', sideTab !== 'sessions');
                     loadHistory();
@@ -539,6 +740,8 @@
                 // para no duplicar lo que ya estaba en la vista.
                 clearView();
                 buffer = new EB.LineBuffer();
+                marks.reset();
+                setTimeout(pollMarks, 1500);
             };
             ws.onmessage = function(evt) { appendText(evt.data); };
             ws.onclose   = function() {

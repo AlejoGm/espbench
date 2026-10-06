@@ -915,7 +915,111 @@ body.hide-ts .terminal .ln-ts { display: none; }
     font-size: 0.8rem;
 }
 
+/* ── Marcas de eventos al costado de la línea (vivo y visor) ── */
+
+.terminal { padding-left: 24px; }
+.terminal .ln { position: relative; }
+.terminal .ln.mk::before {
+    content: attr(data-mk);
+    position: absolute;
+    left: -15px;
+    top: 0;
+    width: 13px;
+    text-align: center;
+    font-size: 10px;
+    color: #6e7681;
+    user-select: none;
+    pointer-events: none;
+}
+.terminal .ln.mk-panic::before   { color: #f85149; }
+.terminal .ln.mk-boot::before    { color: #8b949e; }
+.terminal .ln.mk-send::before    { color: #8b8ef0; font-weight: 700; }
+.terminal .ln.mk-command::before { color: #c4a5fa; }
+.terminal .ln.mk-flash::before   { color: #58a6ff; }
+.terminal .ln.mk-ev { cursor: help; }
+.terminal .ln-target { background: rgba(99,102,241,0.18); box-shadow: inset 3px 0 0 #6366f1; }
+.terminal .ln-target.ln-panic { background: rgba(248,81,73,0.25); }
+.terminal .ln-note { color: #8b8ef0; font-style: italic; }
+
+/* ── Pestaña Eventos ── */
+
+.ev-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 6px 12px 8px;
+    border-bottom: 1px solid #1d1d1d;
+}
+.ev-chip {
+    background: #181818;
+    border: 1px solid #2a2a2a;
+    color: #888;
+    font-size: 0.7rem;
+    padding: 1px 8px;
+    border-radius: 20px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ev-chip b { color: #bbb; font-weight: 600; margin-left: 2px; }
+.ev-chip:hover { border-color: #444; color: #ddd; }
+.ev-chip.active { background: #23234a; border-color: #4f52c8; color: #c4c6ff; }
+.ev-chip.ev-all { color: #666; border-style: dashed; }
+
+.ev-sess {
+    font-size: 0.68rem;
+    color: #8b949e;
+    padding: 8px 14px 3px;
+    letter-spacing: 0.02em;
+    position: sticky;
+    top: -6px;
+    background: #141414;
+}
+.ev-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 14px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+}
+.ev-item:hover { background: #1c1c1c; border-left-color: #4f52c8; }
+.ev-item.ev-nocursor { cursor: default; opacity: 0.6; }
+.ev-icon { width: 14px; text-align: center; flex-shrink: 0; color: #6e7681; }
+.ev-time { color: #6e7681; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; flex-shrink: 0; }
+.ev-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-label { color: #aaa; }
+.ev-detail { color: #777; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; }
+.ev-who {
+    color: #8b8ef0;
+    font-size: 0.68rem;
+    background: #1b1b30;
+    border-radius: 4px;
+    padding: 0 6px;
+    flex-shrink: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ev-panic .ev-icon, .ev-boot-loop .ev-icon, .ev-bad .ev-icon { color: #f85149; }
+.ev-bad .ev-label { color: #ff7b72; }
+.ev-panic .ev-detail, .ev-boot-loop .ev-detail { color: #ffa198; }
+.ev-boot .ev-icon    { color: #8b949e; }
+.ev-boot.ev-bad .ev-icon { color: #e3b341; }
+.ev-flash .ev-icon   { color: #58a6ff; }
+.ev-flash.ev-bad .ev-icon { color: #f85149; }
+.ev-fw .ev-icon      { color: #39c5cf; }
+.ev-send .ev-icon    { color: #8b8ef0; font-weight: 700; }
+.ev-command .ev-icon { color: #c4a5fa; }
+.ev-reserve .ev-icon, .ev-release .ev-icon { color: #d29922; font-size: 0.7rem; }
+.ev-state .ev-label, .ev-session .ev-label { color: #666; }
+.ev-session .ev-icon { color: #3fb950; font-size: 0.6rem; }
+.ev-more { display: block; margin: 10px auto; }
+.ev-chip.ev-panic b, .ev-chip.ev-boot-loop b { color: #ff7b72; }
+
 @media (max-width: 760px) {
+    .terminal { padding: 10px 8px 10px 20px; font-size: 11.5px; }
     .side-panel { position: fixed; right: 0; top: 0; bottom: 0; width: 88vw; z-index: 15; }
     .filter-input { width: 140px; }
     body:not(.device-page) { padding: 12px; }

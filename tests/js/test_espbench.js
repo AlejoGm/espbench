@@ -218,6 +218,9 @@ test('eventView: icono, hora, detalle corto y quién', () => {
     assert.equal(s.detail, '"status" ⏎ · forzado');
     assert.equal(s.who, 'alejo');
     assert.equal(EB.eventView(ev('boot_loop', {phase: 'start', boots: 3})).cls, 'ev-boot-loop');
+    assert.ok(p.bad && !s.bad);
+    assert.ok(EB.eventView(ev('flash', {ok: false})).bad && !EB.eventView(ev('flash', {ok: true})).bad);
+    assert.ok(EB.eventView(ev('boot', {abnormal: true})).bad && !EB.eventView(ev('boot', {})).bad);
     assert.equal(EB.eventDetail(ev('boot', {reason: 'TG1WDT_SYS_RESET', abnormal: true})), 'TG1WDT_SYS_RESET ⚠');
     assert.equal(EB.eventDetail(ev('state', {from: 'monitoring', to: 'flashing'})), 'monitoreando → flasheando');
     assert.equal(EB.eventDetail(ev('flash', {ok: false, error: 'esptool_failed'})), '✗ esptool failed');

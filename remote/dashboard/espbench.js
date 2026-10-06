@@ -374,6 +374,8 @@
             type: ev.type, icon: t.icon, label: t.label, cls: 'ev-' + String(ev.type).replace(/_/g, '-'),
             date: ts.slice(0, 10), time: ts.slice(11, 19), detail: detail,
             who: d.user || '', session: cursorSession(ev.cursor), cursor: ev.cursor || null,
+            bad: ev.type === 'panic' || ev.type === 'boot_loop' || (ev.type === 'flash' && d.ok === false) ||
+                 (ev.type === 'boot' && !!d.abnormal),
             title: ts.replace('T', ' ') + ' · ' + t.label + (full ? ': ' + full : '') +
                    (ev.cursor ? '\n' + ev.cursor : '')
         };
