@@ -1006,12 +1006,8 @@
         return out;
     }
 
-    function bigNum(parts) {
-        if (!parts) return '<span class="big">—</span>';
-        var html = '';
-        for (var i = 0; i < parts.length; i += 2) html += escapeHtml(parts[i]) + '<em>' + escapeHtml(parts[i + 1]) + '</em>';
-        return '<span class="big">' + html + '</span>';
-    }
+    // "2 h 13 min" para el chip de la card (antes era un número grande aparte).
+    function uptimeText(parts) { return parts ? parts.join(' ').replace(/(\d) (\D)/g, '$1\u00a0$2') : null; }
 
     // ── Propiedades en la card: specs, etiquetas y estado ────────────────
 
@@ -1118,6 +1114,7 @@
         var silent = silentFor(d, opts.now) !== null;
         var lock = lockInfo(d, opts.now);
         var live = d.state === 'monitoring' && d.status === 'RUNNING';
+        var up = uptimeText(uptimeParts(d, opts.now));
         var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
         return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
             (opts.bench && opts.benchTag !== false ? '<div class="b-ctx">' + benchTagHtml(opts.bench, opts.location, d.bench_online) + '</div>' : '') +
@@ -1126,8 +1123,8 @@
                 '</div><div class="meta">' + escapeHtml(meta) + '</div></div>' +
                 '<span class="status ' + st.cls + '">' + escapeHtml(st.text) + '</span></div>' +
             boardMetaHtml(d, opts.catalog, opts.meta, opts.now) +
-            '<div class="uptime">' + bigNum(uptimeParts(d, opts.now)) + '<span class="lbl">' + (live ? 'encendida' : escapeHtml(st.text.toLowerCase())) + '</span></div>' +
             '<div class="facts">' +
+                (live && up ? '<span class="fact" title="Encendida desde el último arranque"><i class="ti ti-clock" aria-label="Encendida"></i><b>' + escapeHtml(up) + '</b></span>' : '') +
                 '<span class="fact' + (silent ? ' warn' : '') + '">' + (silent ? '<i class="ti ti-volume-off"></i>' : (live ? '<span class="live"></span>' : '')) +
                     'Último log <b>' + escapeHtml(agoText(d.last_log_epoch, opts.now)) + '</b></span>' +
                 '<span class="fact">Reinicios <b>' + boots + '</b></span>' +
@@ -1387,7 +1384,7 @@
         ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer,
         cardState: cardState, stateBadgeHtml: stateBadgeHtml, fwRows: fwRows,
         lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl,
-        SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, uptimeParts: uptimeParts, agoText: agoText,
+        SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, uptimeParts: uptimeParts, uptimeText: uptimeText, agoText: agoText,
         activityTotals: activityTotals, activityBarsHtml: activityBarsHtml, benchChips: benchChips, boardCardHtml: boardCardHtml, boardMetaHtml: boardMetaHtml,
         cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
         groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,

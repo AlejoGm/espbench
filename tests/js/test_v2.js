@@ -29,6 +29,15 @@ test('silentFor: solo monitoreando y pasado el umbral', () => {
     assert.equal(EB.silentFor(dev({last_log_epoch: null}), NOW), null);
 });
 
+test('uptimeText y chip "Encendida" en la card (sin número grande)', () => {
+    assert.equal(EB.uptimeText(['2', 'h', '13', 'min']), '2\u00a0h 13\u00a0min');
+    assert.equal(EB.uptimeText(null), null);
+    const html = EB.boardCardHtml(dev({}), {now: NOW});
+    assert.match(html, /<i class="ti ti-clock" aria-label="Encendida"><\/i><b>2\u00a0h 13\u00a0min<\/b>/);
+    assert.doesNotMatch(html, /class="uptime"|class="big"/);
+    assert.doesNotMatch(EB.boardCardHtml(dev({state: 'flashing'}), {now: NOW}), /ti-clock/);
+});
+
 test('uptimeParts: desde el último boot', () => {
     assert.deepEqual(EB.uptimeParts(dev({}), NOW), ['2', 'h', '13', 'min']);
     assert.deepEqual(EB.uptimeParts(dev({health: {last_reset: {ts: '2026-10-05T08:00:00'}}}), NOW), ['1', 'd', '4', 'h']);
@@ -65,7 +74,7 @@ test('boardCardHtml: card completa, escapada, con acciones', () => {
     assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/);
     assert.doesNotMatch(html, /<b>x<\/b>/);
     assert.match(html, /class="status ok">En línea/);
-    assert.match(html, /<span class="big">2<em>h<\/em>13<em>min<\/em><\/span>/);
+    assert.match(html, /aria-label="Encendida"><\/i><b>2\u00a0h 13\u00a0min<\/b>/);
     assert.match(html, /data-act="rename"/);
     assert.match(html, /data-act="copy"/);
     assert.match(html, /href="device.html\?tty=ttyUSB0"/);

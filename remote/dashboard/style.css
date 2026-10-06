@@ -145,10 +145,6 @@ button { cursor: pointer; }
 .board .meta { color: var(--ink2); font-size: 12.5px; }
 .board .bh .status { margin-left: auto; }
 .board .rename-input { height: 32px; border-radius: var(--r-sm); border: 1px solid var(--line2); background: var(--row); padding: 0 10px; width: 100%; font-weight: 700; }
-.uptime { display: flex; align-items: baseline; gap: 10px; }
-.uptime .big { font-size: 34px; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
-.uptime .big em { font-style: normal; color: var(--ink3); font-weight: 600; font-size: 18px; margin: 0 4px 0 2px; }
-.uptime .lbl { color: var(--ink2); font-size: 13px; }
 .facts { display: flex; gap: 8px; flex-wrap: wrap; }
 .fact { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 999px; background: var(--row); font-size: 12.5px; color: var(--ink2); font-weight: 600; white-space: nowrap; }
 .fact b { color: var(--ink); }
