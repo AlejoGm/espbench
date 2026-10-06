@@ -5,7 +5,10 @@ sesiones de log anteriores.
 Solo lectura de disco. Los jobs viven en devices/<mac>/jobs/<job_id>/ (y, del
 esquema anterior o sin MAC, en jobs/<job_id>_<tty>/); cada uno tiene job.log y,
 desde que protocol.py lo escribe, result.json. Las sesiones son los
-output_<ts>.log que deja DeviceLog al rotar, al lado del output.log actual.
+output_<session_id>.log que deja DeviceLog al rotar, al lado del output.log
+actual. El session_id (YYYYMMDD_HHMMSS_<pid>) es el INICIO de la sesión; su fin
+es el mtime del archivo. Los logs anteriores al header de sesión rotaron como
+output_<ts>.log, con la hora de rotación.
 
 Todo nombre que llega de la URL se valida contra un patrón antes de armar una
 ruta: nada de `..` ni separadores.

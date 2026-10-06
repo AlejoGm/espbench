@@ -305,16 +305,16 @@
         function renderSessions(sessions) {
             if (!sessions.length) { $('side-sessions').innerHTML = '<div class="side-empty">Sin sesiones</div>'; return; }
             $('side-sessions').innerHTML = sessions.map(function(s) {
-                // output_<YYYYMMDD_HHMMSS>.log: cuándo se rotó (cuando terminó esa sesión)
-                var m = /^output_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)/.exec(s.name);
-                var when = new Date(s.mtime * 1000);
-                var iso = m ? m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + m[6]
-                            : when.getFullYear() + '-' + pad(when.getMonth() + 1) + '-' + pad(when.getDate()) + 'T' +
-                              pad(when.getHours()) + ':' + pad(when.getMinutes()) + ':' + pad(when.getSeconds());
+                // El nombre output_<session_id>.log es el INICIO de la sesión (en logs
+                // viejos, output_<ts>.log era la hora de rotación). El fin es el mtime:
+                // la última línea escrita.
+                var iso = EB.isoLocal(s.mtime);
+                var start = EB.sessionStart(s.name);
+                var title = (start ? 'desde ' + start.replace('T', ' ') + ' · ' : '') + 'hasta ' + iso.replace('T', ' ');
                 return '<div class="hist-item' + (s.current ? ' hist-current' : '') + '">' +
                          '<span class="hist-icon">' + (s.current ? '●' : '▤') + '</span>' +
                          '<div class="hist-main">' +
-                           '<div class="hist-line"><b title="' + iso.replace('T', ' ') + '">' + (s.current ? 'Sesión actual' : 'hasta ' + EB.escapeHtml(EB.relTime(iso))) + '</b>' +
+                           '<div class="hist-line"><b title="' + title + '">' + (s.current ? 'Sesión actual' : 'hasta ' + EB.escapeHtml(EB.relTime(iso))) + '</b>' +
                              ' <span class="dim">· ' + EB.fmtBytes(s.size) + '</span></div>' +
                            '<div class="hist-id">' + EB.escapeHtml(s.name) + '</div>' +
                          '</div>' +
@@ -324,7 +324,6 @@
             }).join('');
         }
 
-        function pad(n) { return n < 10 ? '0' + n : '' + n; }
 
         // ── Visor (log de un job o una sesión anterior) ──────────────────────
         function openViewer(title, url, downloadUrl) {

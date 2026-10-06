@@ -121,3 +121,11 @@ test('LineBuffer con líneas prefijadas', () => {
     const out = lb.push('2026-10-05 16:02:03.123 > a 10%\r90%\n2026-10-05 16:02:03.200 | INFO  | x              | y\n');
     assert.deepEqual(out, ['2026-10-05 16:02:03.123 > 90%', '2026-10-05 16:02:03.200 | INFO  | x              | y']);
 });
+
+test('sesiones: el nombre es el inicio (con pid); los viejos no', () => {
+    assert.equal(EB.sessionStart('output_20261005_160203_812.log'), '2026-10-05T16:02:03');
+    assert.equal(EB.sessionStart('output_20261005_160203.log'), null);   // log viejo: hora de rotación
+    assert.equal(EB.sessionStart('output.log'), null);
+    const epoch = new Date(2026, 9, 5, 16, 2, 3).getTime() / 1000;
+    assert.equal(EB.isoLocal(epoch), '2026-10-05T16:02:03');
+});

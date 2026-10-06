@@ -40,6 +40,22 @@
         return iso.slice(0, 10);
     }
 
+    function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+    // Epoch en segundos → "YYYY-MM-DDTHH:MM:SS" en hora local (como los del server).
+    function isoLocal(epochSec) {
+        var d = new Date(epochSec * 1000);
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + 'T' +
+               pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    }
+
+    // output_<YYYYMMDD_HHMMSS_pid>.log → inicio de esa sesión (ISO local), o null.
+    // Los logs viejos (output_<ts>.log, sin pid) llevaban la hora de rotación: null.
+    function sessionStart(name) {
+        var m = /^output_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)_\d+\.log$/.exec(name);
+        return m ? m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + m[6] : null;
+    }
+
     function fmtBytes(n) {
         if (n < 1024) return n + ' B';
         if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -206,6 +222,7 @@
 
     return {
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
+        isoLocal: isoLocal, sessionStart: sessionStart,
         healthBadges: healthBadges, healthLevel: healthLevel,
         splitPrefix: splitPrefix, stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem,
         ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer
