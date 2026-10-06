@@ -211,6 +211,8 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user, forced? |
 | `command` | api, en cada `POST /command` exitoso | command (reset/bootloader), user, forced? |
 | `reserve` / `release` | api (`release` también `devremote --unlock`, forzado) | user, expires (con zona) |
+| `note` | api, al cambiar la nota (`PATCH /api/devices/{mac}`) | text (`""` = borrada), user |
+| `tags` | api, al cambiar los tags | added, removed, user |
 
 - **Boot loop**: mientras está activo no se registran los `boot` ni los `panic`
   sueltos (solo `start` con el conteo y `end` con los panics): un firmware que
@@ -352,7 +354,8 @@ boot ─────► devremote.service ────────────�
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
 | `GET /api/version` | `{app: "espbench", version, name, auth}`: identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
-| `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
+| `PATCH /api/devices/{mac}` `{device_key?, note?, tags?, tags_add?, tags_remove?, user?}` | Renombrar, nota y tags de la placa (`devices.json`, ver "Nota y tags") |
+| `GET /api/tags` | Catálogo de tags (`remote/server/tags.json`) |
 | `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar) lo suelta sin el par y **exige** token de la API (sin `/opt/esp/api_token` → 403 `force_disabled`). Evento `release` con el dueño anterior y, si se forzó, `by_user`/`by_host` |
 | `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5): `ttl_s` default 1800, **máximo 24 h** (más → 400); `expires` con la zona de la Pi; 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
 | `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
@@ -397,6 +400,23 @@ boot ─────► devremote.service ────────────�
   Funcionan con la placa desconectada (los datos viven en `devices/<MAC>/`); la
   sesión "actual" de una placa desconectada es la última. Escrituras por tty, con
   `expect_mac`.
+
+### Nota y tags por placa (`remote/server/board_meta.py`)
+
+Por MAC en `devices.json` (`DevicesFile.set_meta`: un leer-modificar-escribir con el flock), expuestos en
+`/api/devices` y `/api/device/{tty}` (`note`, `note_by`, `note_at`, `tags`). Ninguno es un lock: el server no
+bloquea nada por una nota o un tag; el CLI y el dashboard los muestran, y `espbench pick` los respeta.
+
+- **Nota**: texto libre ("testeando, no tocar"), hasta 200 caracteres, sin caracteres de control; `""`/`null` la
+  borra. `note_by` = `user` del pedido (el CLI manda `ESPBENCH_USER`; el dashboard el `lock_user` recordado) o, sin
+  él, el host del pedido. `note_at`: ISO con la zona de la Pi. Misma nota = sin cambios (ni evento).
+- **Tags**: **fijos**, del catálogo `remote/server/tags.json` (`{id, label, group, desc, kind?, color?}`; se lee en
+  cada pedido, se edita sin reiniciar). Agregar uno fuera del catálogo → 400 con el más parecido y la lista
+  válida; quitar vale para cualquiera (un tag que se sacó del catálogo). Normalizados (trim, minúsculas), sin
+  repetidos, hasta 12 por placa. `kind: "warn"` (`no-tocar`, `roto`): estilo de advertencia en el dashboard, y
+  `espbench pick` / `ls --free` nunca eligen esa placa.
+- Escritura: token de la API como las demás; eventos `note` / `tags` en el `events.jsonl` de la placa (si su log
+  tiene sesión).
 
 ### Rangos del log (`remote/server/logrange.py`, spec §5 y §7.3)
 
@@ -473,7 +493,7 @@ boot ─────► devremote.service ────────────�
 ├── server/                código (copia de remote/server/)
 ├── dashboard/             frontend (copia de remote/dashboard/)
 ├── venv/                  Python + esptool + esp-idf-monitor + fastapi
-├── devices.json           MAC → {device_key, hw_model}
+├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, tags?}
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/

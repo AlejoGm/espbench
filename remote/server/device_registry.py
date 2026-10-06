@@ -1,4 +1,5 @@
 import dataclasses
+import datetime as dt
 import fcntl
 import json
 import os
@@ -11,15 +12,20 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-from server import history, locks, paths, runstate
+from server import board_meta, history, locks, paths, runstate
 
 
 class DevicesFile:
     """Process-safe read/write de devices.json (fcntl.flock). Ver paths.devices_file()."""
 
     def __init__(self, path: Optional[pathlib.Path] = None):
-        self._path = path or paths.devices_file()
+        self._fixed_path = path
         self._lock = threading.Lock()
+
+    @property
+    def _path(self) -> pathlib.Path:
+        # Sin path fijo, el de ESP_BASE en cada uso (como paths.*): el de api.py se crea al importar
+        return self._fixed_path or paths.devices_file()
 
     def _update(self, updater, silent: bool = True):
         with self._lock:
@@ -77,6 +83,42 @@ class DevicesFile:
             else:
                 data[mac_up]["device_key"] = device_key
         self._update(_do, silent=False)
+
+    def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, tags=None,
+                 tags_add=(), tags_remove=(), now: Optional[dt.datetime] = None) -> dict:
+        """Nota y/o tags de una placa (ya validados: board_meta), en un solo
+        leer-modificar-escribir con el flock. note: None = no tocarla, "" = borrarla.
+        tags: lista entera (reemplaza) o None; tags_add / tags_remove sobre la actual.
+        Devuelve {"entry", "note_changed", "added", "removed"}. KeyError si la MAC no
+        está en devices.json; board_meta.MetaError si pasa el tope de tags."""
+        out = {}
+        stamp = (now or dt.datetime.now().astimezone()).isoformat(timespec="seconds")
+
+        def _do(data):
+            key = mac.upper()
+            if key not in data:
+                raise KeyError(mac)
+            entry = data[key]
+            out["note_changed"] = False
+            if note is not None:
+                out["note_changed"] = note != (entry.get("note") or "")
+                if note:
+                    if out["note_changed"]:
+                        entry.update(note=note, note_by=user, note_at=stamp)
+                else:
+                    for k in ("note", "note_by", "note_at"):
+                        entry.pop(k, None)
+            old = list(entry.get("tags") or [])
+            new = board_meta.merge_tags(old, tags, list(tags_add), list(tags_remove))
+            if new:
+                entry["tags"] = new
+            else:
+                entry.pop("tags", None)
+            out["added"] = [t for t in new if t not in old]
+            out["removed"] = [t for t in old if t not in new]
+            out["entry"] = dict(entry)
+        self._update(_do, silent=False)
+        return out
 
     def get_all(self) -> dict:
         with self._lock:
@@ -161,6 +203,11 @@ class DeviceInfo:
     # vencido no aparece.
     lock_expires: Optional[str] = None
     lock_expires_epoch: Optional[int] = None
+    # Nota y tags de la placa (devices.json, por MAC; board_meta). note_at: ISO con la zona de la Pi.
+    note: Optional[str] = None
+    note_by: Optional[str] = None
+    note_at: Optional[str] = None
+    tags: list = dataclasses.field(default_factory=list)
 
 
 class DeviceRegistry:
@@ -225,6 +272,7 @@ class DeviceRegistry:
         fw = {f"fw_{key}": value for key, value in (state.get("fw") or {}).items() if value}
         mac = self._get_tty_mac(tty_name, state)
         sn = device_key = hw_model = None
+        entry = {}
         if mac:
             try:
                 sn = mac_to_sn_sfy(mac)
@@ -260,6 +308,10 @@ class DeviceRegistry:
             last_flash_ok=last_flash_ok,
             lock_expires=lock.expires_iso_tz() if lock else None,
             lock_expires_epoch=lock.expires if lock else None,
+            note=entry.get("note"),
+            note_by=entry.get("note_by"),
+            note_at=entry.get("note_at"),
+            tags=list(entry.get("tags") or []),
         )
 
     @staticmethod

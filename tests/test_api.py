@@ -795,3 +795,66 @@ def test_post_update_needs_token_and_reports_launch_failure(tmux, monkeypatch):
     with pytest.raises(HTTPException) as e:
         run(api.post_update({}, authorization="Bearer s3cret"))
     assert err(e) == (502, "update_unavailable") and "password" in e.value.detail["message"]
+
+
+# ---------- nota y tags por placa (PATCH /api/devices/{mac}) ----------
+
+def test_patch_note_and_tags_records_events_and_shows_in_devices():
+    log = board()
+    registered("mi-placa")
+    req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.9"))
+    r = run(api.patch_device(MAC, {"note": " testeando, no tocar ", "user": "alejo", "tags_add": ["LTE", "no-tocar"]},
+                             request=req))
+    assert (r["note"], r["note_by"], r["tags"]) == ("testeando, no tocar", "alejo", ["lte", "no-tocar"])
+    assert r["note_at"][-6] in "+-"                                  # ISO con la zona de la Pi
+    evs = [e for e in api_events() if e["type"] in ("note", "tags")]
+    assert [(e["type"], e["detail"]) for e in evs] == [
+        ("note", {"text": "testeando, no tocar", "user": "alejo"}),
+        ("tags", {"added": ["lte", "no-tocar"], "removed": [], "user": "alejo"})]
+    assert evs[0]["cursor"].startswith("c:" + SID)
+    from server.device_registry import DeviceRegistry
+    d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
+    assert (d.note, d.note_by, d.tags) == ("testeando, no tocar", "alejo", ["lte", "no-tocar"])
+    # sin user: el host del pedido; nota vacía la borra; tags_remove
+    r = run(api.patch_device(MAC, {"note": "", "tags_remove": ["lte"]}, request=req))
+    assert r["note"] is None and r["tags"] == ["no-tocar"]
+    assert api_events()[-1]["detail"] == {"added": [], "removed": ["lte"], "user": "10.0.0.9"}
+    assert api_events()[-2]["detail"] == {"text": "", "user": "10.0.0.9"}
+    n = len(api_events())
+    run(api.patch_device(MAC, {"tags_add": ["no-tocar"]}))         # sin cambios: sin evento
+    assert len(api_events()) == n
+
+
+@pytest.mark.parametrize("body,msg", [
+    ({"note": "a\nb"}, "control"), ({"note": "x" * 201}, "200"), ({"tags_add": ["modbsu"]}, "modbus"),
+    ({"tags": "lte"}, "lista"), ({"user": "a\tb", "note": "x"}, "user"), ({"device_key": ""}, "device_key"),
+    ({"tags": [f"t{i}" for i in range(13)]}, "catálogo"),
+])
+def test_patch_rejects_bad_meta(body, msg):
+    board()
+    registered()
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device(MAC, body))
+    assert err(e) == (400, "bad_request") and msg in e.value.detail["message"]
+
+
+def test_patch_meta_unknown_board_is_404():
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device("11:22:33:44:55:66", {"note": "x"}))
+    assert err(e) == (404, "not_found")
+
+
+def test_patch_rename_still_works_and_meta_needs_token(tmux):
+    registered()
+    assert run(api.patch_device(MAC, {"device_key": "nuevo"})) == {"ok": True}
+    set_token("s3cret")
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device(MAC, {"note": "x"}))
+    assert err(e) == (401, "auth")
+    assert run(api.patch_device(MAC, {"note": "x"}, authorization="Bearer s3cret"))["note"] == "x"
+
+
+def test_tags_catalog_endpoint():
+    tags = run(api.get_tags())["tags"]
+    assert {"id": "no-tocar", "label": "no tocar", "group": "estado", "kind": "warn",
+            "desc": "Nadie la usa sin preguntar (ni agentes)"} in tags

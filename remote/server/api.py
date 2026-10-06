@@ -22,7 +22,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import auth, events, history, locks, logrange, paths, runstate, taglog
+from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
@@ -413,21 +413,71 @@ async def get_device(tty: str):
 _devices_file = DevicesFile()
 
 
+@app.get("/api/tags")
+async def get_tags():
+    """Catálogo de tags (remote/server/tags.json): los únicos que se pueden poner."""
+    return {"tags": board_meta.catalog()}
+
+
 @app.patch("/api/devices/{mac:path}")
-async def patch_device(mac: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+async def patch_device(mac: str, body: dict = Body(...), authorization: Optional[str] = Header(None),
+                       request: Request = None):
+    """Datos de la placa en devices.json, por MAC. Cualquier combinación de:
+    - `device_key`: renombrar.
+    - `note`: texto corto (aviso, no lock); "" o null la borra. Evento `note`.
+    - `tags` (lista entera), `tags_add`, `tags_remove`: solo tags del catálogo
+      (GET /api/tags); quitar vale para cualquiera. Evento `tags` (added/removed).
+    `user`: quién (va en note_by y en los eventos); sin él, el host del pedido."""
     _require_auth(authorization)
-    device_key = str(body.get("device_key") or "").strip()
-    if not device_key:
-        _fail(400, "bad_request", "device_key requerido")
     bare = unquote(mac).upper().replace("-", "").replace(":", "")
     if not re.fullmatch(r"[0-9A-F]{12}", bare):
         _fail(400, "bad_request", f"MAC inválida: {mac}")
     mac_norm = ":".join(bare[i:i + 2] for i in range(0, 12, 2))
+    wants_key = "device_key" in body
+    wants_note = "note" in body
+    wants_tags = any(k in body for k in ("tags", "tags_add", "tags_remove"))
+    if not (wants_key or wants_note or wants_tags):
+        _fail(400, "bad_request", "nada para cambiar: device_key, note, tags, tags_add o tags_remove")
+    device_key = str(body.get("device_key") or "").strip()
+    if wants_key and not device_key:
+        _fail(400, "bad_request", "device_key requerido")
     try:
-        _devices_file.update_device_key(mac_norm, device_key)
-    except Exception as e:
-        _fail(500, "unexpected", str(e))
-    return {"ok": True}
+        note = board_meta.clean_note(body.get("note")) if wants_note else None
+        user = board_meta.clean_user(body.get("user"))
+        tags = board_meta.normalize_tags(body["tags"]) if body.get("tags") is not None else None
+        add = board_meta.normalize_tags(body.get("tags_add"))
+        remove = board_meta.normalize_tags(body.get("tags_remove"))
+        if wants_tags:
+            board_meta.check_known((tags or []) + add, board_meta.catalog())
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    if user is None:
+        user = getattr(getattr(request, "client", None), "host", None)
+    if wants_key:
+        try:
+            _devices_file.update_device_key(mac_norm, device_key)
+        except Exception as e:
+            _fail(500, "unexpected", str(e))
+    out = {"ok": True}
+    if wants_note or wants_tags:
+        try:
+            r = _devices_file.set_meta(mac_norm, user, note=note, tags=tags, tags_add=add, tags_remove=remove)
+        except KeyError:
+            _fail(404, "not_found", f"no hay placa {mac_norm} en devices.json")
+        except board_meta.MetaError as e:
+            _fail(400, "bad_request", str(e))
+        entry = r["entry"]
+        log = str(paths.device_output_log(mac_norm))
+        try:
+            if r["note_changed"]:
+                events.record(log, "note", {"text": note, "user": user})
+            if r["added"] or r["removed"]:
+                events.record(log, "tags", {"added": r["added"], "removed": r["removed"], "user": user})
+        except OSError:
+            pass        # que no se pueda registrar no rompe la escritura
+        out.update(note=entry.get("note"), note_by=entry.get("note_by"), note_at=entry.get("note_at"),
+                   tags=list(entry.get("tags") or []))
+    return out
 
 
 @app.post("/api/device/{tty}/unlock")
