@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.32.0
+**Version:** 0.32.1
 
 ---
 
@@ -276,7 +276,7 @@ master/bench-master --open      # first run creates master/.venv; http://localho
 - A bench that stops answering stays listed as offline with its last known devices.
 - Listens on 127.0.0.1 only and rejects cross-site requests: the proxy gives access to every bench's serial console.
 
-Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md).
+Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md), test guide: [docs/BENCH_MASTER_TESTING.md](docs/BENCH_MASTER_TESTING.md).
 
 ---
 

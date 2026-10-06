@@ -3,6 +3,7 @@
 Lo que los tests del host no cubren (`docs/ARCHITECTURE.md` §10): correrlo en la Pi después
 de cada update grande, en orden. **P0** bloquea el uso; **P1** es lo que valida la feature
 con hardware real; **P2** concurrencia y seguridad; **P3** infra que falla poco pero duele.
+bench-master y el bench nuevo (identidad, URLs relativas, proxy, `host: auto`): [BENCH_MASTER_TESTING.md](BENCH_MASTER_TESTING.md).
 
 `<dev>` = `device_key`, SN o MAC de una placa; `<tty>` = su `ttyUSBN` / `esp-slotK`. Los comandos
 `espbench` corren en la Mac con `ESPBENCH_HOST=<pi>` (o perfil), siempre con `--json`.
