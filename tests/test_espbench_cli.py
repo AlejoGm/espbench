@@ -522,7 +522,7 @@ def test_set_props_and_where(cli, board):
 
 def test_props_catalog_add_and_rm(cli, board):
     code, r = cli("props")
-    assert code == 0 and [c["id"] for c in r["categories"]] == ["estado", "uso", "chip", "conectividad", "perifericos"]
+    assert code == 0 and [c["id"] for c in r["categories"]] == ["estado", "uso", "chip", "conectividad"]
     code, r = cli("props", "add", "estado", "prestada", "--desc", "prestada a otro equipo", "--exclude-pick")
     assert code == 0 and r["value"]["exclude_pick"] is True
     cli("set", "sim-board", "estado=prestada")

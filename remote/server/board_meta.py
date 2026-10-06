@@ -58,9 +58,6 @@ CATEGORIES = [
     {"id": "conectividad", "label": "conectividad", "multi": True, "values": [
         _v("wifi", "WiFi disponible", "WiFi"), _v("lte", "Módem LTE con SIM", "LTE"),
         _v("ble", "Bluetooth LE", "BLE")]},
-    {"id": "perifericos", "label": "periféricos", "multi": True, "values": [
-        _v("modbus", "Conectada a un bus Modbus", "Modbus"), _v("rs485", "Bus RS-485 cableado", "RS-485"),
-        _v("sensores", "Sensores conectados")]},
 ]
 CATEGORY_IDS = [c["id"] for c in CATEGORIES]
 # Solo en estas categorías un valor puede ser warn / exclude_pick.

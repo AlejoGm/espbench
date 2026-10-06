@@ -562,7 +562,7 @@ test('searchMatch: una MAC u hora con ":" es texto, no una propiedad', () => {
     assert.ok(EB.searchMatch('AA:BB:CC:DD:EE:01', text, null, '', {}));
     assert.ok(!EB.searchMatch('aa:bb:ff', text, null, '', {}));
     assert.ok(EB.searchMatch('lte', text, null, '', {conectividad: ['lte']}));   // el valor suelto (data-search)
-    assert.deepEqual(EB.PROP_CATEGORIES, ['estado', 'uso', 'chip', 'conectividad', 'perifericos']);
+    assert.deepEqual(EB.PROP_CATEGORIES, ['estado', 'uso', 'chip', 'conectividad']);
 });
 
 test('avoided / cardState / summarize: estado no-tocar o roto no cuenta como ok', () => {

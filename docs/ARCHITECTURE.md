@@ -414,7 +414,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
   Unicode (`Cf`: bidi override, espacios de ancho cero); `""`/`null` la borra. `note_by` = `user` del pedido (el CLI
   manda `ESPBENCH_USER`; el dashboard el `lock_user` recordado) o, sin él, `dashboard@<ip>` (`via`) o el host. `note_at`: ISO con la zona de la Pi. Misma nota = sin cambios (ni evento).
 - **Propiedades**: categorías **fijas**, en el código (`board_meta.CATEGORIES`): `estado` (un valor), `uso`
-  (varios), `chip` (uno), `conectividad` (varios), `perifericos` (varios). Los **valores** son de cada bench:
+  (varios), `chip` (uno), `conectividad` (varios). Una categoría que se saca del código deja de exponerse en
+  `props` (`DeviceRegistry` filtra por `CATEGORY_IDS`) aunque quede en `devices.json`. Los **valores** son de cada bench:
   `/opt/esp/meta/properties.json` (flock + escritura atómica; `meta/` escribible por el api, ver §9), sembrado con
   el set inicial de cada categoría (leer no lo crea; lo escribe el primer alta/baja). Ilegible → se usa el set
   inicial, se loguea y se guarda una copia `.bad` antes de la próxima escritura. Se agregan valores a una categoría existente (nunca categorías); uno se

@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.40.0
+**Version:** 0.40.1
 
 ---
 
@@ -237,7 +237,7 @@ mkdir -p ~/.claude/skills && ln -sfn "$PWD/client/agent" ~/.claude/skills/espben
 `roto`: `avoid: true`); `--where cat=valor` (repetible, AND) y `--free` filtran. `pick` hace eso solo: la primera
 placa libre, sana, que cumple los `--where`, en cualquier bench (las que tienen nota, al final), y con `--reserve`
 la reserva. **Nota** (`note`): texto libre, un aviso para personas y agentes, no un lock. **Propiedades** (`props`):
-categorías fijas (`estado`, `uso`, `chip`, `conectividad`, `perifericos`) con valores que cada bench puede ampliar
+categorías fijas (`estado`, `uso`, `chip`, `conectividad`) con valores que cada bench puede ampliar
 (`espbench props add conectividad nb-iot`, o desde el dashboard); ver ARCHITECTURE §8 "Nota y propiedades".
 
 Probar sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --port 8099` levanta una Pi simulada (API real, una

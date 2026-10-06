@@ -1,6 +1,6 @@
 ---
 name: espbench
-description: Flashear y observar placas ESP32 reales en la Pi de espbench con el CLI `espbench`. Usala para conseguir una placa del banco por sus propiedades (chip, conectividad, periféricos), flashear un build en una placa remota, verificar que arranca, mandar comandos por la consola serie y esperar la respuesta, leer el log serie o los eventos (boot, panic, flash) de una placa, o reservar una placa.
+description: Flashear y observar placas ESP32 reales en la Pi de espbench con el CLI `espbench`. Usala para conseguir una placa del banco por sus propiedades (chip, conectividad, estado, uso), flashear un build en una placa remota, verificar que arranca, mandar comandos por la consola serie y esperar la respuesta, leer el log serie o los eventos (boot, panic, flash) de una placa, o reservar una placa.
 ---
 
 # espbench
@@ -21,7 +21,7 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 
 ## Elegir placa: propiedades y nota
 
-Cada placa tiene **propiedades** (`props`, categorías fijas: `estado`, `uso`, `chip`, `conectividad`, `perifericos`; `espbench props --json` lista los valores) y puede tener una **nota** (`note`, `note_by`, `note_at`: texto libre de una persona o un agente).
+Cada placa tiene **propiedades** (`props`, categorías fijas: `estado`, `uso`, `chip`, `conectividad`; `espbench props --json` lista los valores) y puede tener una **nota** (`note`, `note_by`, `note_at`: texto libre de una persona o un agente).
 
 - **Forma recomendada**: `espbench pick --where chip=esp32-s3 --where conectividad=lte --reserve --ttl 30m --json` → la primera placa que cumple todo, libre, sana y sin `estado` excluido, en cualquier bench, ya reservada (si otro la toma en el medio, o ese bench rechaza el token, prueba la siguiente: `skipped`). No te devuelve una que ya tenés reservada (`--include-mine` si la querés). Exit 7 `not_found` si no hay ninguna: no la busques a mano entre las ocupadas, avisale al usuario.
 - **`estado=no-tocar` o `estado=roto`** (`avoid: true`, `available: false`): no la uses nunca sin preguntarle al usuario, aunque te la nombren. `pick` y `ls --free` ya las saltean.

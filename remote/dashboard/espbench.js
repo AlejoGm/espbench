@@ -339,7 +339,7 @@
 
     // Las categorías son fijas, en el código del server (board_meta.CATEGORIES): copia a propósito
     // (searchMatch la necesita sin pedir el catálogo); tests/test_contract_parity.py compara las dos.
-    var PROP_CATEGORIES = ['estado', 'uso', 'chip', 'conectividad', 'perifericos'];
+    var PROP_CATEGORIES = ['estado', 'uso', 'chip', 'conectividad'];
     // Sin catálogo (bench viejo, o todavía no llegó): los valores que excluyen de pick.
     var DEFAULT_EXCLUDE = {estado: ['no-tocar', 'roto']};
 

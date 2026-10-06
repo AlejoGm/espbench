@@ -829,6 +829,22 @@ def test_patch_note_and_props_records_events_and_shows_in_devices():
     assert len(api_events()) == n
 
 
+def test_props_of_a_removed_category_are_not_exposed():
+    """Una categoría que se saca del código (p. ej. la vieja `perifericos`) puede seguir en devices.json:
+    no se expone ni aparece como chip huérfano."""
+    import json
+    log = board()
+    registered("mi-placa")
+    f = paths.devices_file()
+    data = json.loads(f.read_text())
+    key = next(iter(data))
+    data[key]["props"] = {"chip": "esp32", "perifericos": ["modbus"]}
+    f.write_text(json.dumps(data))
+    from server.device_registry import DeviceRegistry
+    d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
+    assert d.props == {"chip": "esp32"}
+
+
 @pytest.mark.parametrize("body,msg", [
     ({"note": "a\nb"}, "control"), ({"note": "x" * 201}, "200"), ({"props": {"chip": "esp32-s4"}}, "esp32-s3"),
     ({"props": {"color": "x"}}, "categoría"), ({"user": "a\tb", "note": "x"}, "user"),
@@ -865,7 +881,7 @@ def test_patch_rename_still_works_and_meta_needs_token(tmux):
 
 def test_properties_endpoints():
     cats = run(api.get_properties())["categories"]
-    assert [c["id"] for c in cats] == ["estado", "uso", "chip", "conectividad", "perifericos"]
+    assert [c["id"] for c in cats] == ["estado", "uso", "chip", "conectividad"]
     r = run(api.add_property_value("chip", {"id": "esp32-p4", "desc": "P4"}))
     assert r["value"] == {"id": "esp32-p4", "label": "esp32-p4", "desc": "P4"}
     with pytest.raises(HTTPException) as e:

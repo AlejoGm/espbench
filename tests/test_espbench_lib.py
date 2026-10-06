@@ -777,9 +777,9 @@ def test_config_host_auto_means_discovery(tmp_path):
 # ---------- nota y propiedades (sin red) ----------
 
 def test_parse_set_ops():
-    props, add, rm = lib.parse_set_ops(["chip=ESP32-S3", "estado=", "conectividad=wifi,lte", "uso+=ci", "perifericos-=modbus"])
+    props, add, rm = lib.parse_set_ops(["chip=ESP32-S3", "estado=", "conectividad=wifi,lte", "uso+=ci", "conectividad-=ble"])
     assert props == {"chip": "esp32-s3", "estado": None, "conectividad": ["wifi", "lte"]}
-    assert (add, rm) == ({"uso": ["ci"]}, {"perifericos": ["modbus"]})
+    assert (add, rm) == ({"uso": ["ci"]}, {"conectividad": ["ble"]})
     for bad in (["chip"], ["chip==x"], ["uso+="], ["chip=a", "chip=b"], ["-chip=a"]):
         with pytest.raises(lib.EspbenchError) as e:
             lib.parse_set_ops(bad)

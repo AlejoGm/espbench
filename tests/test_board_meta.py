@@ -24,8 +24,8 @@ def cat_by_id():
 
 def test_initial_catalog():
     cats = cat_by_id()
-    assert list(cats) == ["estado", "uso", "chip", "conectividad", "perifericos"]
-    assert [c["multi"] for c in cats.values()] == [False, True, False, True, True]
+    assert list(cats) == ["estado", "uso", "chip", "conectividad"]
+    assert [c["multi"] for c in cats.values()] == [False, True, False, True]
     assert [v["id"] for v in cats["chip"]["values"]] == ["esp32", "esp32-s3", "esp32-c3"]
     assert board_meta.excluded_values(board_meta.catalog()) == {"estado": ["no-tocar", "roto"]}
     assert not paths.properties_file().exists()          # leer no escribe
@@ -102,7 +102,7 @@ def test_plan_props_rejects(args, msg):
 
 
 def test_remove_accepts_values_not_in_catalog():
-    assert board_meta.plan_props(remove={"perifericos": "viejo"}) == {"perifericos": [("remove", ["viejo"])]}
+    assert board_meta.plan_props(remove={"uso": "viejo"}) == {"uso": [("remove", ["viejo"])]}
 
 
 def test_add_and_remove_in_the_same_category():

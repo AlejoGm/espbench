@@ -345,7 +345,7 @@ class DeviceRegistry:
             note=entry.get("note"),
             note_by=entry.get("note_by"),
             note_at=entry.get("note_at"),
-            props=dict(entry.get("props") or {}),
+            props={k: v for k, v in (entry.get("props") or {}).items() if k in board_meta.CATEGORY_IDS},
             last_log_epoch=self._log_mtime(state),
         )
 
