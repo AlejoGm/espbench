@@ -418,3 +418,46 @@ test('backoffMs: duplica por error hasta el tope', () => {
     assert.equal(EB.backoffMs(4000, 2), 16000);
     assert.equal(EB.backoffMs(4000, 5), 30000);
 });
+
+test('cardState: caído, ocupado, sin MAC, salud', () => {
+    assert.equal(EB.cardState({status: 'DOWN', state: 'monitoring'}), 'st-down');
+    assert.equal(EB.cardState({status: 'RUNNING', state: 'flashing'}), 'st-busy');
+    assert.equal(EB.cardState({status: 'RUNNING', state: 'discovering'}), 'st-busy');
+    assert.equal(EB.cardState({status: 'RUNNING', state: 'unknown'}), 'st-unknown');
+    assert.equal(EB.cardState({status: 'RUNNING', state: 'monitoring', health: {boots: 1, panics: 0}}), 'st-ok');
+    assert.equal(EB.cardState({status: 'RUNNING', state: 'monitoring', health: {boots: 3, panics: 0, boot_loop: true}}), 'st-bad');
+});
+
+test('summarize: sin MAC solo cuenta en el total; reservas y locks del flash aparte', () => {
+    const c = EB.summarize([
+        {status: 'RUNNING', state: 'monitoring', lock_user: 'ana'},                       // lock del flash
+        {status: 'RUNNING', state: 'flashing', device_key: 'b1', lock_user: 'juan',
+         lock_expires: '2026-10-06T16:20:00'},                                             // reserva vigente
+        {status: 'DOWN', lock_user: 'x', lock_expires: '2026-10-06T15:00:00'},            // reserva vencida
+        {status: 'RUNNING', state: 'unknown'},
+    ], NOW);
+    assert.deepEqual(c, {total: 4, ok: 1, busy: 1, bad: 0, down: 1, reserved: 1, flashLocked: 1,
+                         who: ['juan → b1 (hasta 16:20)']});
+});
+
+test('stateBadgeHtml / firmwareHtml / lastFlashHtml', () => {
+    assert.equal(EB.stateBadgeHtml({state: 'monitoring'}), '');
+    assert.match(EB.stateBadgeHtml({state: 'erasing'}), /BORRANDO/);
+    assert.equal(EB.firmwareHtml({}), '');
+    assert.match(EB.firmwareHtml({fw_project: 'a<b', fw_version: 'v1', fw_idf: 'v5.3'}), /a&lt;b <span[^>]*>v1<\/span>.*IDF v5\.3/);
+    assert.match(EB.lastFlashHtml({}), /nunca/);
+    const now = new Date(2026, 9, 5, 16, 0, 0).getTime();
+    assert.match(EB.lastFlashHtml({last_flash_ts: '2026-10-05T15:55:00', last_flash_ok: false, last_flash_user: 'ana'}, now),
+                 /✗.*hace 5 min.*ana/);
+});
+
+test('basePath / wsUrl: directo y a través de bench-master', () => {
+    assert.equal(EB.basePath('/'), '/');
+    assert.equal(EB.basePath('/device.html'), '/');
+    assert.equal(EB.basePath('/bench/sensipi02/device.html'), '/bench/sensipi02/');
+    assert.equal(EB.basePath('/bench/sensipi02/'), '/bench/sensipi02/');
+    assert.equal(EB.wsUrl({protocol: 'http:', host: 'pi:8080', pathname: '/device.html'}, 'ws/device/esp-slot1'),
+                 'ws://pi:8080/ws/device/esp-slot1');
+    assert.equal(EB.wsUrl({protocol: 'https:', host: 'localhost:8090', pathname: '/bench/b1/device.html'}, 'ws/device/x'),
+                 'wss://localhost:8090/bench/b1/ws/device/x');
+});

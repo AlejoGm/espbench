@@ -44,3 +44,17 @@ Spec del CLI y de la lib: `docs/specs/agents-cli.md` §8 y §12.2 (decisiones de
 ```
 
 `deploy.py --build-dir` (default `build`) elige el build dir a compilar y flashear (relativo a `project_root`), y va en cada `idf.py -B`. `espbench flash --build-dir` igual, sin compilar.
+
+## Benches (`benches.py`)
+
+Encuentra los benches (hosts con el dashboard de espbench en :8080, Pi u otra máquina) y en cuál está cada placa.
+Solo stdlib: lo usan `deploy.py` y bench-master (`master/`). El CLI `espbench` todavía no: sigue pidiendo `--host`.
+
+- Candidatos: peers **online** de `tailscale status --json` + `hosts` de `~/.config/espbench-benches.json`
+  (`ESPBENCH_BENCHES_CONFIG` para otra ruta): `{"tailscale": true, "hosts": ["10.0.0.5", "lab:8080"], "timeout_s": 2}`.
+- Es bench si `GET /api/version` devuelve `app: "espbench"` (o solo `{"version"}`, benches sin actualizar).
+  El nombre lo declara el bench (`name`); dos caminos al mismo bench cuentan una vez.
+- `resolve(key)`: key = device_key, SN, MAC o `<bench>/<tty>`. `ResolveError` si no está o si está en más de un bench.
+
+En `.flashcfg.json`, un remote de `deploy.py` **sin `host`** (o `"host": "auto"`) se resuelve así: `{"name": "medidor-a", "lock_user": ..., "lock_token": ...}`.
+Un solo scan por corrida (`_benches_cache`).

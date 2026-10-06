@@ -11,6 +11,11 @@
 #
 # Idempotente. Seguro correr más de una vez.
 # Requiere root. Reiniciar al terminar para que todos los cambios tomen efecto.
+#
+# Tailscale: con TS_AUTHKEY el bench entra a la tailnet solo, con tag:bench
+# (ver docs/security.md). La clave va por variable de entorno, no por argumento
+# (quedaría en `ps` y en el historial) y no se escribe a disco:
+#   sudo TS_AUTHKEY=tskey-auth-... bash rpi/pi-setup.sh
 
 set -euo pipefail
 
@@ -199,8 +204,19 @@ ok "Servicios innecesarios deshabilitados"
 # ---------------------------------------------------------------------------
 info "Instalando Tailscale..."
 curl -fsSL https://tailscale.com/install.sh | sh
-systemctl enable tailscaled
+systemctl enable --now tailscaled
 ok "Tailscale instalado"
+
+# Bench = nodo con tag:bench, no a nombre de un usuario: no hereda sus permisos y
+# la ACL no le deja iniciar conexiones a nadie (docs/security.md).
+TS_TAGGED=0
+if [[ -n "${TS_AUTHKEY:-}" ]]; then
+    info "Conectando a Tailscale con tag:bench..."
+    tailscale up --auth-key="$TS_AUTHKEY" --advertise-tags=tag:bench
+    unset TS_AUTHKEY
+    TS_TAGGED=1
+    ok "Tailscale conectado como $(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["HostName"])')"
+fi
 
 # ---------------------------------------------------------------------------
 # Resumen
@@ -215,11 +231,16 @@ echo "    1. NetworkManager intenta WiFi guardado"
 echo "    2. Sin internet → AP '$AP_SSID' para configurar WiFi"
 echo "    3. Con internet → Tailscale conecta solo"
 echo ""
+if [[ "$TS_TAGGED" != 1 ]]; then
 echo "  PASO MANUAL (una sola vez antes de desplegar):"
-echo "    tailscale up"
-echo "    → abrí el link en browser → autenticá → listo"
+echo "    Generá una auth key (admin de Tailscale → Settings → Keys): un solo uso,"
+echo "    no efímera, tag:bench. Después:"
+echo "      sudo tailscale up --auth-key=<clave> --advertise-tags=tag:bench"
+echo "    Sin tag, el bench queda a nombre de tu usuario y con tus permisos en la"
+echo "    tailnet: si alguien se lo lleva, entra como vos (docs/security.md)."
 echo "    Reboots futuros reconectan solos."
 echo ""
+fi
 echo "  Reiniciar para aplicar todos los cambios:"
 echo "    sudo reboot"
 echo "========================================================"

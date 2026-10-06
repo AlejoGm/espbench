@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.31.8
+**Version:** 0.32.0
 
 ---
 
@@ -54,11 +54,14 @@ Disables desktop, serial TTL, HID, installs WiFi provisioning AP fallback and Ta
 sudo bash rpi/pi-setup.sh
 ```
 
-After it finishes, authenticate Tailscale (one time):
+Pass a Tailscale auth key so the bench joins the tailnet as a **tagged node** (`tag:bench`), not as your user
+(single-use, non-ephemeral key with `tag:bench`; see [docs/security.md](docs/security.md)):
 
 ```bash
-sudo tailscale up    # open the printed URL in a browser
+sudo TS_AUTHKEY=tskey-auth-... bash rpi/pi-setup.sh
 ```
+
+Without `TS_AUTHKEY`, join later with `sudo tailscale up --auth-key=<key> --advertise-tags=tag:bench`.
 
 Then reboot to apply all changes:
 
@@ -258,6 +261,25 @@ Para volver a sin auth: borrar el archivo (o dejarlo vacío).
 
 ---
 
+## bench-master (all benches in one place)
+
+A *bench* is any host running the dashboard (a Pi or another machine). `bench-master` runs **on your dev machine**,
+finds every bench and shows all their devices in one grid, with each bench's monitor/console proxied through it:
+
+```bash
+master/bench-master --open      # first run creates master/.venv; http://localhost:8090
+```
+
+- **Discovery**: online Tailscale peers that answer `GET :8080/api/version` as espbench, plus hosts listed in
+  `~/.config/espbench-benches.json`: `{"hosts": ["10.0.0.5", "lab:8080"], "tailscale": true}`.
+- A bench names itself: `/opt/esp/bench_name` on the bench, or its hostname.
+- A bench that stops answering stays listed as offline with its last known devices.
+- Listens on 127.0.0.1 only and rejects cross-site requests: the proxy gives access to every bench's serial console.
+
+Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md).
+
+---
+
 ## Configuration Reference (`.flashcfg.json`)
 
 | Field | Description |
@@ -267,7 +289,7 @@ Para volver a sin auth: borrar el archivo (o dejarlo vacío).
 | `paths.idf_py` | Path to `idf.py` (optional, auto-detected) |
 | `local.port` | Serial port for local flash |
 | `local.monitor` | Open monitor after flash |
-| `remote.host` | Pi IP or hostname |
+| `remote.host` | Pi IP or hostname. Omit it (or `"auto"`) to find the bench the device is on: `name` is then the device_key, SN, MAC or `<bench>/<tty>` |
 | `remote.port` | TCP port (`5000 + device index`) |
 | `remote.token` | Server auth token (= `/opt/esp/api_token` on the Pi, if it exists) |
 | `remote.lock_user` | Username for device locking |
@@ -289,6 +311,8 @@ espbench/
 │   ├── espbench.py            # CLI for agents (`espbench`, --json, exit codes)
 │   ├── espbench_lib.py        # Client library: config, HTTP API, log ranges with waits, flash + verify
 │   └── agent/SKILL.md         # Claude Code skill for `espbench`
+│   └── benches.py             # Bench discovery (Tailscale + config) and device → bench resolve
+├── master/                    # bench-master: all benches in one place (runs on the dev machine)
 ├── remote/
 │   ├── server/
 │   │   ├── remote_esp32.py    # Per-device process: wiring, MAC discovery, threads

@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import pathlib
 import re
+import socket
 import subprocess
 import time
 from typing import Any, Optional
@@ -34,20 +35,29 @@ registry = DeviceRegistry()
 streamer = LogStreamer()
 
 
+def _read_first_line(path: pathlib.Path) -> str:
+    try:
+        return path.read_text().strip() if path.exists() else ""
+    except OSError:
+        return ""
+
+
 @app.get("/api/version")
 async def get_version():
-    """`auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo
-    si lo hay: `unlock` forzado lo exige)."""
-    try:
-        version_file = paths.version_file()
-        version = version_file.read_text().strip() if version_file.exists() else "dev"
-    except Exception:
-        version = "dev"
+    """También es la identidad del bench para bench-master: `app` dice que es un
+    espbench (lo distingue de otros hosts de la tailnet) y `name`, cómo se llama.
+    `auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo si lo
+    hay: `unlock` forzado lo exige)."""
     try:
         has_token = bool(auth.read_token())
     except auth.AuthConfigError:
         has_token = True        # falla cerrado: hay archivo, ilegible
-    return {"version": version, "auth": has_token}
+    return {
+        "app": "espbench",
+        "version": _read_first_line(paths.version_file()) or "dev",
+        "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
+        "auth": has_token,
+    }
 
 
 @app.get("/api/devices")

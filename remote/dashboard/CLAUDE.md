@@ -39,6 +39,7 @@ Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests
 
 ## Notas
 
-- Las llamadas usan el mismo host/puerto que la página (no hay URLs hardcodeadas).
-- Autenticación opcional: si la Pi tiene `/opt/esp/api_token`, toda escritura va por `EBAuth.fetch` (si no, da 401). Las lecturas y el WebSocket siguen abiertos. Sin el archivo, la consola serie permite escribirle a cualquier device desde la red interna.
+- Todas las URLs son **relativas** a la página (`api/...`, `device.html`, `style.css`; WebSocket con `EB.wsUrl`). Nada empieza con `/`: bench-master sirve este mismo frontend bajo `/bench/<nombre>/`.
+- `espbench.js` también tiene la lógica de cards (`cardState`, `summarize`, `firmwareHtml`...) que reusa bench-master (`master/dashboard/`).
+- Autenticación opcional: si la Pi tiene `/opt/esp/api_token`, toda escritura va por `EBAuth.fetch` (si no, da 401). Las lecturas y el WebSocket siguen abiertos. Sin el archivo, la consola serie permite escribirle a cualquier device desde la red interna. El token se guarda en `localStorage` por bench: a través de bench-master todos comparten origen, así que la clave lleva el `/bench/<nombre>/`.
 - Para probarlo sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --uvicorn` (placa simulada con eventos reales; necesita `uvicorn[standard]` o `websockets`: sin eso el WebSocket del vivo falla y el resto anda).

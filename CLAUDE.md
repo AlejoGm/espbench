@@ -9,7 +9,8 @@ Arquitectura completa: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Leerlo ante
 ```
 espbench/
 ├── common.py          # Compartido cliente/server: framing TCP, SHA256, MAC↔SN
-├── client/            # Máquina del developer: deploy.py (humanos), CLI espbench + espbench_lib (agentes), agent/SKILL.md
+├── client/            # Máquina del developer: deploy.py (humanos), CLI espbench + espbench_lib (agentes), agent/SKILL.md, discovery de benches (benches.py)
+├── master/            # bench-master: todos los benches en un lugar (corre en la máquina del dev)
 ├── remote/            # Raspberry Pi
 │   ├── server/        # Un proceso por device (remote_esp32.py) + backend del dashboard (api.py)
 │   ├── dashboard/     # Frontend del dashboard (HTML/CSS/JS, sin build)
@@ -36,7 +37,7 @@ espbench/
 pytest tests/
 ```
 
-Corren en el host, sin hardware. `tests/conftest.py` apunta `ESP_BASE` a un directorio temporal, así que ningún test toca `/opt/esp`. Lo que solo se puede verificar en la Pi está en `docs/PI_CHECKLIST.md` (P0–P3, desde `docs/ARCHITECTURE.md` §10).
+Corren en el host, sin hardware. `tests/test_master.py` necesita httpx/websockets: correrlo con `master/.venv/bin/python -m pytest tests/` (sin ellos se saltea). `tests/conftest.py` apunta `ESP_BASE` a un directorio temporal, así que ningún test toca `/opt/esp`. Lo que solo se puede verificar en la Pi está en `docs/PI_CHECKLIST.md` (P0–P3, desde `docs/ARCHITECTURE.md` §10).
 
 ## Server en la Pi
 

@@ -9,7 +9,10 @@
  */
 (function () {
     'use strict';
-    var KEY = 'eb.apiToken';
+    // A través de bench-master todos los benches comparten origen (localhost:8090):
+    // un token por bench (por su /bench/<nombre>/). Directo, la clave de siempre.
+    var BASE = EB.basePath(location.pathname);
+    var KEY = 'eb.apiToken' + (BASE === '/' ? '' : ':' + BASE);
     var pending = null;
 
     function get() {

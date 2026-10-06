@@ -722,3 +722,17 @@ def test_devremote_reset_respects_reservations(tmux):
     assert run(api.devremote_reset("ttyUSB0", {"lock_user": "juan", "lock_token": "j"}))["ok"]
     assert run(api.devremote_reset("ttyUSB0", {"force": True}))["ok"]
     assert tmux[-1] == ["/usr/local/bin/devremote", "--reset", "ttyUSB0"]
+
+
+def test_version_identifies_bench(monkeypatch):
+    monkeypatch.setattr(api.socket, "gethostname", lambda: "sensipi02")
+    paths.version_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.version_file().write_text("0.13.0\n")
+    assert run(api.get_version()) == {"app": "espbench", "version": "0.13.0", "name": "sensipi02", "auth": False}
+    paths.bench_name_file().write_text("lab-cordoba\n")
+    assert run(api.get_version())["name"] == "lab-cordoba"
+
+
+def test_version_without_files():
+    r = run(api.get_version())
+    assert r["app"] == "espbench" and r["version"] == "dev" and r["name"]
