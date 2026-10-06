@@ -336,6 +336,8 @@ boot ─────► devremote.service ────────────�
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
+| `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
+| `GET /api/board/{key}/events?type=a,b&since=&limit=` | Eventos de la placa, ordenados por (sesión, offset) |
 
 - **Token (opcional)**: si existe `/opt/esp/api_token` (`auth.py`, se lee en cada
   pedido), las escrituras (POST/PATCH) exigen `Authorization: Bearer <token>` →
@@ -354,6 +356,41 @@ boot ─────► devremote.service ────────────�
 - `send`, `reserve` y `release` quedan en `events.jsonl` (`events.record`, cursor =
   fin del log en ese momento; el de `send` es el previo al envío y solo se
   registra si tmux lo mandó).
+- **Lecturas por placa** (`/api/board/{key}`): `key` = `device_key`, SN o MAC (con
+  o sin separadores), resuelto con `devices.json` (`DevicesFile.resolve_board`).
+  Funcionan con la placa desconectada (los datos viven en `devices/<MAC>/`); la
+  sesión "actual" de una placa desconectada es la última. Escrituras por tty, con
+  `expect_mac`.
+
+### Rangos del log (`remote/server/logrange.py`, spec §5 y §7.3)
+
+- **Anchors** (`since`, `around`): `now`, `session`, un tipo de evento con ordinal
+  (`boot`, `panic~1`: en la sesión actual, ordenados por offset, no por orden en
+  el archivo), tiempo (`5m`, `16:02`, `2026-10-05T16:02`, zona de la Pi; una hora
+  posterior a ahora es de ayer) y cursores `c:<sesión>:<offset>` (a mitad de línea
+  → inicio de la línea; sesión que ya no está → `cursor_expired`). `since` default:
+  `session`.
+- **Tiempo**: búsqueda lineal hacia atrás hasta una línea con hora < T − 2 s (las
+  horas del archivo no son monótonas, §4) y hacia adelante hasta la primera ≥ T.
+  Las líneas sin prefijo no cuentan.
+- **`until`**: el primer X después de `since`, en la misma sesión. Un tipo de
+  evento sale de `events.jsonl`, leído **después** de fijar el tamaño del log (un
+  evento que no estaba aparece con cursor ≥ `end` en el próximo poll); `boot` y
+  `panic` se buscan en las líneas con la detección de `SerialWatch` (`line_kind`),
+  porque el evento se escribe un instante después que su línea. Un patrón
+  (`re:<regex>` o substring) se evalúa sobre el texto sin prefijo ni ANSI, con el
+  `\r` aplicado y sobre la línea lógica (`>` + sus `↪`, aunque haya taglog en el
+  medio). `echo=<texto>`: la primera línea lógica que termina con él (el eco de
+  `send`) no cuenta. Sin match: `until_found: false`, `end` = fin del log.
+- **`around`**: del `rst:` anterior a E (inclusive) al siguiente (exclusive), o
+  `before`/`after` líneas. No se combina con `since`/`until`.
+- **Salida**: líneas compactas (`HH:MM:SS.mmm <origen> <texto>`, con fecha si no es
+  la de `date`), sin ANSI salvo `raw=1`, progreso de esptool colapsado, `src`
+  (`serial`/`taglog`/`all`), `grep`, y con más de `max_lines` (default 200, tope
+  5000) las primeras 50 + las últimas y un marcador. `session_ended`: la sesión del
+  rango no es la actual o no hay proceso vivo escribiéndola. `partial` siempre es
+  `null`: la línea en curso vive en la memoria del proceso del device (sale al
+  archivo a los 150 ms / 1 s).
 - Las rutas `/api/device/{tty}/...` de GET tienen que declararse **antes** de
   `/api/device/{tty:path}`, que si no se las come (hay test).
 - `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del

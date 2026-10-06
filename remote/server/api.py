@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import auth, events, history, locks, paths, runstate
+from server import auth, events, history, locks, logrange, paths, runstate
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
@@ -136,6 +136,57 @@ def _record(state: dict, type_: str, detail: dict, cursor: Optional[str] = None)
         return cursor
     except OSError:
         return None
+
+
+# ---------- lecturas por placa (device_key, SN o MAC) ----------
+# Funcionan con la placa desconectada: los datos viven en devices/<MAC>/. La
+# sesión "actual" de una placa desconectada es la última (su output.log).
+# Handlers sync: leen archivos, FastAPI los corre en un threadpool.
+
+_RANGE_STATUS = {"bad_anchor": 400, "bad_request": 400, "cursor_expired": 410, "not_found": 404}
+
+
+def _board_mac(key: str) -> str:
+    mac = DevicesFile().resolve_board(key)
+    if mac is None or not paths.device_home(mac).is_dir():
+        _fail(404, "not_found", f"no hay placa '{key}' (device_key, SN o MAC)")
+    return mac
+
+
+def _board_live(mac: str) -> bool:
+    """Hay un proceso vivo escribiendo el output.log de esa placa."""
+    log = str(paths.device_output_log(mac))
+    for state in runstate.list_all().values():
+        if state.get("log_path") == log:
+            return state.get("state") != "disconnected" and runstate.pid_alive(state.get("pid"))
+    return False
+
+
+def _range_call(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except logrange.RangeError as e:
+        _fail(_RANGE_STATUS.get(e.error, 400), e.error, e.message)
+
+
+@app.get("/api/board/{key}/log")
+def board_log(key: str, since: Optional[str] = None, until: Optional[str] = None,
+              around: Optional[str] = None, before: Optional[str] = None, after: Optional[str] = None,
+              max_lines: Optional[str] = None, grep: Optional[str] = None, src: Optional[str] = None,
+              raw: bool = False, echo: Optional[str] = None):
+    """Rango del log (docs/specs/agents-cli.md §5 y §7.3)."""
+    mac = _board_mac(key)
+    return _range_call(logrange.read_range, paths.device_home(mac), since=since, until=until, around=around,
+                       before=before, after=after, max_lines=max_lines, grep=grep, src=src, raw=raw,
+                       echo=echo, live=_board_live(mac))
+
+
+@app.get("/api/board/{key}/events")
+def board_events(key: str, type: Optional[str] = None, since: Optional[str] = None,
+                 limit: Optional[str] = None):
+    """Eventos de la placa (events.jsonl), por (sesión, offset)."""
+    mac = _board_mac(key)
+    return _range_call(logrange.list_events, paths.device_home(mac), types=type, since=since, limit=limit)
 
 
 @app.get("/api/device/{tty}/jobs")

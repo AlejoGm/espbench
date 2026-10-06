@@ -99,6 +99,32 @@ class DevicesFile:
                 print(f"[device_registry] devices.json ilegible: {e}", flush=True)
                 return {}
 
+    def resolve_board(self, key: str) -> Optional[str]:
+        """device_key, SN o MAC (con o sin separadores) → MAC como está en
+        devices.json. Una MAC que no está en devices.json pero tiene
+        devices/<MAC>/ también vale. None si no hay placa."""
+        key = (key or "").strip()
+        if not key:
+            return None
+        data = self.get_all()
+        bare = key.upper().replace(":", "").replace("-", "")
+        if re.fullmatch(r"[0-9A-F]{12}", bare):
+            for mac in data:
+                if mac.upper().replace(":", "") == bare:
+                    return mac
+            if paths.device_home(bare).is_dir():
+                return ":".join(bare[i:i + 2] for i in range(0, 12, 2))
+        for mac, entry in data.items():
+            if entry.get("device_key") == key:
+                return mac
+        for mac in data:
+            try:
+                if mac_to_sn_sfy(mac).upper() == key.upper():
+                    return mac
+            except Exception:
+                continue
+        return None
+
     def find_by_key(self, device_key: str) -> Optional[tuple]:
         """Return (mac, entry) for the given device_key, or None."""
         for mac, entry in self.get_all().items():

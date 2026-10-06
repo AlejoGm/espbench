@@ -81,7 +81,8 @@ def test_history_routes_are_not_shadowed_by_device_path_route():
     """/api/device/{tty:path} se come todo: las rutas de historial tienen que ir antes."""
     paths_in_order = [r.path for r in api.app.routes]
     catch_all = paths_in_order.index("/api/device/{tty:path}")
-    for p in ("/api/device/{tty}/jobs", "/api/device/{tty}/sessions", "/api/device/{tty}/send"):
+    for p in ("/api/device/{tty}/jobs", "/api/device/{tty}/sessions", "/api/device/{tty}/send",
+              "/api/board/{key}/log", "/api/board/{key}/events"):
         assert paths_in_order.index(p) < catch_all
 
 
@@ -317,3 +318,57 @@ def test_token_required_on_writes(tmux, call, monkeypatch):
 def test_token_does_not_close_reads():
     set_token("s3cret")
     assert run(api.device_jobs("ttyUSB0")) == []
+
+
+# ---------- lecturas por placa: /api/board/{key}/log|events ----------
+
+def registered(key="OEM_NOVUS"):
+    from server.device_registry import DevicesFile
+    DevicesFile().update_device_key(MAC, key)
+
+
+def test_board_log_by_key_sn_or_mac_with_board_disconnected():
+    """Sin proceso (placa desenchufada): se lee igual, y la sesión es la última."""
+    from common import mac_to_sn_sfy
+    board(lines=("> rst:0x1 (POWERON_RESET)", "> Guru Meditation Error: Core  1 panic'ed (X)"))
+    runstate.remove("ttyUSB0")
+    registered()
+    for key in ("OEM_NOVUS", mac_to_sn_sfy(MAC), MAC, "aabbccddeeff", "AA-BB-CC-DD-EE-FF"):
+        r = api.board_log(key, since="session", until="panic")
+        assert r["until_found"] and r["start"] == f"c:{SID}:0", key
+        assert r["session_ended"] is True                # nadie más escribe esa sesión
+
+
+def test_board_log_live_session_not_ended():
+    import os
+    log = board()
+    runstate.write("ttyUSB0", {"mac": MAC, "state": "monitoring", "log_path": str(log), "pid": os.getpid()})
+    assert api.board_log(MAC, until="re:nunca")["session_ended"] is False
+    runstate.write("ttyUSB0", {"mac": MAC, "state": "disconnected", "log_path": str(log), "pid": os.getpid()})
+    assert api.board_log(MAC, until="re:nunca")["session_ended"] is True
+
+
+def test_board_log_errors():
+    board()
+    registered()
+    cases = [(dict(key="NO_EXISTE"), 404, "not_found"),
+             (dict(key=MAC, since="ayer"), 400, "bad_anchor"),
+             (dict(key=MAC, since="c:20200101_000000_1:0"), 410, "cursor_expired"),
+             (dict(key=MAC, grep="("), 400, "bad_request")]
+    for kw, status, error in cases:
+        with pytest.raises(HTTPException) as e:
+            api.board_log(**kw)
+        assert err(e) == (status, error), kw
+
+
+def test_board_events():
+    from server import events
+    log = board()
+    events.append(paths.device_events_file(MAC), events.make("boot", f"c:{SID}:{len(log.read_bytes()) - 10}"))
+    events.append(paths.device_events_file(MAC), events.make("send", f"c:{SID}:0", by="api"))
+    r = api.board_events(MAC)
+    assert [e["type"] for e in r["events"]] == ["send", "boot"] and r["session"] == SID
+    assert [e["type"] for e in api.board_events(MAC, type="boot")["events"]] == ["boot"]
+    with pytest.raises(HTTPException) as e:
+        api.board_events(MAC, type="xyz")
+    assert err(e) == (400, "bad_request")
