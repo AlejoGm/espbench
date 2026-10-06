@@ -184,9 +184,14 @@ def test_reserve_writes_lock_with_expiry_and_mac():
     r = reserve(ttl_s=600)
     lock = locks.read("ttyUSB0")
     assert lock.user == "alejo" and lock.mac == "AABBCCDDEEFF"
-    assert abs(lock.expires - (time.time() + 600)) < 5 and r["expires"] == lock.expires_iso()
+    assert abs(lock.expires - (time.time() + 600)) < 5 and r["expires"] == lock.expires_iso_tz()
+    import datetime as dt
+    assert dt.datetime.fromisoformat(r["expires"]).timestamp() == lock.expires        # con zona, como lock_expires
     (ev,) = api_events()
     assert ev["type"] == "reserve" and ev["detail"]["user"] == "alejo" and ev["cursor"].startswith(f"c:{SID}:")
+    assert ev["detail"]["expires"] == r["expires"] and dt.datetime.fromisoformat(r["expires"]).utcoffset() is not None
+    run(api.device_release("ttyUSB0", {"lock_user": "alejo", "lock_token": "t0k"}))
+    assert api_events()[-1]["detail"]["expires"] == r["expires"]
 
 
 def test_reserve_conflicts():

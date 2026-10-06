@@ -11,7 +11,7 @@ anteriores) y events.jsonl, todos en el directorio de la placa
 Anchors (`since`, `around`):
 - now / session
 - tipo de evento con ordinal: boot, panic~1 ... (en la sesión actual, por offset)
-- tiempo: 5m, 30s, 2h, 16:02, 16:02:03, 2026-10-05T16:02 (zona de la Pi)
+- tiempo: 500ms, 5m, 30s, 2h, 16:02, 16:02:03, 2026-10-05T16:02 (zona de la Pi)
 - cursor c:<sesión>:<offset> (si cae a mitad de línea, al inicio de esa línea)
 
 `until`: el primer X después de since, sin cruzar la sesión. X es un tipo de
@@ -63,10 +63,10 @@ _PREFIX_RE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3}) ([>|↪]) "
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _PROGRESS_RE = re.compile(r"\b(?:Writing|Reading) at 0x[0-9a-fA-F]+")
 _EVENT_RE = re.compile(r"([a-z_]+)(?:~(\d+))?")
-_DUR_RE = re.compile(r"(\d+(?:\.\d+)?)(s|m|h|d)")
+_DUR_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h|d)")      # las unidades de parse_duration del cliente
 _CLOCK_RE = re.compile(r"(\d{1,2}):(\d\d)(?::(\d\d)(?:\.(\d{1,6}))?)?")
 _ISO_RE = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d{1,6})?)?(?:Z|[+-]\d\d:?\d\d)?")
-_DUR_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_DUR_UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
 # Patrones del usuario (grep, until=re:) sin auth: tope de largo, de texto
 # evaluado y de tiempo. Con `regex`, timeout por búsqueda; sin él (fallback),

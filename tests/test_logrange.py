@@ -13,6 +13,7 @@ import sys
 
 import pytest
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
 from server import events, logrange, paths
@@ -660,3 +661,13 @@ def test_list_events_counts_all_types_beyond_the_page(b):
     assert le(limit=1, types="panic", counts=True)["counts"] == {"boot": 2, "panic": 1}   # sin el filtro de tipo
     assert le(since=b.cursor("panic0"), counts=True)["counts"] == {"panic": 1, "boot": 1}
     assert "counts" not in le()                                                          # el CLI no lo pide
+
+
+def test_duration_anchors_accept_the_client_units():
+    """El cliente acepta 300ms en sus duraciones (parse_duration); los anchors
+    de tiempo del server también (antes `--since 500ms` daba bad_anchor)."""
+    from client import espbench_lib
+    now = epoch("16:10:00.000")
+    for text in ("500ms", "1.5s", "30s", "5m", "2h", "1d"):
+        assert logrange.parse_time(text, now) == pytest.approx(now - espbench_lib.parse_duration(text)), text
+    assert logrange.parse_time("5", now) is None          # sin unidad no es un anchor (el cliente: segundos)

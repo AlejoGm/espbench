@@ -359,8 +359,9 @@ async def device_reserve(tty: str, body: dict = Body(...), authorization: Option
             _fail(403, "token_mismatch", "par user/token incorrecto")
         new = locks.Lock(user, token, int(time.time()) + ttl, locks.normalize_mac(state.get("mac")))
         locks.write(tty, new)
-    _record(state, "reserve", {"user": user, "expires": new.expires_iso()})
-    return {"ok": True, "tty": tty, "user": user, "expires": new.expires_iso(), "mac": state.get("mac")}
+    # Con la zona de la Pi (como lock_expires de /api/devices): el que lo lee puede estar en otra
+    _record(state, "reserve", {"user": user, "expires": new.expires_iso_tz()})
+    return {"ok": True, "tty": tty, "user": user, "expires": new.expires_iso_tz(), "mac": state.get("mac")}
 
 
 @app.post("/api/device/{tty}/release")
@@ -372,7 +373,7 @@ async def device_release(tty: str, body: dict = Body(...), authorization: Option
     lock = _drop_lock(tty, user, token)
     if lock is None:
         return {"ok": True, "message": "no estaba bloqueado"}
-    _record(runstate.read(tty) or {}, "release", {"user": user, "expires": lock.expires_iso()})
+    _record(runstate.read(tty) or {}, "release", {"user": user, "expires": lock.expires_iso_tz()})
     return {"ok": True, "message": "liberado"}
 
 
@@ -444,7 +445,7 @@ async def device_unlock(tty: str, body: dict = Body(...), authorization: Optiona
         lock = _drop_lock(tty, user, token)
     if lock is None:
         return {"ok": True, "message": "no estaba bloqueado"}
-    detail = {"user": lock.user, "expires": lock.expires_iso()}
+    detail = {"user": lock.user, "expires": lock.expires_iso_tz()}
     if forced:
         detail.update(_forced_by(body, request))
     _record(runstate.read(tty) or {}, "release", detail)
