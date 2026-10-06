@@ -145,6 +145,7 @@ def test_mac_from_serial_when_esptool_cannot_read_it(env, monkeypatch):
         # promote() pone la MAC y después hace la transición: esperar el estado, no la MAC
         if wait_for(lambda: device.state == DeviceState.MONITORING):
             seen["promoted"] = device.state
+        wait_for(lambda: (base / "devices.json").exists())   # register_mac va después del promote
         done.set()
 
     monkeypatch.setattr(remote_esp32, "control_server", fake_control_server)
