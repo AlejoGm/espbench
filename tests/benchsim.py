@@ -115,6 +115,8 @@ class SimBoard:
 
     def _start_process(self):
         self.manager = DeviceManager(f"/dev/{self.tty}", mac_reader=lambda: self.mac, tcp_port=self.port)
+        # El mismo mecanismo de línea parcial, con otro tiempo (tests rápidos; el real es 150 ms)
+        self.manager.device.device_log._partial_timeout = self.bench.partial_timeout
         self.manager.discover()
 
     @property
@@ -145,6 +147,16 @@ class SimBoard:
     def boot(self, reason: str = "SW_CPU_RESET", code: str = "0xc") -> None:
         self.serial(boot_text(reason, code))
         self.serial(PROMPT)
+
+    def wait_prompt(self, timeout: float = 2.0) -> None:
+        """Hasta que el prompt (sin \\n: sale al archivo a los partial_timeout) esté escrito."""
+        log = self.device.device_log.path
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if log is not None and log.read_bytes().endswith(f"> {PROMPT}\n".encode()):
+                return
+            time.sleep(0.01)
+        raise TimeoutError("el prompt no salió al log")
 
     def panic(self) -> None:
         self.serial(PANIC)
@@ -335,8 +347,11 @@ def _free_port() -> int:
 class Bench:
     """La Pi simulada. ESP_BASE tiene que estar seteado antes (tests: conftest)."""
 
-    def __init__(self, server: str = "adapter", port: int = 0):
+    def __init__(self, server: str = "adapter", port: int = 0, partial_timeout: float = 0.03):
+        """partial_timeout: hold de la línea serial sin \\n de DeviceLog (el real
+        es device_log.PARTIAL_TIMEOUT, 150 ms; los tests usan menos)."""
         self.server_kind = server
+        self.partial_timeout = partial_timeout
         self.base = pathlib.Path(os.environ["ESP_BASE"])
         self.dev_dir = self.base / "_dev"
         self.dev_dir.mkdir(parents=True, exist_ok=True)
@@ -369,7 +384,8 @@ class Bench:
             self._httpd = ThreadingHTTPServer(("127.0.0.1", self._port), _Handler)
             self._httpd.daemon_threads = True
             self.port = self._httpd.server_address[1]
-            threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+            # poll_interval: shutdown() espera hasta un poll entero (default 0,5 s por test)
+            threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         return self
 
     def _start_uvicorn(self):
@@ -415,7 +431,7 @@ class Bench:
         self.boards[tty] = b
         if boot:
             b.boot("POWERON_RESET", "0x1")
-            time.sleep(0.25)                 # que el prompt (sin \n) salga al archivo
+            b.wait_prompt()
         return b
 
 
@@ -427,7 +443,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if "ESP_BASE" not in os.environ:
         raise SystemExit("seteá ESP_BASE a un directorio temporal")
-    bench = Bench("uvicorn" if a.uvicorn else "adapter", port=a.port).start()
+    bench = Bench("uvicorn" if a.uvicorn else "adapter", port=a.port,
+                  partial_timeout=device_log.PARTIAL_TIMEOUT).start()
     bench.add_board("ttyUSB0", "AA:BB:CC:DD:EE:01", key="sim-board")
     print(f"bench en http://{bench.host} — placa sim-board en ttyUSB0 (Ctrl-C para salir)", flush=True)
     try:

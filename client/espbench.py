@@ -16,8 +16,10 @@ Comunes: --json, --host, --profile, --expect-panic. Con --json, un objeto JSON
 por comando en stdout. Exit codes y `error`: docs/specs/agents-cli.md §8.3.
 """
 import argparse
+import contextlib
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -148,7 +150,38 @@ def _wait_args(a) -> dict:
             "max_lines": a.max_lines, "expect_panic": a.expect_panic}
 
 
+def _validate(a) -> None:
+    """Todo lo que puede ser bad_request, ANTES de escribir: una escritura que
+    salió y después falla por un argumento deja la placa en un estado que el
+    agente no pidió (antes `flash --verify=abc` flasheaba y recién ahí fallaba)."""
+    for name, value in (("--timeout", getattr(a, "timeout", None)), ("--for", getattr(a, "for_", None)),
+                        ("--verify", getattr(a, "verify", None)), ("--ttl", getattr(a, "ttl", None))):
+        if value is not None:
+            lib.parse_duration(value, name)
+    until = getattr(a, "until", None) or ""
+    if until.startswith("idle:"):
+        lib.parse_duration(until[5:], "idle")
+    for name, pattern in (("--until", until[3:] if until.startswith("re:") else None),
+                          ("--grep", getattr(a, "grep", None))):
+        if pattern:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise EspbenchError("bad_request", f"{name}: regex inválida: {e}")
+
+
+@contextlib.contextmanager
+def _after_written(written: dict):
+    """Un error después de escribir lleva lo que ya se escribió (sent, cursor, job_id)."""
+    try:
+        yield
+    except EspbenchError as e:
+        e.data = {**{k: v for k, v in written.items() if v is not None and k != "ok"}, **e.data}
+        raise
+
+
 def cmd_logs(c: lib.Client, a, out: Out) -> int:
+    _validate(a)
     board = c.resolve(a.dev)
     r = c.read_range(board.key, since=a.since, until=a.until, around=a.around, before=a.before, after=a.after,
                      grep=a.grep, src=a.src, **_wait_args(a))
@@ -157,14 +190,20 @@ def cmd_logs(c: lib.Client, a, out: Out) -> int:
 
 
 def cmd_send(c: lib.Client, a, out: Out) -> int:
+    _validate(a)
     board = c.resolve(a.dev, write=True)
+    waiting = bool(a.until or a.for_)
+    known = c.crash_snapshot(board.key) if waiting else None
     s = c.send(board, a.text, enter=not a.no_enter)
     r = {"ok": True, "board": board.label, "sent": a.text, "cursor": s.get("cursor")}
-    if a.until or a.for_:
-        if not s.get("cursor"):
-            raise EspbenchError("unexpected", "el server no devolvió el cursor del send")
-        w = c.read_range(board.key, since=s["cursor"], until=a.until, echo=a.text, idle_needs_output=True,
-                         **_wait_args(a))
+    if waiting:
+        with _after_written(r):
+            if not s.get("cursor"):
+                raise EspbenchError("unexpected", "el server no devolvió el cursor del send")
+            w = c.read_range(board.key, since=s["cursor"], until=a.until, echo=a.text, idle_needs_output=True,
+                             known=known, **_wait_args(a))
+        if w.get("start") == r["cursor"]:
+            w.pop("start")
         r.update({k: v for k, v in w.items() if k != "board"})
     return out.emit(r, _human_lines)
 
@@ -177,13 +216,20 @@ def _now_cursor(c: lib.Client, board: lib.Board) -> str:
     return c.board_log(board.key, since="now", max_lines=1)["end"]
 
 
-def _after_write(c: lib.Client, a, out: Out, board: lib.Board, since: str, r: dict) -> int:
+def _waits_after_write(a) -> bool:
+    return a.verify is not None or bool(a.until)
+
+
+def _after_write(c: lib.Client, a, out: Out, board: lib.Board, since: str, r: dict, known) -> int:
     """--verify / --until después de un flash o un reset."""
-    if a.verify is None and not a.until:
+    if not _waits_after_write(a):
         return out.emit(r, _human_kv)
     timeout = lib.parse_duration(a.timeout, "--timeout") if a.timeout else lib.VERIFY_TIMEOUT_S
-    v = c.verify(board, since, window_s=_verify_window(a), until=a.until, timeout_s=timeout,
-                 expect_panic=a.expect_panic, max_lines=a.max_lines)
+    with _after_written(r):
+        v = c.verify(board, since, window_s=_verify_window(a), until=a.until, timeout_s=timeout,
+                     expect_panic=a.expect_panic, max_lines=a.max_lines, known=known)
+    if v["ok"] and a.max_lines is None:
+        v = {k: x for k, x in v.items() if k not in ("lines", "events")}      # ok: alcanza con el boot
     r["verify"] = v
     if not v["ok"]:
         r.update({"ok": False, "error": v["error"], "message": v.get("message")})
@@ -195,6 +241,7 @@ def _after_write(c: lib.Client, a, out: Out, board: lib.Board, since: str, r: di
 
 
 def cmd_flash(c: lib.Client, a, out: Out) -> int:
+    _validate(a)
     board = c.resolve(a.dev, write=True)
     fcfg = c.config.flashcfg
     root = pathlib.Path(".")
@@ -205,30 +252,37 @@ def cmd_flash(c: lib.Client, a, out: Out) -> int:
         build_dir = root / build_dir
     encrypt = bool(fcfg.get("encrypt", True)) if a.encrypt is None else a.encrypt
     erase = bool(fcfg.get("erase", False)) or a.erase
-    before = _now_cursor(c, board) if (a.verify is not None or a.until) else None
+    before = known = None
+    if _waits_after_write(a):
+        before, known = _now_cursor(c, board), c.crash_snapshot(board.key)
     r = c.flash(board, build_dir.resolve(), chip=str(fcfg.get("chip") or "auto"),
                 baud=int(fcfg.get("flash_baud") or 921600), encrypt=encrypt, erase=erase,
                 on_line=None if out.json else (lambda l: print(l, file=sys.stderr, flush=True)))
     r["board"] = board.label
-    if a.verify is None and not a.until:
+    if not _waits_after_write(a):
         return out.emit(r, _human_kv)
-    ready = c.wait_ready(board)
+    with _after_written(r):
+        ready = c.wait_ready(board)
     if ready is None:
         out.log("la placa no volvió a monitoring todavía; verifico igual")
-    return _after_write(c, a, out, board, r.get("cursor") or before, r)
+    return _after_write(c, a, out, board, r.get("cursor") or before, r, known)
 
 
 def cmd_reset(c: lib.Client, a, out: Out) -> int:
-    if a.bootloader and (a.verify is not None or a.until):
+    _validate(a)
+    if a.bootloader and _waits_after_write(a):
         raise EspbenchError("bad_request", "--bootloader no se combina con --verify/--until")
     board = c.resolve(a.dev, write=True)
-    before = _now_cursor(c, board) if (a.verify is not None or a.until) else None
+    before = known = None
+    if _waits_after_write(a):
+        before, known = _now_cursor(c, board), c.crash_snapshot(board.key)
     s = c.command(board, "bootloader" if a.bootloader else "reset")
     r = {"ok": True, "board": board.label, "command": s.get("command"), "cursor": s.get("cursor")}
-    return _after_write(c, a, out, board, s.get("cursor") or before, r)
+    return _after_write(c, a, out, board, s.get("cursor") or before, r, known)
 
 
 def cmd_reserve(c: lib.Client, a, out: Out) -> int:
+    _validate(a)
     board = c.resolve(a.dev, write=True)
     r = c.reserve(board, int(lib.parse_duration(a.ttl, "--ttl")))
     return out.emit({"ok": True, "board": board.label, "tty": board.tty, "user": r.get("user"),

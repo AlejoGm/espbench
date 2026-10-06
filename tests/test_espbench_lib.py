@@ -344,8 +344,9 @@ def test_reservation_lost(bench, client, board, tmp_path):
     with pytest.raises(lib.EspbenchError) as e:
         client.send(b, "status")
     assert errcode(e) == ("reservation_lost", 6)
-    client.release(b)                                                # olvida la reserva local
-    assert not client.holds_reservation(b) and client.send(b, "status")["ok"]
+    assert "venció o la soltaron" in e.value.message and "espbench reserve sim-board" in e.value.message
+    assert not client.holds_reservation(b)                           # la olvidó: la próxima no la exige
+    assert client.send(b, "status")["ok"]
 
 
 def test_expired_reservation_is_lost(client, board):
@@ -439,7 +440,7 @@ def flash_and_verify(client, tmp_path, window=0.6, **kw):
 def test_flash_verify_ok(client, board, tmp_path):
     r, v = flash_and_verify(client, tmp_path)
     assert v["ok"] and v["boot"].endswith("rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)")
-    assert v["new_session"] is None and v["reason"] == "for"
+    assert "new_session" not in v and v["reason"] == "for"
     assert board.flashes == 1 and board.monitor.calls == ["stop", "start"]
 
 
@@ -588,3 +589,143 @@ def test_restart_session_respects_reservation_and_session_down(bench, client, bo
         assert errcode(e) == ("session_down", 7)
     finally:
         bench.boards["ttyUSB0"] = board
+
+
+# ---------- revisión de la fase 3 ----------
+
+@pytest.mark.parametrize("delay", [0.05, 0.4])
+def test_verify_late_boot_event_is_not_a_reboot_in_the_window(client, board, monkeypatch, delay):
+    """El boot se encuentra por su línea; su evento llega después (Pi cargada).
+    Antes, la ventana lo tomaba como "nuevo" y daba "se reinició en la ventana"."""
+    import threading
+    from server import device_log
+    orig = device_log.DeviceLog.event
+    slow = {"on": False}
+
+    def late_boot(self, type_, detail=None, cursor=None, *a, **k):
+        if type_ == "boot" and slow["on"]:
+            threading.Timer(delay, orig, (self, type_, detail, cursor) + a, k).start()
+            return None
+        return orig(self, type_, detail, cursor, *a, **k)
+    monkeypatch.setattr(device_log.DeviceLog, "event", late_boot)
+    b = client.resolve("sim-board", write=True)
+    known = client.crash_snapshot(b.key)
+    slow["on"] = True
+    s = client.command(b, "reset")
+    v = client.verify(b, s["cursor"], window_s=1.0, timeout_s=5, known=known)
+    assert v["ok"], v
+
+
+def test_idle_does_not_stop_on_the_echo(client, board):
+    """Eco inmediato y respuesta a 1 s: idle:500ms espera la respuesta."""
+    board.reply_delay = 1.0
+    b = client.resolve("sim-board", write=True)
+    s = client.send(b, "status")
+    r = client.read_range(b.key, since=s["cursor"], until="idle:500ms", echo="status", idle_needs_output=True,
+                          timeout_s=5)
+    assert r["ok"] and r["reason"] == "idle" and "until_found" not in r
+    assert any(l.endswith("OK uptime=12s heap=210000") for l in r["lines"])
+
+
+def test_idle_with_firmware_without_echo(client, board, monkeypatch):
+    """Sin eco, después de D se cuenta desde la primera línea nueva: no espera
+    un eco que no va a llegar."""
+    monkeypatch.setattr(board, "keys", lambda text: setattr(board, "_typed", text))
+    board.reply_delay = 0.1
+    b = client.resolve("sim-board", write=True)
+    s = client.send(b, "status")
+    t0 = time.monotonic()
+    r = client.read_range(b.key, since=s["cursor"], until="idle:400ms", echo="status", idle_needs_output=True,
+                          timeout_s=5)
+    assert r["ok"] and r["reason"] == "idle" and time.monotonic() - t0 < 2
+    assert any(l.endswith("OK uptime=12s heap=210000") for l in r["lines"])
+
+
+def test_snapshot_before_writing_catches_panic_on_the_prompt(client, board):
+    """La foto de crashes se toma antes de escribir: un panic como `↪` del prompt
+    que pasó entre la escritura y el inicio de la espera es nuevo igual."""
+    b = client.resolve("sim-board")
+    known = client.crash_snapshot(b.key)
+    since = client.read_range(b.key, since="now")["end"]
+    board.panic()
+    time.sleep(0.3)
+    late = client.read_range(b.key, since=since, for_s=0.2)            # foto tomada después: no lo ve
+    assert late["ok"]
+    r = client.read_range(b.key, since=since, for_s=0.2, known=known)
+    assert r["error"] == "crashed" and r["crash"]["type"] == "panic"
+
+
+def test_snapshot_failure_disables_the_new_rule(client, board, monkeypatch):
+    b = client.resolve("sim-board")
+    board.panic()                                      # panic viejo, en el prompt (cursor anterior)
+    time.sleep(0.3)
+
+    def broken(*a, **k):
+        raise lib.EspbenchError("unexpected", "500")
+    monkeypatch.setattr(client, "board_events", broken)
+    assert client.crash_snapshot(b.key) is None
+    monkeypatch.setattr(client, "board_events", lib.Client.board_events.__get__(client))
+    r = client.read_range(b.key, since="now", for_s=0.2, known=None)
+    assert r["ok"]
+
+
+def test_events_dedupe_keeps_distinct_events_with_same_cursor():
+    acc = lib._Range(10)
+    a = {"type": "state", "cursor": "c:20261006_000000_1:10", "detail": {"from": "monitoring", "to": "flashing"}}
+    b = {"type": "state", "cursor": "c:20261006_000000_1:10", "detail": {"from": "flashing", "to": "monitoring"}}
+    acc.add({"start": "c:20261006_000000_1:0", "end": "c:20261006_000000_1:20", "lines": [], "events": [a]})
+    acc.add({"start": "c:20261006_000000_1:0", "end": "c:20261006_000000_1:20", "lines": [], "events": [a, b]})
+    assert acc.events == [a, b]
+
+
+def test_compact_result(client, board):
+    """Sin campos vacíos ni los eventos del api en el punto de partida."""
+    b = client.resolve("sim-board", write=True)
+    client.reserve(b, 600)
+    s = client.send(b, "status")
+    r = client.read_range(b.key, since=s["cursor"], until="OK", echo="status", timeout_s=5)
+    assert set(r) == {"ok", "board", "reason", "date", "lines", "start", "end", "until_found", "match"}
+    h = client.read_range(b.key, since="session")
+    assert "until_found" not in h and "session_ended" not in h and "truncated" not in h
+
+
+def test_reservation_registry_is_per_board_not_per_host_spelling(bench, board, tmp_path):
+    """"127.0.0.1:P" y "http://127.0.0.1:P" son la misma Pi: antes eran dos claves
+    y el segundo cliente no mandaba require_reservation."""
+    a = make_client(bench, tmp_path, state="shared")
+    b = make_client(bench, tmp_path, state="shared", host=f"http://{bench.host}")
+    a.reserve(a.resolve("sim-board", write=True), 600)
+    assert b.holds_reservation(b.resolve("sim-board", write=True))
+    assert list(json.loads((tmp_path / "shared" / "reservations.json").read_text())) == ["AABBCCDDEE01"]
+
+
+def test_reservation_registry_concurrent_updates(bench, tmp_path):
+    import threading
+    c = make_client(bench, tmp_path, state="conc")
+    boards = [lib.Board(name=f"b{i}", key="x", mac=f"AA:BB:CC:00:00:{i:02X}") for i in range(20)]
+
+    def add(bd):
+        c._resv_update(lambda data: data.__setitem__(c._resv_key(bd), {"user": "agent"}))
+    threads = [threading.Thread(target=add, args=(bd,)) for bd in boards]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(json.loads((tmp_path / "conc" / "reservations.json").read_text())) == 20
+
+
+def test_around_cursor_from_events_after_session_change(client, board):
+    """Lo que dice la skill: después de un cambio de sesión `--around panic` da
+    bad_anchor (busca en la sesión actual); con el cursor de `events`, anda."""
+    b = client.resolve("sim-board", write=True)
+    s = client.send(b, "panic")
+    client.read_range(b.key, since=s["cursor"], until="panic", timeout_s=5)
+    time.sleep(0.2)
+    board.replug()
+    board.wait_prompt()
+    with pytest.raises(lib.EspbenchError) as e:
+        client.read_range(b.key, around="panic")
+    assert errcode(e) == ("bad_anchor", 8)
+    (panic,) = client.board_events(b.key, types="panic")["events"]
+    r = client.read_range(b.key, around=panic["cursor"])
+    assert any("Guru Meditation" in l for l in r["lines"]) and r["session_ended"]

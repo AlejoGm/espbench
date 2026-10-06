@@ -21,6 +21,7 @@ dependencias). Corre en la Mac del dev: Python 3.9+.
 Los errores llevan `error` estable (el contrato, §8.3) y su exit code.
 """
 import dataclasses
+import fcntl
 import json
 import os
 import pathlib
@@ -504,8 +505,8 @@ class _Range:
             if date and date != self.date and _TIME_LINE_RE.match(line):
                 line = f"{date} {line}"
             self._push(line)
-        seen = {(e.get("type"), e.get("cursor")) for e in self.events}
-        self.events += [e for e in r.get("events") or [] if (e.get("type"), e.get("cursor")) not in seen]
+        seen = {_event_id(e) for e in self.events}
+        self.events += [e for e in r.get("events") or [] if _event_id(e) not in seen]
 
     def _push(self, line: str) -> None:
         self.count += 1
@@ -523,6 +524,26 @@ class _Range:
         self.truncated = True
         marker = "… 1 línea omitida …" if omitted == 1 else f"… {omitted} líneas omitidas …"
         return self.head + [marker] + self.tail
+
+
+_UNSET = object()
+_NEVER = "re:(?!)"                   # until que nunca matchea (idle con eco)
+_API_EVENTS = ("send", "command", "reserve", "release")
+
+
+def _event_id(e: dict) -> str:
+    """Un evento entero (dos `state` pueden compartir cursor: tipo+cursor no alcanza)."""
+    return json.dumps(e, sort_keys=True, ensure_ascii=False)
+
+
+def _output_after_echo(lines: list, echo: str) -> bool:
+    """¿Hay líneas después de la del eco en este poll? (eco y respuesta juntos)."""
+    text = (echo or "").strip()
+    bodies = [l.split(" ", 2)[2] if _TIME_LINE_RE.match(l) and l.count(" ") >= 2 else l for l in lines]
+    for i, body in enumerate(bodies):
+        if body.rstrip().endswith(text):
+            return any(b.strip() for b in bodies[i + 1:])
+    return False
 
 
 def _cursor_lt(a: Optional[str], b: Optional[str]) -> bool:
@@ -616,12 +637,15 @@ class Client:
                             {"type": types, "since": since, "limit": limit, "order": order})
 
     # ----- reservas (registro local: "este agente reservó esta placa") -----
+    # Por MAC (no por host: "pi", "pi:8080" y "http://pi:8080" son la misma Pi).
+    # Dos agentes con el mismo state_dir y el mismo lock_user comparten la
+    # reserva: un ESPBENCH_USER por agente.
 
     def _resv_path(self) -> pathlib.Path:
         return self.state_dir / "reservations.json"
 
     def _resv_key(self, board: Board) -> str:
-        return f"{self.config.base_url}|{bare_mac(board.mac)}"
+        return bare_mac(board.mac) or board.name
 
     def _resv_load(self) -> dict:
         try:
@@ -630,16 +654,41 @@ class Client:
         except (OSError, ValueError):
             return {}
 
-    def _resv_save(self, data: dict) -> None:
+    def _resv_update(self, fn: Callable[[dict], None]) -> None:
+        """Leer-modificar-escribir con flock (varios agentes en la misma máquina)
+        y reemplazo atómico (un lector nunca ve el archivo a medias)."""
         path = self._resv_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        os.replace(tmp, path)
+        fd = os.open(str(path.with_name(path.name + ".lck")), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            data = self._resv_load()
+            fn(data)
+            tmp_fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".reservations.", suffix=".tmp")
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, path)
+        finally:
+            os.close(fd)
+
+    def _forget_reservation(self, board: Board) -> None:
+        if self._resv_key(board) in self._resv_load():
+            self._resv_update(lambda data: data.pop(self._resv_key(board), None))
 
     def holds_reservation(self, board: Board) -> bool:
         rec = self._resv_load().get(self._resv_key(board))
         return bool(rec) and rec.get("user") == self.config.lock_user
+
+    def _write(self, board: Board, path: str, body: dict):
+        """Escritura de un agente: si la reserva ya no es suya, la olvida (la
+        próxima escritura no la exige) y lo dice."""
+        try:
+            return self.request("POST", path, body=body)
+        except EspbenchError as e:
+            if e.error == "reservation_lost":
+                self._forget_reservation(board)
+                e.message += f" — reserva local olvidada: `espbench reserve {board.label}` para volver a tomarla"
+            raise
 
     def _write_body(self, board: Board, **extra) -> dict:
         """expect_mac + par del lock (+ require_reservation si este cliente
@@ -655,54 +704,66 @@ class Client:
     # ----- escrituras -----
 
     def send(self, board: Board, text: str, enter: bool = True) -> dict:
-        return self.request("POST", f"/api/device/{board.tty}/send", body=self._write_body(board, text=text,
-                                                                                           enter=enter))
+        return self._write(board, f"/api/device/{board.tty}/send", self._write_body(board, text=text, enter=enter))
 
     def command(self, board: Board, command: str) -> dict:
-        return self.request("POST", f"/api/device/{board.tty}/command/{command}", body=self._write_body(board))
+        return self._write(board, f"/api/device/{board.tty}/command/{command}", self._write_body(board))
 
     def reserve(self, board: Board, ttl_s: int) -> dict:
         body = {**self.config.require_creds("reserve"), "ttl_s": int(ttl_s)}
         if board.mac:
             body["expect_mac"] = board.mac
         r = self.request("POST", f"/api/device/{board.tty}/reserve", body=body)
-        data = self._resv_load()
-        data[self._resv_key(board)] = {"user": self.config.lock_user, "expires": r.get("expires"),
-                                       "tty": board.tty, "board": board.label}
-        self._resv_save(data)
+        rec = {"user": self.config.lock_user, "expires": r.get("expires"), "tty": board.tty, "board": board.label,
+               "host": self.config.base_url}
+        self._resv_update(lambda data: data.__setitem__(self._resv_key(board), rec))
         return r
 
     def release(self, board: Board) -> dict:
         r = self.request("POST", f"/api/device/{board.tty}/release", body=self.config.require_creds("release"))
-        data = self._resv_load()
-        if data.pop(self._resv_key(board), None) is not None:
-            self._resv_save(data)
+        self._forget_reservation(board)
         return r
 
     def restart_session(self, board: Board) -> dict:
-        r = self.request("POST", f"/api/device/{board.tty}/devremote-reset", body=self._write_body(board))
+        r = self._write(board, f"/api/device/{board.tty}/devremote-reset", self._write_body(board))
         if not (r or {}).get("ok"):
             raise EspbenchError("unexpected", f"devremote --reset falló: {(r or {}).get('stderr') or r}")
         return r
 
     # ----- rango del log con espera -----
 
+    def crash_snapshot(self, key: str) -> Optional[set]:
+        """Los panic que ya existen, para tomar ANTES de escribir (send, flash,
+        reset) y pasarle a read_range/verify como `known`: un panic que no está
+        acá es nuevo. None si no se pudo (sin la foto no se aplica la regla de
+        "nuevo": mejor perder el caso del prompt que contar panics viejos)."""
+        try:
+            evs = (self.board_events(key, types="panic", limit=50) or {}).get("events") or []
+        except EspbenchError as e:
+            if e.error == "network":
+                raise
+            return None
+        return {_event_id(e) for e in evs}
+
     def read_range(self, key: str, since: Optional[str] = None, until: Optional[str] = None,
                    around: Optional[str] = None, before: Optional[int] = None, after: Optional[int] = None,
                    grep: Optional[str] = None, src: Optional[str] = None, max_lines: Optional[int] = None,
                    timeout_s: Optional[float] = None, for_s: Optional[float] = None, echo: Optional[str] = None,
                    expect_panic: bool = False, idle_needs_output: bool = False,
-                   fail_on=CRASH_TYPES) -> dict:
+                   fail_on=CRASH_TYPES, known=_UNSET) -> dict:
         """Rango del log (§5, §7.3) con la espera del lado del cliente.
 
         - Sin until/idle/for: un solo pedido (rango histórico).
         - `until` (lo evalúa el server): poll cada poll_s desde el `end` anterior,
           con `echo` hasta que llega `echo_seen`.
-        - `until="idle:D"`: sin líneas nuevas por D (con idle_needs_output, recién
-          después de la primera: un send espera la respuesta).
+        - `until="idle:D"`: sin líneas nuevas por D. Con `echo` (send), el silencio
+          cuenta recién desde la primera línea nueva DESPUÉS del eco; si en D no
+          apareció el eco (firmware sin eco), desde la primera línea nueva.
         - `for_s`: ventana fija (con until, es el tope: no encontrado = timeout).
         - Un `panic`/`boot_loop` (fail_on) en el rango corta: error `crashed`, o
           ok con expect_panic. Salvo que sea lo que se buscaba (until=panic).
+          `known`: foto de crash_snapshot() tomada antes de escribir (default:
+          se toma al empezar; None: sin la regla de "nuevo").
         - `session_ended` sin until_found: error `session_ended`.
 
         Devuelve un dict con `error` (None, timeout, crashed, session_ended) y
@@ -711,74 +772,77 @@ class Client:
         params = {"grep": grep, "src": src, "max_lines": max_lines}
         if around:
             r = self.board_log(key, around=around, before=before, after=after, **params)
-            return self._result(key, _single(r, max_lines), reason="range", error=None)
+            return self._result(key, _single(r, max_lines), reason="range", error=None, until=None)
         idle_s = None
         server_until = until or None
         if until and until.startswith("idle:"):
             idle_s = parse_duration(until[5:], "idle")
-            server_until = None
+            # Sin until, el server no procesa el eco: un patrón que nunca matchea
+            # lo hace evaluar las líneas lógicas y devolver echo_seen.
+            server_until = _NEVER if echo else None
         waiting = server_until is not None or idle_s is not None or for_s is not None
         if not waiting:
             r = self.board_log(key, since=since, **params)
-            return self._result(key, _single(r, max_lines), reason="range", error=None)
+            return self._result(key, _single(r, max_lines), reason="range", error=None, until=None)
 
         if timeout_s is None:
             timeout_s = DEFAULT_TIMEOUT_S
         fail_on = tuple(t for t in fail_on if t != server_until)
+        if known is _UNSET:
+            known = self.crash_snapshot(key) if "panic" in fail_on else None
         acc = _Range(max_lines or DEFAULT_MAX_LINES)
         cur = since or "session"
         echo_pending = echo if server_until else None
-        known = self._crash_snapshot(key, fail_on) if fail_on else set()
+        # idle con eco: el eco no es la respuesta (antes cortaba con solo el eco)
+        echo_done = not (idle_s is not None and echo_pending)
         t0 = self._clock()
-        last_change, seen_output, prev_end, active = t0, False, None, False
+        last_change, seen_output, any_change, prev_end, active = t0, False, False, None, False
+        report_until = None if server_until == _NEVER else until
+
+        def finish(crash, reason="crash", error="crashed"):
+            return self._finish(key, acc, crash, expect_panic, reason, error, fail_on, known, report_until)
+
         while True:
             r = self.board_log(key, since=cur, until=server_until, echo=echo_pending, **params)
             acc.add(r)
             now = self._clock()
-            if r.get("echo_seen"):
-                echo_pending = None
             changed = r.get("end") != (prev_end if prev_end is not None else r.get("start"))
-            if changed:
-                last_change, seen_output = now, True
             prev_end = r.get("end")
-            # Con actividad (en este poll o el anterior), los crash salen de /events
-            # desde el start: ver _crash_since.
+            if changed:
+                last_change, any_change = now, True
+            if r.get("echo_seen") and echo_pending:
+                echo_pending = None
+                if not echo_done:
+                    echo_done, last_change = True, now
+                    seen_output = _output_after_echo(r.get("lines") or [], echo)
+            elif changed and echo_done:
+                seen_output = True
+            if not echo_done and now - t0 >= idle_s:
+                echo_done, echo_pending, seen_output = True, None, any_change     # firmware sin eco
+            # Con actividad (en este poll o el anterior), los crash salen de /events: ver _crash_since.
             crash = self._crash_since(key, acc, fail_on, known) if fail_on and (changed or active) else None
             active = changed
             if crash is not None:
-                return self._finish(key, acc, crash, expect_panic, known=known)
+                return finish(crash)
             if r.get("until_found"):
-                return self._finish(key, acc, None, expect_panic, "until", None, fail_on, known)
+                return finish(None, "until", None)
             if r.get("session_ended"):
-                return self._finish(key, acc, None, expect_panic, "session_ended", "session_ended", fail_on,
-                                    known)
+                return finish(None, "session_ended", "session_ended")
             elapsed = now - t0
-            if idle_s is not None and (seen_output or not idle_needs_output) and now - last_change >= idle_s:
-                return self._finish(key, acc, None, expect_panic, "idle", None, fail_on, known)
+            if idle_s is not None and echo_done and (seen_output or not idle_needs_output) \
+                    and now - last_change >= idle_s:
+                return finish(None, "idle", None)
             if for_s is not None and elapsed >= for_s:
-                return self._finish(key, acc, None, expect_panic, "for", "timeout" if server_until else None,
-                                    fail_on, known)
+                return finish(None, "for", "timeout" if report_until else None)
             if for_s is None and elapsed >= timeout_s:
-                return self._finish(key, acc, None, expect_panic, "timeout", "timeout", fail_on, known)
+                return finish(None, "timeout", "timeout")
             cur = r.get("end") or cur
             self._sleep(self.poll_s)
 
-    def _crash_events(self, key: str, fail_on) -> list:
-        """Los últimos panic/boot_loop (fail_on) de la placa, en orden de log."""
-        try:
-            return (self.board_events(key, types=",".join(fail_on), limit=50) or {}).get("events") or []
-        except EspbenchError as e:
-            if e.error == "network":
-                raise
-            return []
-
-    def _crash_snapshot(self, key: str, fail_on) -> set:
-        return {(e.get("type"), e.get("cursor")) for e in self._crash_events(key, fail_on)}
-
-    def _crash_since(self, key: str, acc: _Range, fail_on, known: set) -> Optional[dict]:
+    def _crash_since(self, key: str, acc: _Range, fail_on, known: Optional[set]) -> Optional[dict]:
         """Primer panic/boot_loop (fail_on) del rango según /events: uno con
-        cursor en [start, end), o uno NUEVO (no estaba al empezar la espera) de
-        la misma sesión con cursor antes de end.
+        cursor en [start, end), o un `panic` NUEVO (no estaba en `known`) de la
+        misma sesión con cursor antes de start.
 
         Los `events` de cada respuesta de /log no alcanzan: (1) un evento se
         escribe un instante después de su línea, y si llegó tarde a un poll el
@@ -786,46 +850,69 @@ class Client:
         el inicio de su línea LÓGICA: un panic que llega como `↪` de un prompt de
         esp_console (`esp> ` sin \\n, que ya salió al archivo) queda con el
         cursor del prompt, anterior al start del poll que lo trae (y hasta al
-        start del rango)."""
+        start del rango). La regla de "nuevo" es solo para panic: un `boot` o
+        `boot_loop` empieza siempre en su propia línea `rst:`, y con ella el boot
+        recién encontrado por --verify (su evento llega después de la línea) se
+        tomaba como un reinicio en la ventana."""
         start, end = parse_cursor(acc.start), parse_cursor(acc.end)
         if not start or not end or start[0] != end[0]:
             return None
-        for e in self._crash_events(key, fail_on):
+        try:
+            evs = (self.board_events(key, types=",".join(fail_on), limit=50) or {}).get("events") or []
+        except EspbenchError as e:
+            if e.error == "network":
+                raise
+            return None
+        for e in evs:
             c = parse_cursor(e.get("cursor"))
             if not c or c[0] != start[0] or c[1] >= end[1]:
                 continue
-            if c[1] >= start[1] or (e.get("type"), e.get("cursor")) not in known:
-                if all((x.get("type"), x.get("cursor")) != (e.get("type"), e.get("cursor")) for x in acc.events):
-                    acc.events.append(e)
+            new_panic = e.get("type") == "panic" and known is not None and _event_id(e) not in known
+            if c[1] >= start[1] or new_panic:
                 return e
         return None
 
     def _finish(self, key: str, acc: _Range, crash: Optional[dict], expect_panic: bool,
-                reason: str = "crash", error: Optional[str] = "crashed", fail_on=(), known=None) -> dict:
+                reason: str, error: Optional[str], fail_on, known, until) -> dict:
         """Cierra una espera. Sin crash visto, un último /events: el del final
         puede haberse escrito después del último poll."""
         if crash is None and fail_on and acc.start and acc.end:
-            crash = self._crash_since(key, acc, fail_on, known or set())
+            crash = self._crash_since(key, acc, fail_on, known)
         if crash is not None:
             if expect_panic and crash.get("type") == "panic":
                 reason, error = "panic", None
             else:
                 reason, error = "crash", "crashed"
-        out = self._result(key, acc, reason=reason, error=error)
+        out = self._result(key, acc, reason=reason, error=error, until=until)
         if crash is not None:
             out["crash"] = crash
         return out
 
-    def _result(self, key: str, acc: _Range, reason: str, error: Optional[str]) -> dict:
+    def _result(self, key: str, acc: _Range, reason: str, error: Optional[str], until: Optional[str]) -> dict:
+        """Compacto (tokens): until_found/match solo si hubo until; truncated y
+        session_ended solo si son true; sin los eventos del api en el punto de
+        partida (la escritura que lo abrió, una reserva) ni anteriores al rango."""
         last = acc.last
-        lines = acc.lines()
-        out = {
-            "ok": error is None, "board": key, "reason": reason,
-            "date": acc.date, "lines": lines, "start": acc.start, "end": acc.end,
-            "until_found": last.get("until_found"), "match": last.get("match"),
-            "truncated": acc.truncated, "session_ended": bool(last.get("session_ended")),
-            "events": acc.events, "server_time": last.get("server_time"),
-        }
+        out = {"ok": error is None, "board": key, "reason": reason, "date": acc.date, "lines": acc.lines(),
+               "start": acc.start, "end": acc.end}
+        if until is not None:
+            out["until_found"] = bool(last.get("until_found"))
+            if last.get("match"):
+                out["match"] = last["match"]
+        if acc.truncated:
+            out["truncated"] = True
+        if last.get("session_ended"):
+            out["session_ended"] = True
+        start = parse_cursor(acc.start)
+        evs = []
+        for e in acc.events:
+            c = parse_cursor(e.get("cursor"))
+            if start and c and c[0] == start[0] and (c[1] < start[1] or
+                                                     (c[1] == start[1] and e.get("type") in _API_EVENTS)):
+                continue
+            evs.append(e)
+        if evs:
+            out["events"] = evs
         if error is not None:
             out["error"] = error
             out["message"] = _RANGE_MESSAGES.get(error, error)
@@ -863,19 +950,22 @@ class Client:
 
     def verify(self, board: Board, since: str, window_s: float = VERIFY_WINDOW_S, until: Optional[str] = None,
                timeout_s: float = VERIFY_TIMEOUT_S, expect_panic: bool = False,
-               max_lines: Optional[int] = None) -> dict:
+               max_lines: Optional[int] = None, known=_UNSET) -> dict:
         """--verify (§8.2, §12.1): el primer `boot` después de `since` (si la
         sesión termina sin boot, sigue en la sesión nueva), y después una ventana
         de asentamiento: falla si en ella hay otro boot, un panic o boot_loop.
-        Con `until`, además espera X desde el boot."""
+        Con `until`, además espera X desde el boot. `known`: crash_snapshot()
+        tomada antes del flash/reset (default: ahora)."""
         key = board.key
+        if known is _UNSET:
+            known = self.crash_snapshot(key)
         deadline = self._clock() + timeout_s
         cur, sid = since, (parse_cursor(since) or (None,))[0]
         sessions = []
         while True:
             remaining = max(0.0, deadline - self._clock())
             r = self.read_range(key, since=cur, until="boot", timeout_s=remaining, max_lines=max_lines,
-                                expect_panic=expect_panic)
+                                expect_panic=expect_panic, known=known)
             if r.get("error") == "session_ended" and not r.get("until_found") and sid:
                 new = self._wait_new_session(key, sid, deadline)
                 if new is None:
@@ -892,14 +982,14 @@ class Client:
             return self._verify_result(r, None, None, window_s, sessions)
         boot_end = r["end"]
         w = self.read_range(key, since=boot_end, for_s=window_s, max_lines=max_lines, expect_panic=expect_panic,
-                            fail_on=("panic", "boot_loop", "boot")) if window_s > 0 else None
+                            fail_on=("panic", "boot_loop", "boot"), known=known) if window_s > 0 else None
         if w is not None and w.get("error") == "crashed" and (w.get("crash") or {}).get("type") == "boot":
             w["message"] = "la placa se reinició en la ventana de asentamiento"
         u = None
         if until and (w is None or w.get("ok")) and (w is None or w.get("reason") != "panic"):
             remaining = max(1.0, deadline - self._clock())
             u = self.read_range(key, since=boot_end, until=until, timeout_s=remaining, max_lines=max_lines,
-                                expect_panic=expect_panic)
+                                expect_panic=expect_panic, known=known)
         return self._verify_result(r, w, u, window_s, sessions)
 
     def _verify_result(self, boot: dict, window: Optional[dict], until: Optional[dict], window_s: float,
@@ -920,9 +1010,9 @@ class Client:
             "lines": lines, "events": evs,
             "end": (later or boot).get("end"),
             "reason": (failed or later or boot).get("reason"),
+            "match": until.get("match") if until is not None else None,
         }
-        if until is not None:
-            out["match"] = until.get("match")
+        out = {k: v for k, v in out.items() if v not in (None, []) or k in ("ok", "boot")}
         crash = next((x.get("crash") for x in (boot, window, until) if x is not None and x.get("crash")), None)
         if crash is not None:
             out["crash"] = crash
@@ -938,8 +1028,11 @@ class Client:
         if not board.live or not board.port_tcp:
             raise EspbenchError("not_found", f"la placa '{board.name}' no está conectada")
         if self.holds_reservation(board) and not (board.lock_user == self.config.lock_user and board.lock_expires):
-            raise EspbenchError("reservation_lost", f"la reserva de '{board.label}' ya no es tuya "
-                                                    f"(lock: {board.lock_user or 'nadie'})")
+            self._forget_reservation(board)
+            why = "venció o la soltaron" if not board.lock_user else f"la tiene '{board.lock_user}'"
+            raise EspbenchError("reservation_lost", f"la reserva de '{board.label}' ya no es tuya ({why}) — "
+                                                    f"reserva local olvidada: `espbench reserve {board.label}` "
+                                                    "para volver a tomarla")
         build_dir = pathlib.Path(build_dir)
         artifact = collect_artifact(build_dir, include_elf=True, log=self.log)
         warnings = []
