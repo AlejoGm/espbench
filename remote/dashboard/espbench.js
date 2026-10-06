@@ -1275,7 +1275,32 @@
         return {ok: true, text: t, error: null};
     }
 
-    // ── Monitor (device.html): nota y propiedades en el header ──
+    // ── Monitor (device.html): a dónde vuelve y la nota y propiedades en el header ──
+
+    /*
+     * A dónde vuelve "← Placas" del monitor. Abierto por el proxy de bench-master
+     * (/bench/<n>/device.html), al master (`/`); si no, al home del bench (el directorio de la página).
+     * Si la página anterior (referrer, mismo origen) es ese home, se vuelve a esa URL: conserva su
+     * ?q= y ?group=. Por el master, si se vino del dashboard del bench por el proxy (/bench/<n>/), a ese.
+     * → {home, href, master: nombre del bench si es por el master, o null}. `home` es a donde filtran los chips.
+     */
+    function monitorNav(pathname, referrer, origin) {
+        var m = /^(.*?)\/bench\/([^/]+)\/device\.html$/.exec(pathname || '');
+        var home = m ? m[1] + '/' : basePath(pathname || '/');
+        var out = {home: home, href: home, master: null};
+        if (m) { try { out.master = decodeURIComponent(m[2]); } catch (e) { out.master = m[2]; } }
+        var r = null;
+        try { r = referrer ? new URL(referrer) : null; } catch (e) { r = null; }
+        var benchHome = basePath(pathname || '/');
+        var homes = [home, home + 'index.html'].concat(m ? [benchHome, benchHome + 'index.html'] : []);
+        if (r && r.origin === origin && homes.indexOf(r.pathname) >= 0) out.href = r.pathname + r.search;
+        return out;
+    }
+
+    // Home filtrada por una propiedad (click en un chip del monitor): el master o el bench, según nav.
+    function navFilterHref(nav, filter) {
+        return nav.home + '?q=' + encodeURIComponent(filter);
+    }
 
     /*
      * ¿El bench guarda nota y propiedades? false si /api/properties dio 404 (catalogStatus) o si
@@ -1367,7 +1392,7 @@
         cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
         groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,
         boardFree: boardFree, locationCheck: locationCheck, locationView: locationView, LOCATION_MAX: LOCATION_MAX,
-        metaSupported: metaSupported,
+        monitorNav: monitorNav, navFilterHref: navFilterHref, metaSupported: metaSupported,
         monitorMetaHtml: monitorMetaHtml, META_OFF_TITLE: META_OFF_TITLE,
         areaChartSvg: areaChartSvg
     };

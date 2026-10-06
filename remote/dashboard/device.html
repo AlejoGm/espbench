@@ -102,6 +102,11 @@
         var deviceLoaded = false;
         var curSession = null;      // sesión actual de la placa (de /events)
 
+        // "← Placas": al master si el monitor se abrió por su proxy (/bench/<n>/device.html), si no al bench
+        var nav = EB.monitorNav(location.pathname, document.referrer, location.origin);
+        $('back-link').href = nav.href;
+        $('back-link').title = nav.master ? 'Volver a bench-master' : 'Volver a las placas del bench';
+
         var MAX_LINES = 20000;   // tope de líneas en la vista; el archivo completo se descarga
 
         // ── Terminal: render incremental ──────────────────────────────────────
@@ -492,7 +497,7 @@
         }
 
         // ── Nota y propiedades: chips en el header; se editan en un popover (meta.js) ──
-        // Click en un chip → la home filtrada.
+        // Click en un chip → la home filtrada (el master si el monitor se abrió por su proxy).
         var metaDevice = null;
         var pop = null;             // {el, anchor}: popover abierto (menú o editor)
 
@@ -545,7 +550,7 @@
 
         $('device-meta').onclick = function(e) {
             var chip = e.target.closest('.prop-chip');
-            if (chip) { location.href = './?q=' + encodeURIComponent(chip.dataset.filter); return; }
+            if (chip) { location.href = EB.navFilterHref(nav, chip.dataset.filter); return; }
             var b = e.target.closest('[data-act]');
             if (!b || !metaDevice) return;
             if (pop && pop.anchor === b) { closePop(); return; }       // segundo click: cierra

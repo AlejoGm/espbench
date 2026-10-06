@@ -1,7 +1,48 @@
-// Monitor (device.html): chips de la nota y las propiedades en el header. node --test tests/js/test_monitor.js
+// Monitor (device.html): a dónde vuelve, chips de la nota y las propiedades en el header. node --test tests/js/test_monitor.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const EB = require('../../remote/dashboard/espbench.js');
+
+const O = 'http://localhost:8090';
+
+test('monitorNav: abierto directo en el bench vuelve al home del bench', () => {
+    const n = EB.monitorNav('/device.html', '', 'http://pi:8080');
+    assert.deepEqual(n, {home: '/', href: '/', master: null});
+    // desde el home con búsqueda: la conserva
+    assert.equal(EB.monitorNav('/device.html', 'http://pi:8080/?q=chip%3Aesp32', 'http://pi:8080').href, '/?q=chip%3Aesp32');
+    assert.equal(EB.monitorNav('/device.html', 'http://pi:8080/index.html?group=chip', 'http://pi:8080').href,
+                 '/index.html?group=chip');
+});
+
+test('monitorNav: por el proxy de bench-master vuelve al master, no al bench', () => {
+    const n = EB.monitorNav('/bench/bench-chile/device.html', '', O);
+    assert.deepEqual(n, {home: '/', href: '/', master: 'bench-chile'});
+    // desde el master con agrupación y búsqueda: las conserva
+    assert.equal(EB.monitorNav('/bench/bench-chile/device.html', O + '/?group=bench&q=lte', O).href, '/?group=bench&q=lte');
+    // nombre con caracteres escapados
+    assert.equal(EB.monitorNav('/bench/lab%20ba/device.html', '', O).master, 'lab ba');
+});
+
+test('monitorNav: el referrer solo cuenta si es el home y del mismo origen', () => {
+    // de otro origen (el bench directo): no
+    assert.equal(EB.monitorNav('/bench/b/device.html', 'http://pi:8080/?q=x', O).href, '/');
+    // de otra página del mismo origen (otro monitor): no
+    assert.equal(EB.monitorNav('/device.html', O + '/device.html?tty=x', O).href, '/');
+    // referrer roto
+    assert.equal(EB.monitorNav('/device.html', 'no es url', O).href, '/');
+});
+
+test('monitorNav: por el master, desde el dashboard del bench (proxy) vuelve a ese dashboard', () => {
+    const n = EB.monitorNav('/bench/b/device.html', O + '/bench/b/?q=x', O);
+    assert.equal(n.href, '/bench/b/?q=x');
+    assert.equal(n.home, '/');                       // los chips igual filtran en el master
+    assert.equal(EB.monitorNav('/bench/b/device.html', O + '/bench/otro/', O).href, '/');
+});
+
+test('navFilterHref: los chips filtran en el master o en el bench', () => {
+    assert.equal(EB.navFilterHref(EB.monitorNav('/bench/b/device.html', '', O), 'chip:esp32-s3'), '/?q=chip%3Aesp32-s3');
+    assert.equal(EB.navFilterHref(EB.monitorNav('/sub/device.html', '', O), 'uso:ci'), '/sub/?q=uso%3Aci');
+});
 
 test('metaSupported: 404 del catálogo o device sin props/note = bench viejo', () => {
     const d = {mac: 'AA', props: {}, note: null};

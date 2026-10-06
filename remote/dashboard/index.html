@@ -200,14 +200,20 @@
         var t = e.target.closest('[data-tab]');
         if (t) { filter = t.dataset.tab; render(); }
     });
-    document.getElementById('search').addEventListener('input', render);
+    // La búsqueda va en ?q= (replaceState): "← Placas" del monitor vuelve a esta URL con el filtro puesto.
+    function syncQuery() {
+        var u = new URL(location.href), q = document.getElementById('search').value;
+        if (q) u.searchParams.set('q', q); else u.searchParams.delete('q');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+    }
+    document.getElementById('search').addEventListener('input', function() { syncQuery(); render(); });
     document.addEventListener('keydown', function(e) {
         var s = document.getElementById('search');
         if (e.key === '/' && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) { e.preventDefault(); s.focus(); }
-        if (e.key === 'Escape' && document.activeElement === s) { s.value = ''; render(); s.blur(); }
+        if (e.key === 'Escape' && document.activeElement === s) { s.value = ''; syncQuery(); render(); s.blur(); }
     });
 
-    function setSearch(q) { document.getElementById('search').value = q; render(); }
+    function setSearch(q) { document.getElementById('search').value = q; syncQuery(); render(); }
 
     // Acciones de las cards: renombrar, copiar config, nota y propiedades, filtrar por el usuario
     // del lock o por una propiedad (chip → cat:valor).
