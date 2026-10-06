@@ -342,7 +342,7 @@ boot ─────► devremote.service ────────────�
 |---|---|
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
-| `POST /api/device/{tty}/unlock` | Liberar lock |
+| `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar; con token de la API si la Pi lo tiene) lo suelta sin el par. Evento `release` (con `forced`) |
 | `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
 | `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
 | `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`; 409 `busy` si flashea/borra, 502 si tmux falla; evento `command`. Body opcional: `expect_mac`, par del lock, `force`, `require_reservation` |
@@ -377,7 +377,7 @@ boot ─────► devremote.service ────────────�
   confirmar, el CLI nunca; queda `forced: true` en el evento. `require_reservation:
   true` (el CLI): la escritura sale solo si el par tiene la reserva vigente, chequeado
   en el mismo pedido → 423 `reservation_lost`.
-- `send`, `reserve` y `release` quedan en `events.jsonl` (`events.record`, cursor =
+- `send`, `reserve` y `release` (también `unlock`) quedan en `events.jsonl` (`events.record`, cursor =
   fin del log en ese momento; el de `send` es el previo al envío y solo se
   registra si tmux lo mandó).
 - **Lecturas por placa** (`/api/board/{key}`): `key` = `device_key`, SN o MAC (con

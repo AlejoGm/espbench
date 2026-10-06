@@ -399,12 +399,28 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
 
 @app.post("/api/device/{tty}/unlock")
 async def device_unlock(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """Suelta el lock con el par, como release. `force: true` (solo el booleano;
+    el dashboard, después de confirmar) lo suelta sin el par: con
+    /opt/esp/api_token exige el token de la API, como toda escritura. Queda un
+    evento `release` (con `forced` si se forzó)."""
     _require_auth(authorization)
     _check_tty(tty)
-    user, token = _creds(body)
-    if _drop_lock(tty, user, token) is None:
+    forced = _forced(body)
+    if forced:
+        with locks.exclusive(tty):
+            lock = locks.read(tty)
+            if lock is not None:
+                locks.remove(tty)
+    else:
+        user, token = _creds(body)
+        lock = _drop_lock(tty, user, token)
+    if lock is None:
         return {"ok": True, "message": "no estaba bloqueado"}
-    return {"ok": True, "message": "desbloqueado"}
+    detail = {"user": lock.user, "expires": lock.expires_iso()}
+    if forced:
+        detail["forced"] = True
+    _record(runstate.read(tty) or {}, "release", detail)
+    return {"ok": True, "message": "desbloqueado", "user": lock.user, "forced": forced}
 
 
 _COMMANDS = {

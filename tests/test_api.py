@@ -558,6 +558,37 @@ def test_unlock_errors_are_structured():
     assert err(e) == (400, "bad_request")
 
 
+def test_unlock_records_release_and_force_drops_without_the_pair():
+    """El dashboard: 'liberar' con el par y 'forzar' (force: true, con el token de
+    la API si la Pi lo tiene) sin el par. Los dos quedan como evento release."""
+    from server import locks
+    board()
+    reserve()
+    with pytest.raises(HTTPException) as e:
+        run(api.device_unlock("ttyUSB0", {"force": "yes"}))       # solo el booleano fuerza
+    assert err(e) == (400, "bad_request") and locks.read("ttyUSB0") is not None
+    r = run(api.device_unlock("ttyUSB0", {"force": True}))
+    assert r["ok"] and r["forced"] and r["user"] == "alejo" and locks.read("ttyUSB0") is None
+    rel = [e for e in api_events() if e["type"] == "release"]
+    assert rel[-1]["detail"]["user"] == "alejo" and rel[-1]["detail"]["forced"] is True
+    assert rel[-1]["detail"]["expires"]
+    assert run(api.device_unlock("ttyUSB0", {"force": True}))["message"] == "no estaba bloqueado"
+    locks.write("ttyUSB0", locks.Lock("juan", "x"))                 # lock del flash, con el par
+    assert run(api.device_unlock("ttyUSB0", {"lock_user": "juan", "lock_token": "x"}))["ok"]
+    last = [e for e in api_events() if e["type"] == "release"][-1]["detail"]
+    assert last == {"user": "juan", "expires": None}
+
+
+def test_forced_unlock_needs_the_api_token(tmux):
+    board()
+    reserve()
+    set_token("s3cret")
+    with pytest.raises(HTTPException) as e:
+        run(api.device_unlock("ttyUSB0", {"force": True}))
+    assert err(e) == (401, "auth")
+    assert run(api.device_unlock("ttyUSB0", {"force": True}, authorization="Bearer s3cret"))["forced"]
+
+
 def test_send_tmux_session_missing_is_session_down(monkeypatch):
     board()
     monkeypatch.setattr(api.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(
