@@ -78,7 +78,7 @@ class NotFoundError(LookupError):
 
 # ---------- texto ----------
 
-def _has_control(s: str) -> bool:
+def has_control(s: str) -> bool:
     """Caracteres de control y de formato Unicode (Cf: bidi override, ZWSP, ZWJ...): con
     ellos una nota puede mostrarse distinta de lo que dice (texto invertido, invisible)."""
     return any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f or unicodedata.category(c) == "Cf" for c in s)
@@ -92,7 +92,7 @@ def clean_text(text, what: str, max_len: int) -> str:
     text = text.strip()
     if len(text) > max_len:
         raise MetaError(f"{what} tiene más de {max_len} caracteres")
-    if _has_control(text):
+    if has_control(text):
         raise MetaError(f"{what} no puede tener caracteres de control ni de formato (saltos de línea, tabs, "
                         "bidi, espacios de ancho cero)")
     return text

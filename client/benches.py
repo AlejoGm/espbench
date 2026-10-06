@@ -67,7 +67,7 @@ class Bench:
     auth: Optional[bool] = None     # el bench tiene token de la API (/api/version)
     legacy: bool = False            # sin `app: espbench`: bench viejo (sin /api/board, reservas, notas)
     id: Optional[str] = None        # MAC de la máquina (/api/version); None en benches viejos
-    location: Optional[str] = None  # dónde está ("Oficina BA", /api/version); None si no tiene
+    location: Optional[dict] = None  # dónde está (/api/version: {label, city, country, source...}); None si no tiene
 
     @property
     def key(self) -> str:
@@ -165,7 +165,22 @@ def probe(c: Candidate, timeout: float, get_json: Callable = http_get_json) -> O
                  port=c.port, source=c.source, version=info.get("version"), ok=True,
                  auth=info.get("auth") if isinstance(info.get("auth"), bool) else None, legacy=legacy,
                  id=str(info["id"]).lower() if info.get("id") else None,
-                 location=(str(info["location"]).strip() or None) if info.get("location") else None)
+                 location=normalize_location(info.get("location")))
+
+
+def normalize_location(v) -> Optional[dict]:
+    """La `location` de /api/version: {label, city, region, country, lat, lon, tz, source, ts, stale}
+    (el bench la arma: geolocalización por IP o texto manual). Un texto suelto (0.41/0.42) cuenta como
+    manual. Sin label, None."""
+    if isinstance(v, str):
+        v = {"label": v, "source": "manual"}
+    if not isinstance(v, dict) or not isinstance(v.get("label"), str) or not v["label"].strip():
+        return None
+    return dict(v, label=v["label"].strip())
+
+
+def location_label(loc: Optional[dict]) -> Optional[str]:
+    return (loc or {}).get("label") or None
 
 
 def fetch_devices(b: Bench, timeout: float, get_json: Callable = http_get_json) -> Bench:

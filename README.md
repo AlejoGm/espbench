@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.42.0
+**Version:** 0.43.0
 
 ---
 
@@ -176,7 +176,7 @@ cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_B
 
 espbench benches --json                  # benches encontrados (Tailscale + ~/.config/espbench-benches.json)
 espbench ls --json                       # sin host: las placas de todos los benches, con `bench` y `location`
-espbench ls --location chile             # solo los benches cuya ubicación dice "chile"
+espbench ls --location chile             # solo los benches cuya ubicación ("Santiago, CL") dice "chile"/"cl"
 espbench pick --where chip=esp32-s3 --reserve --ttl 30m --json   # la primera libre que cumple, ya reservada (no una mía: --include-mine)
 espbench note mi-board "agente: probando OTA" --json             # aviso para otros (--clear al terminar)
 espbench set mi-board chip=esp32-s3 conectividad+=lte estado=    # propiedades (estado= la quita)
@@ -319,8 +319,13 @@ master/bench-master --open      # first run creates master/.venv; http://localho
 - **Discovery**: online Tailscale peers that answer `GET :8080/api/version` as espbench, plus hosts listed in
   `~/.config/espbench-benches.json`: `{"hosts": ["10.0.0.5", "lab:8080"], "tailscale": true}`.
 - A bench names itself: `/opt/esp/bench_name` on the bench, or its hostname.
-- A bench can have a **location** ("Oficina BA", "Lab Chile"): edit it inline in the bench dashboard header
-  (`PATCH /api/bench {location}`, stored in `/opt/esp/meta/bench_location`). bench-master shows it and can group by it.
+- A bench knows **where it is** at city level ("Santiago, CL"), by geolocating its public IP. bench-master shows it and
+  can group by it; `espbench benches` shows it and `espbench ls --location` filters by it. A manual override (e.g. the
+  bench exits through a VPN in another city) is set from the bench dashboard header (`PATCH /api/bench {location}`);
+  clearing it goes back to the automatic one.
+- **Privacy**: once a day (and when the dashboard starts) the bench sends a request with its public IP to
+  `https://ipinfo.io/json` (fallback `https://ipapi.co/json/`), 3 s timeout, no token. To disable it:
+  `sudo touch /opt/esp/geo_disabled` (then only the manual location is shown). Stored in `/opt/esp/meta/bench_geo.json`.
 - A bench that stops answering stays listed as offline with its last known devices.
 - Listens on 127.0.0.1 only and rejects cross-site requests: the proxy gives access to every bench's serial console.
 
@@ -418,7 +423,8 @@ espbench/
 ├── update.conf                   REPO_DIR (the clone, /opt/espbench) + PIN (empty = follow releases)
 ├── update_status.json, update.log  last espbench-update
 ├── bench_name                    (optional) bench name for bench-master
-├── meta/                         777, written by the dashboard: properties.json, bench_location
+├── meta/                         777, written by the dashboard: properties.json, bench_geo.json, bench_location
+├── geo_disabled                  (optional) don't geolocate the bench by its public IP
 └── VERSION
 ```
 

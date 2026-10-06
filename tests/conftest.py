@@ -1,6 +1,7 @@
 """Aislamiento global: ningún test toca /opt/esp de la máquina donde corre
 (en la Pi, leería el estado y los logs de los devices reales), ni sale a buscar
-benches a la tailnet real (el CLI sin host hace discovery)."""
+benches a la tailnet real (el CLI sin host hace discovery), ni consulta la
+ubicación del bench por IP (geo.py, al arrancar el api en uvicorn)."""
 import json
 
 import pytest
@@ -13,3 +14,4 @@ def _isolated_esp_base(monkeypatch, tmp_path):
     benches_cfg.write_text(json.dumps({"tailscale": False, "hosts": []}))
     monkeypatch.setenv("ESPBENCH_BENCHES_CONFIG", str(benches_cfg))
     monkeypatch.delenv("ESPBENCH_HOST", raising=False)
+    monkeypatch.setenv("ESPBENCH_GEO", "off")

@@ -110,7 +110,10 @@ def _human_benches(r: dict) -> None:
     for b in r["benches"]:
         note = "viejo: ignorado" if not b["supported"] else (b["error"] or (
             "sin notas/propiedades: actualizar" if b.get("props") is False else ""))
-        rows.append((b["name"], b.get("location") or "-", b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
+        loc = b.get("location") or {}
+        where = (loc.get("label") or "-") + (" (manual)" if loc.get("source") == "manual" else "") + \
+            (" (vieja)" if loc.get("stale") else "")
+        rows.append((b["name"], where, b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
                      str(b["boards"]), str(b["available"]), note))
     _table(rows)
 
@@ -162,7 +165,8 @@ def _all_boards(c: lib.Client, a, with_unknown: bool = False):
             errors.append({"bench": b.name, "error": b.error})
         for d in (b.devices if b is not None else bc.devices()):
             if with_unknown or d.get("mac"):
-                devs.append({"bench": b.name, "location": b.location, **bc.summarize(d)} if b is not None
+                devs.append({"bench": b.name, "location": lib.bench_discovery.location_label(b.location),
+                             **bc.summarize(d)} if b is not None
                             else bc.summarize(d))
     return devs, errors
 
@@ -179,7 +183,8 @@ def cmd_ls(c: lib.Client, a, out: Out) -> int:
     devs = [d for d in devs if lib.matches_where(d, where) and (not a.free or d["available"])]
     if a.location is not None:
         # Con host fijo las placas no traen la ubicación: es la del bench (/api/version).
-        here = c.version().get("location") if a.multi is None else None
+        disc = lib.bench_discovery
+        here = disc.location_label(disc.normalize_location(c.version().get("location"))) if a.multi is None else None
         devs = [d for d in devs if lib.location_matches(d.get("location") if a.multi is not None else here,
                                                         a.location)]
     r = {"ok": True, "devices": devs}

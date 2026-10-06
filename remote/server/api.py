@@ -9,6 +9,7 @@ publica cada device). Antes se llamaba dashboard.py y chocaba de nombre con
 remote/dashboard/, que es el frontend.
 """
 import asyncio
+import contextlib
 import dataclasses
 import pathlib
 import re
@@ -24,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server import benchinfo
+from server import benchinfo, geo
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -32,7 +33,14 @@ TAG = "api"
 BASE_DIR = pathlib.Path(__file__).parent.parent
 DASHBOARD_DIR = BASE_DIR / "dashboard"
 
-app = FastAPI()
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    """Al arrancar: la ubicación por IP en un thread, sin frenar el arranque ni los pedidos (geo.py)."""
+    geo.start_background()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 registry = DeviceRegistry()
 streamer = LogStreamer()
 
@@ -49,7 +57,8 @@ async def get_version():
     """También es la identidad del bench para bench-master: `app` dice que es un
     espbench (lo distingue de otros hosts de la tailnet), `name`, cómo se llama, e
     `id`, la MAC de la máquina (lo que lo identifica aunque cambie de nombre o de IP).
-    `location`: dónde está ("Oficina BA"; None si no se cargó, se edita con PATCH /api/bench).
+    `location`: dónde está (geo.location(): {label, city, region, country, lat, lon, tz, source
+    auto|manual, ts, stale}, o None).
     `auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo si lo
     hay: `unlock` forzado lo exige)."""
     try:
@@ -61,7 +70,7 @@ async def get_version():
         "version": _read_first_line(paths.version_file()) or "dev",
         "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
         "id": benchinfo.this_host_id(),
-        "location": benchinfo.location(),
+        "location": geo.location(),
         "auth": has_token,
     }
 
@@ -633,17 +642,20 @@ async def bench_health():
 
 @app.patch("/api/bench")
 async def patch_bench(body: dict = Body(...), authorization: Optional[str] = Header(None)):
-    """Datos del bench: `location` (hasta 60 caracteres; "" o null la borra). Sale en /api/version."""
+    """Override manual de la ubicación: `location` (texto hasta 60 caracteres, `source: "manual"`; p. ej.
+    si la IP sale por una VPN y da otra ciudad); "" o null lo borra y vuelve la automática (geo.py)."""
     _require_auth(authorization)
     if "location" not in body:
         _fail(400, "bad_request", "nada para cambiar: location")
     try:
-        loc = benchinfo.set_location(body.get("location"))
+        geo.set_manual(body.get("location"))
     except board_meta.MetaError as e:
         _fail(400, "bad_request", str(e))
     except OSError as e:
         _fail(500, "unexpected", f"no se pudo guardar la ubicación: {e}")
-    taglog.info(TAG, f"ubicación del bench: {loc or '(sin ubicación)'}")
+    loc = geo.location()
+    taglog.info(TAG, f"ubicación del bench: {(loc or {}).get('label') or '(sin ubicación)'} "
+                     f"({(loc or {}).get('source') or '-'})")
     return {"ok": True, "location": loc}
 
 

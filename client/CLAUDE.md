@@ -62,9 +62,11 @@ Solo stdlib: lo usan `deploy.py`, bench-master (`master/`) y el CLI `espbench` s
 - `resolve(key)`: key = device_key, SN, MAC, tty, `<dev>@<bench>` o `<bench>/<tty>`. `ResolveError` (`kind`:
   `not_found` / `ambiguous`, con `hits`) si no está o si está en más de un bench.
 - `scan_cached(path, ttl_s)`: la lista de benches (no sus devices, incluido su `id` y su `location`) se reusa `ttl_s` (30 s); los devices se piden siempre.
-- `Bench.location`: la ubicación que declara el bench (`/api/version`, "Oficina BA"; `None` si no tiene). La muestran
-  `espbench benches`, `ls` sin host (campo `location` de cada placa, columna UBICACIÓN) y bench-master; `ls --location`
-  filtra (`espbench_lib.location_matches`: contiene, sin mayúsculas; `''` = sin ubicación).
+- `Bench.location`: la ubicación que declara el bench (`/api/version`: `{label, city, country, source: auto|manual,
+  stale...}`, `normalize_location`; un texto suelto de un bench 0.41/0.42 cuenta como manual; `None` si no tiene).
+  `espbench benches` la muestra (columna UBICACIÓN con "(manual)"/"(vieja)"; `--json`: el objeto), `ls` sin host trae
+  en cada placa `location` = su `label` (`location_label`), bench-master la usa; `ls --location` filtra por el label
+  (`espbench_lib.location_matches`: contiene, sin mayúsculas; `''` = sin ubicación).
 
 En `.flashcfg.json`, un remote de `deploy.py` **sin `host`** (o `"host": "auto"`) se resuelve así: `{"name": "medidor-a", "lock_user": ..., "lock_token": ...}`.
 Un solo scan por corrida (`_benches_cache`).

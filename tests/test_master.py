@@ -53,12 +53,14 @@ def run(coro):
 
 def test_cache_exposes_the_bench_location_in_benches_and_devices():
     cache = BenchCache(scan=None, now=Clock())
-    cache.update([bench("pi1", DEV_A, location="Oficina BA"), bench("pi2", DEV_B)])
+    ba = {"label": "Buenos Aires, AR", "city": "Buenos Aires", "country": "AR", "source": "auto"}
+    cache.update([bench("pi1", DEV_A, location=ba), bench("pi2", DEV_B)])
     s = {st.bench.name: st.summary() for st in cache.states()}
-    assert (s["pi1"]["location"], s["pi2"]["location"]) == ("Oficina BA", None)
-    assert [(d["bench"], d["bench_location"]) for d in cache.devices()] == [("pi1", "Oficina BA"), ("pi2", None)]
-    cache.update([bench("pi1", DEV_A, location="Lab Chile")])        # la cambiaron en el bench
-    assert cache.get("pi1").summary()["location"] == "Lab Chile"
+    assert (s["pi1"]["location"], s["pi2"]["location"]) == (ba, None)
+    assert [(d["bench"], d["bench_location"]) for d in cache.devices()] == [("pi1", "Buenos Aires, AR"),
+                                                                            ("pi2", None)]
+    cache.update([bench("pi1", DEV_A, location={"label": "Lab Chile", "source": "manual"})])   # override en el bench
+    assert cache.get("pi1").summary()["location"]["label"] == "Lab Chile"
 
 
 def test_cache_keeps_offline_bench_with_last_snapshot():

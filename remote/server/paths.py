@@ -93,8 +93,18 @@ def bench_name_file() -> pathlib.Path:
 
 
 def bench_location_file() -> pathlib.Path:
-    """(opcional) Ubicación del bench ("Oficina BA"). La edita el dashboard (api, sfypi): va en meta/."""
+    """(opcional) Ubicación manual del bench ("Oficina BA"): pisa la automática (geo.py). La escribe el api: meta/."""
     return meta_dir() / "bench_location"
+
+
+def bench_geo_file() -> pathlib.Path:
+    """Ubicación automática del bench por IP pública (geo.py, la escribe el api)."""
+    return meta_dir() / "bench_geo.json"
+
+
+def geo_disabled_file() -> pathlib.Path:
+    """(opcional) Si existe, el bench no consulta su ubicación por IP (solo vale la manual)."""
+    return esp_base() / "geo_disabled"
 
 
 def run_dir() -> pathlib.Path:

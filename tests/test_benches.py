@@ -95,19 +95,25 @@ def test_probe_identifies_espbench_and_rejects_others():
 
 def test_probe_reads_the_location_and_the_cache_keeps_it(tmp_path):
     c = Candidate("10.0.0.5", label="pi")
-    net = fake_net({c.url + "/api/version": {"app": "espbench", "version": "0.41.0", "name": "pi",
-                                             "location": " Lab Chile ", "auth": False},
+    loc = {"label": "Santiago, CL", "city": "Santiago", "country": "CL", "lat": -33.45, "lon": -70.66,
+           "tz": "America/Santiago", "source": "auto", "ts": "2026-10-06T10:00:00-03:00", "stale": False}
+    net = fake_net({c.url + "/api/version": {"app": "espbench", "version": "0.43.0", "name": "pi",
+                                             "location": loc, "auth": False},
                     c.url + "/api/devices": []})
-    assert benches.probe(c, 1, net).location == "Lab Chile"
-    for empty in (None, "", "  "):
-        v = {"app": "espbench", "version": "0.41.0", "name": "pi", "location": empty}
+    assert benches.probe(c, 1, net).location == loc
+    assert benches.location_label(benches.probe(c, 1, net).location) == "Santiago, CL"
+    for empty in (None, "", "  ", {"label": ""}, {"city": "x"}, 5):
+        v = {"app": "espbench", "version": "0.43.0", "name": "pi", "location": empty}
         assert benches.probe(c, 1, fake_net({c.url + "/api/version": v})).location is None
+    v = {"app": "espbench", "version": "0.42.0", "name": "pi", "location": " Lab Chile "}     # texto suelto (0.42)
+    assert benches.probe(c, 1, fake_net({c.url + "/api/version": v})).location == {"label": "Lab Chile",
+                                                                                     "source": "manual"}
     assert benches.probe(c, 1, fake_net({c.url + "/api/version": {"version": "0.6.1"}})).location is None
     cache = tmp_path / "benches.json"
     kw = dict(cfg={"tailscale": False, "hosts": ["10.0.0.5"]}, get_json=net, now=lambda: 1000.0)
-    assert benches.scan_cached(cache, **kw)[0][0].location == "Lab Chile"
+    assert benches.scan_cached(cache, **kw)[0][0].location == loc
     found, cached = benches.scan_cached(cache, **kw)
-    assert cached and found[0].location == "Lab Chile"
+    assert cached and found[0].location == loc
 
 
 def test_probe_accepts_legacy_bench_named_by_source():

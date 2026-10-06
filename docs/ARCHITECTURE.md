@@ -354,8 +354,8 @@ boot ─────► devremote.service ────────────�
 | `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
 | `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`) |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
-| `GET /api/version` | `{app: "espbench", version, name, id, location, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname; `location`, de `meta/bench_location`, `null` si no tiene) y si hay token de la API |
-| `PATCH /api/bench` `{location}` | Ubicación del bench ("Oficina BA"): hasta 60 caracteres, sin control ni formato Unicode (Cf); `""`/`null` la borra (`benchinfo.set_location`, escritura atómica en `meta/`). La edita el header del dashboard |
+| `GET /api/version` | `{app: "espbench", version, name, id, location, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname; `location`, de `geo.location()`: `{label, city, region, country, lat, lon, tz, source: auto\|manual, ts, stale}` o `null`) y si hay token de la API |
+| `PATCH /api/bench` `{location}` | Override manual de la ubicación (texto hasta 60 caracteres, sin control ni formato Unicode Cf; `source: "manual"`); `""`/`null` lo borra y vuelve la automática. Devuelve la `location` resultante. Lo usa el header del dashboard |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` `{device_key?, note?, props?, props_add?, props_remove?, user?}` | Renombrar, nota y propiedades de la placa (`devices.json`, ver "Nota y propiedades") |
 | `GET /api/properties` | Categorías de propiedades (fijas) con los valores de este bench |
@@ -404,6 +404,21 @@ boot ─────► devremote.service ────────────�
   Funcionan con la placa desconectada (los datos viven en `devices/<MAC>/`); la
   sesión "actual" de una placa desconectada es la última. Escrituras por tty, con
   `expect_mac`.
+
+### Ubicación del bench (`remote/server/geo.py`)
+
+- **Automática**: geolocalización por la IP pública, a nivel ciudad. `GET https://ipinfo.io/json` (sin token) y,
+  si falla (red, 429, IP privada), `https://ipapi.co/json/`; timeout 3 s, un intento por servicio. Se guarda en
+  `meta/bench_geo.json` (ciudad, región, país, lat/lon, zona horaria, `source: "auto"`, `ts`). La pide el api al
+  arrancar (lifespan → `geo.start_background`, un thread: no frena el arranque ni los pedidos) si lo guardado tiene
+  más de 24 h, y después cada 24 h; si falla, queda lo último con `stale: true` y se reintenta en una hora.
+- **Manual**: `PATCH /api/bench {location: "texto"}` lo fija (`meta/bench_location`, pisa la automática: p. ej. la
+  IP sale por una VPN en otra ciudad); `""` vuelve a la automática. `label` = el texto, o "Ciudad, PAÍS".
+- **Privacidad / desactivar**: el bench le manda su IP pública a ipinfo.io (o ipapi.co) una vez por día. Con
+  `/opt/esp/geo_disabled` (o `ESPBENCH_GEO=off` en el entorno del api; lo usan los tests) no consulta a nadie y
+  la automática guardada no se muestra: solo vale la manual.
+- La muestran el header del dashboard del bench (ícono de ubicación automática o de pin manual; click → override),
+  bench-master (lista de benches, card, y agrupa por el `label`) y el CLI (§11).
 
 ### Nota y propiedades por placa (`remote/server/board_meta.py`)
 
@@ -511,7 +526,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?} (666: se escribe en el lugar)
 ├── meta/                  777: lo que crea el api (sfypi)
 │   ├── properties.json    valores de las propiedades de este bench (las categorías están en el código)
-│   └── bench_location     (opcional) ubicación del bench ("Oficina BA"), la edita el dashboard
+│   ├── bench_geo.json     ubicación automática por IP (geo.py): ciudad, región, país, lat/lon, tz, ts, stale
+│   └── bench_location     (opcional) override manual de la ubicación (lo edita el dashboard)
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/
@@ -530,7 +546,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 **Permisos**: `/opt/esp` es root 755 y el api corre como `sfypi`, así que el api no puede crear archivos ahí.
 `devices.json` (rename, nota, propiedades) se escribe **en el lugar** (`r+` con flock, sin temporal) y es 666;
 `properties.json` necesita temporal + rename y su `.lck`, así que vive en `meta/` (777, como `locks/`), igual que
-`bench_location` (temporal + rename). Un
+`bench_geo.json` y `bench_location` (temporal + rename). `/opt/esp/geo_disabled` (opcional, lo crea el admin)
+apaga la geolocalización. Un
 `/opt/esp/properties.json` de 0.36–0.39 se lee si no está el de `meta/` e `install.sh` lo mueve.
 
 `devremote --cleanup` borra jobs y sesiones de log viejas. La sesión actual
@@ -608,9 +625,10 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
   `timeout_s` = 2 s por peer que no contesta); la lista de benches se cachea 30 s en
   `$ESPBENCH_STATE_DIR/benches.json` y los devices se piden en cada comando. Si la placa no está en los benches de
   la cache, se escanea de nuevo una vez. `espbench benches` siempre escanea.
-- **Ubicación** (`location` de `/api/version`, §8): `benches` la muestra; sin host, cada placa de `ls` trae
-  `location` (la de su bench, de la cache: un cambio tarda hasta 30 s). `ls --location <texto>` filtra por bench
-  (contiene, sin mayúsculas; `''` = benches sin ubicación); con host fijo pregunta `/api/version` de ese bench.
+- **Ubicación** (`location` de `/api/version`, §8 "Ubicación del bench"): `benches` la muestra (`--json`: el objeto
+  entero); sin host, cada placa de `ls` trae `location` = el `label` de su bench (de la cache: un cambio tarda hasta
+  30 s). `ls --location <texto>` filtra por bench (el label contiene el texto, sin mayúsculas; `''` = benches sin
+  ubicación); con host fijo pregunta `/api/version` de ese bench. Un bench 0.41/0.42 mandaba un texto: cuenta como manual.
 - **`ls`/`status`**: `available` = `monitoring` y sin lock, o con lock propio (un lock ajeno, aunque sea el
   permanente de un flash, no deja flashear ni reservar), y sin `estado` excluido (`exclude_pick`: `avoid`).
 - **`pick`**: la primera placa `available`, con MAC, sin boot loop y que cumple los `--where` (AND), en todos los
@@ -631,7 +649,7 @@ centraliza todos, y corre **en la máquina del dev**, no en un bench.
 
 ```
 client/benches.py ── tailscale status --json (peers online) + ~/.config/espbench-benches.json
-      │                 └─ GET :8080/api/version → {app: "espbench", name, location}  ¿es bench? ¿cómo se llama?
+      │                 └─ GET :8080/api/version → {app: "espbench", name, location}  ¿es bench? ¿cómo se llama? ¿dónde está?
       ├─ deploy.py      remote sin host / host "auto" → resolve(key) → bench + puerto TCP
       ├─ espbench (CLI) sin host → scan_cached (lista de benches 30 s) → ls de todos / resolve(<dev>) (§11)
       └─ master/app.py  poll cada 5 s → BenchCache

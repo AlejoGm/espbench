@@ -174,7 +174,7 @@ class BenchCache:
         for st in self.states():
             for d in st.bench.devices:
                 out.append(dict(d, bench=st.bench.name, bench_url=st.bench.url, bench_online=st.online,
-                                bench_last_seen=st.last_seen, bench_location=st.bench.location))
+                                bench_last_seen=st.last_seen, bench_location=benches.location_label(st.bench.location)))
         return out
 
 

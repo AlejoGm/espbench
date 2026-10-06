@@ -1,6 +1,7 @@
 """Tests de los endpoints de historial y consola de api.py. Sin TestClient (no
 hay httpx): se llaman los handlers directo."""
 import asyncio
+import json
 import os
 import pathlib
 import sys
@@ -742,19 +743,32 @@ def test_version_without_files():
     assert r["app"] == "espbench" and r["version"] == "dev" and r["name"] and r["location"] is None
 
 
-# ---------- ubicación del bench (PATCH /api/bench) ----------
+# ---------- ubicación del bench (geo.py; PATCH /api/bench = override manual) ----------
 
-def test_bench_location_set_shown_in_version_and_cleared():
-    r = run(api.patch_bench({"location": "  Lab Chile  "}))
-    assert r == {"ok": True, "location": "Lab Chile"}
-    assert run(api.get_version())["location"] == "Lab Chile"
-    assert paths.bench_location_file().parent == paths.meta_dir()
-    assert run(api.patch_bench({"location": "Oficina BA · 2º piso"}))["location"] == "Oficina BA · 2º piso"
-    assert run(api.get_version())["location"] == "Oficina BA · 2º piso"
+def test_version_location_is_the_auto_one_and_the_manual_override_wins(monkeypatch):
+    from server import geo
+    monkeypatch.delenv("ESPBENCH_GEO")
+    paths.meta_dir().mkdir(parents=True)
+    paths.bench_geo_file().write_text(json.dumps({"city": "Santiago", "region": "Santiago Metropolitan",
+                                                  "country": "CL", "lat": -33.45, "lon": -70.66,
+                                                  "tz": "America/Santiago", "ts": "2026-10-06T10:00:00-03:00"}))
+    loc = run(api.get_version())["location"]
+    assert (loc["label"], loc["source"], loc["country"], loc["tz"], loc["stale"]) == \
+        ("Santiago, CL", "auto", "CL", "America/Santiago", False)
+    r = run(api.patch_bench({"location": "  Oficina BA (VPN)  "}))
+    assert r["ok"] and (r["location"]["label"], r["location"]["source"]) == ("Oficina BA (VPN)", "manual")
+    assert run(api.get_version())["location"]["label"] == "Oficina BA (VPN)"
     for empty in ("", None, "   "):
         run(api.patch_bench({"location": "x"}))
-        assert run(api.patch_bench({"location": empty})) == {"ok": True, "location": None}
-        assert run(api.get_version())["location"] is None and not paths.bench_location_file().exists()
+        r = run(api.patch_bench({"location": empty}))                # vuelve la automática
+        assert r["location"]["label"] == "Santiago, CL" and r["location"]["source"] == "auto"
+    assert not paths.bench_location_file().exists()
+
+
+def test_without_auto_location_and_geo_disabled_only_the_manual_counts():
+    assert run(api.get_version())["location"] is None                # ESPBENCH_GEO=off (conftest)
+    assert run(api.patch_bench({"location": "Lab"}))["location"]["label"] == "Lab"
+    assert run(api.patch_bench({"location": None}))["location"] is None
 
 
 @pytest.mark.parametrize("body", [{"location": "x" * 61}, {"location": "a\nb"}, {"location": "a\u202eb"},
@@ -764,11 +778,11 @@ def test_bench_location_is_validated(body):
     with pytest.raises(HTTPException) as e:
         run(api.patch_bench(body))
     assert err(e)[0] == 400 and err(e)[1] == "bad_request"
-    assert run(api.get_version())["location"] == "Lab"       # no se tocó
+    assert run(api.get_version())["location"]["label"] == "Lab"       # no se tocó
 
 
 def test_bench_location_max_length_is_accepted():
-    assert run(api.patch_bench({"location": "x" * 60}))["location"] == "x" * 60
+    assert run(api.patch_bench({"location": "x" * 60}))["location"]["label"] == "x" * 60
 
 
 def test_bench_location_is_written_with_esp_base_read_only():
@@ -777,12 +791,12 @@ def test_bench_location_is_written_with_esp_base_read_only():
     paths.meta_dir().mkdir(parents=True)
     base.chmod(0o555)
     try:
-        assert run(api.patch_bench({"location": "Lab"}))["location"] == "Lab"
+        assert run(api.patch_bench({"location": "Lab"}))["location"]["label"] == "Lab"
         assert run(api.patch_bench({"location": ""}))["location"] is None
-        assert run(api.patch_bench({"location": "Oficina"}))["location"] == "Oficina"
+        assert run(api.patch_bench({"location": "Oficina"}))["location"]["label"] == "Oficina"
     finally:
         base.chmod(0o755)
-    assert run(api.get_version())["location"] == "Oficina"
+    assert run(api.get_version())["location"]["label"] == "Oficina"
     assert not (base / "bench_location").exists()
 
 

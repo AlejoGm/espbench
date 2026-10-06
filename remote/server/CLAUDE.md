@@ -25,7 +25,8 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 | `auth.py` | ambos | Token opcional `/opt/esp/api_token`: escrituras del API (`Bearer`) y token del flash si no hay `--token` |
 | `locks.py` | ambos | `locks/<tty>`: `user:token[:expires[:mac]]` (lock del flash / reserva; `:` y `%` del par escapados); vencido = inexistente: **se ignora, no se borra al leerlo**; `python3 -m server.locks unlock <tty>` (lo usa `devremote --unlock`) |
 | `runstate.py` | ambos | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
-| `benchinfo.py` | dashboard | Salud de la máquina (temperatura, RAM, disco, carga, uptime; de `/proc` y `/sys`), actividad por hora de cada placa (de `events.jsonl`, de atrás para adelante) y ubicación del bench (`meta/bench_location`, `PATCH /api/bench`) |
+| `benchinfo.py` | dashboard | Salud de la máquina (temperatura, RAM, disco, carga, uptime; de `/proc` y `/sys`), actividad por hora de cada placa (de `events.jsonl`, de atrás para adelante) |
+| `geo.py` | dashboard | Ubicación del bench: automática por IP pública (ipinfo.io, fallback ipapi.co; thread al arrancar el api y cada 24 h; `stale` si falla) en `meta/bench_geo.json`, override manual en `meta/bench_location` (`PATCH /api/bench`); `geo_disabled` / `ESPBENCH_GEO=off` la apagan |
 | `update.py` | dashboard (+ `espbench-update`) | `busy_reason` (placa flasheando o reservada), PIN y estado del último update, comando para lanzarlo |
 | `paths.py` | ambos | Todas las rutas bajo `ESP_BASE` (default `/opt/esp`) |
 | `taglog.py` | ambos | Logging `taglog.info(TAG, msg)`, sinks pluggables |

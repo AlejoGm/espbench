@@ -29,6 +29,9 @@ bench-master y el bench nuevo (identidad, URLs relativas, proxy, `host: auto`): 
 - [ ] Dashboard con Ctrl-F5: botón **Hora** en el log, pestaña **Eventos**, marcas ⚠/↻ en el vivo,
       contadores de reservas en la home.
 
+- [ ] **Ubicación del bench**: después de `update`, `cat /opt/esp/meta/bench_geo.json` (ciudad de la IP pública, `ts`);
+      el header del dashboard la muestra con "auto"; fijar una a mano y volver a "automática" sin 500. Con
+      `sudo touch /opt/esp/geo_disabled` y reiniciar el dashboard, `/api/version` da `location: null` (o la manual).
 - [ ] **Nota y propiedades con el api como sfypi**: `ls -ld /opt/esp/meta` → `drwxrwxrwx`; desde el dashboard
       (o `espbench note <dev> "x"` / `espbench set <dev> chip=esp32` / `espbench props add uso prueba` y
       `props rm uso prueba`) sin 500; `/opt/esp/meta/properties.json` creado; `devices.json` sigue `-rw-rw-rw-`

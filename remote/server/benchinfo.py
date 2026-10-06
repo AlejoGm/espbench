@@ -8,8 +8,6 @@ benchinfo.py — lo que el dashboard muestra del bench entero (no de una placa):
   cada placa por hora en las últimas N horas, y los eventos recientes que
   merecen un aviso (panic, boot loop, flash). Sale de devices/<mac>/events.jsonl,
   leído de atrás para adelante hasta la ventana.
-- `location()` / `set_location()`: la ubicación del bench ("Oficina BA"), texto
-  corto en meta/bench_location (lo escribe el api, que corre como sfypi).
 """
 import datetime as dt
 import os
@@ -17,12 +15,11 @@ import pathlib
 import shutil
 import functools
 import socket
-import tempfile
 import time
 import uuid
 from typing import Dict, List, Optional
 
-from server import board_meta, events, paths
+from server import events, paths
 
 # Tipos que se cuentan por hora. reserve cuenta la hora en la que se tomó la reserva.
 BUCKET_TYPES = ("boot", "panic", "flash", "boot_loop", "reserve")
@@ -109,49 +106,6 @@ def host_id(root: str = "/") -> Optional[str]:
 @functools.lru_cache(maxsize=1)
 def this_host_id() -> Optional[str]:
     return host_id()
-
-
-# ---------- ubicación del bench ----------
-
-LOCATION_MAX = 60
-
-
-def location() -> Optional[str]:
-    """La ubicación del bench, o None si no tiene (o el archivo no se puede leer)."""
-    try:
-        return paths.bench_location_file().read_text(encoding="utf-8").strip() or None
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def set_location(text) -> Optional[str]:
-    """Guarda la ubicación ("" o None la borra). board_meta.MetaError si es larga (más de
-    LOCATION_MAX) o tiene caracteres de control o de formato. Escritura atómica en meta/:
-    /opt/esp es root 755 y el api corre como sfypi."""
-    text = board_meta.clean_text(text, "la ubicación", LOCATION_MAX) or None
-    path = paths.bench_location_file()
-    if text is None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".bench_location.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o666)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return text
 
 
 # ---------- actividad por hora ----------
