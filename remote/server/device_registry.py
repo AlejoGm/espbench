@@ -168,8 +168,6 @@ class DeviceRegistry:
                  devices_file: Optional[DevicesFile] = None):
         self._dev_dir = pathlib.Path(dev_dir)
         self._jobs_dir = pathlib.Path(jobs_dir) if jobs_dir else paths.jobs_dir()
-        self._fw_info: dict[str, dict] = {}
-        self._lock = threading.Lock()
         self._devices_file = devices_file or DevicesFile()
 
     def list_devices(self) -> list[DeviceInfo]:
@@ -200,24 +198,6 @@ class DeviceRegistry:
                 return self._build_device_info(tty_name)
         return None
 
-    def set_chip_id(self, tty_name: str, chip_id: str) -> None:
-        pass  # SN now derived from MAC; kept for log_streamer compat
-
-    def set_firmware_info(self, tty_name: str, project: str = None,
-                          version: str = None, idf: str = None) -> None:
-        with self._lock:
-            info = self._fw_info.setdefault(tty_name, {})
-            if project:
-                info["fw_project"] = project
-                hw_model = hw_model_from_project_name(project)
-                mac = self._get_tty_mac(tty_name)
-                if mac:
-                    self._devices_file.update_hw_model(mac, hw_model)
-            if version:
-                info["fw_version"] = version
-            if idf:
-                info["fw_idf"] = idf
-
     def update_device_key(self, mac: str, device_key: str):
         self._devices_file.update_device_key(mac, device_key)
 
@@ -241,13 +221,8 @@ class DeviceRegistry:
         # El puerto lo decide la capa de infra y llega por --control-port; el
         # proceso lo publica. Derivarlo del nombre es solo el fallback.
         port_tcp = state.get("tcp_port") or 5000 + self._parse_tty_number(tty_name)
-        with self._lock:
-            fw = dict(self._fw_info.get(tty_name, {}))
-        # Lo que publica el proceso del device (SerialWatch) manda sobre lo que
-        # parsea el LogStreamer, que solo ve lo que pasó con un WebSocket abierto.
-        for key, value in (state.get("fw") or {}).items():
-            if value:
-                fw[f"fw_{key}"] = value
+        # El firmware lo publica el proceso del device (SerialWatch), que ve todo el serial.
+        fw = {f"fw_{key}": value for key, value in (state.get("fw") or {}).items() if value}
         mac = self._get_tty_mac(tty_name, state)
         sn = device_key = hw_model = None
         if mac:

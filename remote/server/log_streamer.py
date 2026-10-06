@@ -1,6 +1,9 @@
 """
 Log streamer: tail async del log de un dispositivo con broadcast a WebSockets.
-Parsea CHIPID e info de firmware en el stream y notifica al DeviceRegistry.
+Solo transmite: la info de firmware la publica el proceso del device
+(SerialWatch → run/<tty>.json), que ve todo el serial y no solo lo que pasó con
+una página abierta. Antes acá se parseaban CHIPID y app_init, y al arrancar el
+api se leía el output.log entero de cada device (scan_all).
 
 Qué archivo leer lo dice el proceso del device en run/<tty>.json (log_path):
 el DeviceLog vive en devices/<mac>/ y cambia de archivo en cada sesión. Sin
@@ -11,21 +14,11 @@ logs/<tty>/output.log.
 import asyncio
 import codecs
 import pathlib
-import re
 import sys
 from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from server import paths, runstate
-
-CHIPID_RE     = re.compile(r"CHIPID\s*=\s*(\d+)")
-FW_PROJECT_RE = re.compile(r"app_init: Project name:\s+(\S+)")
-FW_VERSION_RE = re.compile(r"app_init: App version:\s+(\S+)")
-FW_IDF_RE     = re.compile(r"app_init: ESP-IDF:\s+(\S+)")
-_ANSI_RE      = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-def _strip_ansi(s: str) -> str:
-    return _ANSI_RE.sub("", s).strip()
 
 
 class LogStreamer:
@@ -34,10 +27,9 @@ class LogStreamer:
     WebSocket suscritos a ese tty.
     """
 
-    def __init__(self, logs_base: Optional[str] = None, registry=None):
+    def __init__(self, logs_base: Optional[str] = None):
         self._explicit_base = logs_base is not None
         self._logs_base = pathlib.Path(logs_base) if logs_base else paths.logs_dir()
-        self._registry = registry
         # tty_name → set of websockets
         self._subscribers: dict[str, set] = {}
         # tty_name → asyncio.Task (tail loop)
@@ -78,7 +70,6 @@ class LogStreamer:
             with open(log_path, "r", errors="replace", newline='') as f:
                 content = f.read()
             if content:
-                self._check_chipid(tty_name, content)
                 try:
                     await websocket.send_text(content)
                 except Exception:
@@ -157,7 +148,6 @@ class LogStreamer:
                 if not new_content:
                     continue
 
-                self._check_chipid(tty_name, new_content)
                 await self._broadcast(tty_name, new_content)
 
             except asyncio.CancelledError:
@@ -182,34 +172,6 @@ class LogStreamer:
             async with lock:
                 existing = self._subscribers.get(tty_name, set())
                 existing -= dead
-
-    def scan_all(self, dev_dir: str = "/dev") -> None:
-        """Parse fw info from existing output.log for every ttyUSBX. Call at startup."""
-        for entry in sorted(pathlib.Path(dev_dir).glob("ttyUSB*")):
-            log_path = self._log_path(entry.name)
-            if log_path.exists():
-                try:
-                    self._check_chipid(entry.name, log_path.read_text(errors="replace"))
-                except Exception:
-                    pass
-
-    def _check_chipid(self, tty_name: str, text: str) -> None:
-        if self._registry is None:
-            return
-        clean = _strip_ansi(text)
-        m = CHIPID_RE.search(clean)
-        if m:
-            self._registry.set_chip_id(tty_name, m.group(1))
-        m_proj = FW_PROJECT_RE.search(clean)
-        m_ver  = FW_VERSION_RE.search(clean)
-        m_idf  = FW_IDF_RE.search(clean)
-        if m_proj or m_ver or m_idf:
-            self._registry.set_firmware_info(
-                tty_name,
-                project=m_proj.group(1) if m_proj else None,
-                version=m_ver.group(1)  if m_ver  else None,
-                idf=m_idf.group(1)      if m_idf  else None,
-            )
 
 
 def _size_and_inode(path: pathlib.Path):

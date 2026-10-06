@@ -1,5 +1,5 @@
 """
-Tests para LogStreamer: tail async, broadcast WebSocket, parsing de CHIPID.
+Tests para LogStreamer: tail async y broadcast WebSocket.
 """
 
 import asyncio
@@ -40,18 +40,6 @@ class MockWebSocket:
 
     def close_ws(self):
         self._closed = True
-
-
-# ---------------------------------------------------------------------------
-# Mock Registry
-# ---------------------------------------------------------------------------
-
-class MockRegistry:
-    def __init__(self):
-        self.calls: list[tuple[str, str]] = []
-
-    def set_chip_id(self, tty_name: str, chip_id: str):
-        self.calls.append((tty_name, chip_id))
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +108,21 @@ def test_subscribe_no_file_sends_nothing(tmp_path):
     assert ws.sent == []
 
 
-def test_chipid_parsed_and_set(tmp_path):
-    """CHIPID en el log inicial llama a registry.set_chip_id con el valor correcto."""
+def test_streamer_only_streams_and_reads_no_log_at_startup(tmp_path):
+    """El firmware lo publica el device (SerialWatch → run/<tty>.json): el
+    streamer ya no parsea CHIPID/app_init ni lee el output.log entero de cada
+    device al arrancar el api (scan_all). Solo transmite."""
+    import inspect
+    from server import api
+    assert "registry" not in inspect.signature(LogStreamer).parameters
+    assert not hasattr(LogStreamer, "scan_all") and not hasattr(LogStreamer, "_check_chipid")
+    assert not [h for h in api.app.router.on_startup if "scan" in getattr(h, "__name__", "") or
+                "streamer" in inspect.getsource(h)]
     log_path = make_log_path(tmp_path)
-    log_path.write_text("I (123) boot: starting\nCHIPID = 99887766\nI (124) app: ready\n")
-
-    registry = MockRegistry()
+    log_path.write_text("CHIPID = 99887766\nI (313) app_init: Project name:     SFY1-56_1\n")
     ws = MockWebSocket()
-    streamer = LogStreamer(logs_base=str(tmp_path), registry=registry)
-
-    asyncio.run(subscribe_and_cancel(streamer, "ttyUSB0", ws, cancel_after=0.05))
-
-    assert ("ttyUSB0", "99887766") in registry.calls
+    asyncio.run(subscribe_and_cancel(LogStreamer(logs_base=str(tmp_path)), "ttyUSB0", ws, cancel_after=0.05))
+    assert "".join(ws.sent) == log_path.read_text()
 
 
 def test_new_lines_streamed(tmp_path):
@@ -161,32 +152,6 @@ def test_new_lines_streamed(tmp_path):
 
     full_sent = "".join(ws.sent)
     assert "nueva linea de log" in full_sent
-
-
-def test_chipid_in_new_content(tmp_path):
-    """CHIPID en líneas nuevas (no en el contenido inicial) también se detecta."""
-    log_path = make_log_path(tmp_path)
-    log_path.write_text("")
-
-    registry = MockRegistry()
-    ws = MockWebSocket()
-    streamer = LogStreamer(logs_base=str(tmp_path), registry=registry)
-
-    async def run():
-        task = asyncio.get_event_loop().create_task(streamer.subscribe("ttyUSB0", ws))
-        await asyncio.sleep(0.1)
-        with open(log_path, "a") as f:
-            f.write("CHIPID = 11223344\n")
-        await asyncio.sleep(0.5)
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    asyncio.run(run())
-
-    assert ("ttyUSB0", "11223344") in registry.calls
 
 
 def test_disconnect_does_not_affect_other_subscriber(tmp_path):

@@ -31,12 +31,7 @@ DASHBOARD_DIR = BASE_DIR / "dashboard"
 
 app = FastAPI()
 registry = DeviceRegistry()
-streamer = LogStreamer(registry=registry)
-
-
-@app.on_event("startup")
-async def _startup():
-    streamer.scan_all()
+streamer = LogStreamer()
 
 
 @app.get("/api/version")

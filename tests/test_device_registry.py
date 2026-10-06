@@ -328,7 +328,6 @@ class TestRuntimeState:
         from server import runstate
         registry, dev_dir, _ = self._registry(tmp_path, monkeypatch)
         (dev_dir / "ttyUSB0").touch()
-        registry.set_firmware_info("ttyUSB0", version="v0.0.1-viejo", idf="v5.1")
         runstate.write("ttyUSB0", {"mac": "AA:BB:CC:DD:EE:FF",
                                    "health": {"boots": 3, "panics": 1, "boot_loop": True},
                                    "fw": {"project": "app", "version": "v1.2.3", "idf": None}})
@@ -338,7 +337,7 @@ class TestRuntimeState:
         with patch("subprocess.run", side_effect=mock_tmux_down):
             d = registry.get_device("ttyUSB0")
         assert d.health["boot_loop"] and d.health["panics"] == 1
-        assert d.fw_version == "v1.2.3" and d.fw_project == "app" and d.fw_idf == "v5.1"
+        assert d.fw_version == "v1.2.3" and d.fw_project == "app" and d.fw_idf is None   # solo del device
         assert d.last_flash_ok is False
 
     def test_last_user_from_device_home(self, tmp_path, monkeypatch):
