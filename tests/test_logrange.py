@@ -501,12 +501,13 @@ def test_without_regex_module_nested_quantifiers_are_rejected(monkeypatch):
     monkeypatch.setattr(logrange, "_regex", None)
     redos_board()
     t0 = time.monotonic()
-    for kw in (dict(grep="(a+)+$"), dict(until="re:(a*)*!x"), dict(grep="(a|b+){2,}$")):
+    for kw in (dict(grep="(a+)+$"), dict(until="re:(a*)*!x"), dict(grep="(a|b+){2,}$"), dict(grep="(a|a)+$")):
         with pytest.raises(RangeError) as e:
             rr(**kw)
         assert e.value.error == "bad_request" and "anidados" in e.value.message
     assert time.monotonic() - t0 < 1
-    assert len(rr(grep="(foo|a)+!")["lines"]) == 20            # una alternación cuantificada normal pasa
+    assert len(rr(grep="(foo|a)!")["lines"]) == 20             # una alternancia sin cuantificar pasa
+    assert len(rr(grep="a+!")["lines"]) == 20                   # y un cuantificador simple también
 
 
 def test_regex_time_budget(monkeypatch):
@@ -525,12 +526,15 @@ def test_only_the_first_chars_of_a_line_are_evaluated():
 
 @pytest.mark.skipif(logrange._regex is None, reason="sin el módulo regex (en la Pi viene de requirements.txt)")
 def test_catastrophic_regex_times_out_with_regex_module():
+    """`regex` optimiza (a+)+$ (no explota), pero una alternancia ambigua sí:
+    tiene que cortar por timeout, no colgar el api."""
     import time
     redos_board()
     t0 = time.monotonic()
+    rr(grep="(a+)+$")
     with pytest.raises(RangeError) as e:
-        rr(grep="(a+)+$")
-    assert e.value.error == "bad_request" and time.monotonic() - t0 < 2
+        rr(grep="(a|a)+$")
+    assert e.value.error == "bad_request" and time.monotonic() - t0 < 3
 
 
 def test_iso_fractions_of_any_length():

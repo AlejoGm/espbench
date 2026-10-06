@@ -314,7 +314,7 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - `--around`: los bordes son las líneas `rst:` (también en un boot loop, donde no hay eventos `boot` sueltos).
 - **Línea lógica partida entre polls**: el `until` arranca sembrado con la línea lógica abierta en `since` (el `>` anterior y sus `↪`). Si lo de antes de `since` ya matcheaba o era el eco, no vuelve a contar; si no, un `↪` que llega en el poll siguiente (o la respuesta pegada al prompt previo al send) completa la línea y matchea. `match` es la línea lógica entera.
 - **`echo_seen`** en la respuesta: cursor de la línea lógica que se tomó como eco (o `null`). El eco no tiene estado en el server.
-- `grep` y `until=re:`: hasta 256 caracteres, primeros 4096 de cada línea, timeout con el módulo `regex` (sin él, se rechazan los cuantificadores anidados) → `bad_request`.
+- `grep` y `until=re:`: hasta 256 caracteres, primeros 4096 de cada línea, timeout con el módulo `regex` (sin él, se rechazan los cuantificadores anidados y las alternancias cuantificadas) → `bad_request`.
 - `/events`: `limit` = los **últimos** N (en orden cronológico), `more: true` si quedaron afuera; `order=asc` = los primeros N desde `since` (inclusive: para paginar, descartar los ya vistos).
 - `partial` es siempre `null`: la línea en curso vive en la memoria del proceso del device; sale al archivo a los 150 ms / 1 s.
 - `since` default = `session`; `until_found` = `null` si no se pidió `until`.

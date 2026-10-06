@@ -59,12 +59,14 @@ _DUR_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 # Patrones del usuario (grep, until=re:) sin auth: tope de largo, de texto
 # evaluado y de tiempo. Con `regex`, timeout por búsqueda; sin él (fallback),
-# se rechazan los cuantificadores anidados, que son lo que explota.
+# se rechazan los cuantificadores anidados y las alternancias cuantificadas
+# ((a|a)+ explota igual que (a+)+ con `re`).
 MAX_PATTERN = 256
 MAX_EVAL_CHARS = 4096
 REGEX_TIMEOUT = 0.1         # s por búsqueda (solo con `regex`)
 REGEX_BUDGET = 2.0          # s en total por pedido
 _NESTED_QUANT_RE = re.compile(r"\((?:[^()\\]|\\.)*(?:[+*]|\{\d*,?\d*\})(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
+_ALT_QUANT_RE = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
 
 
 class RangeError(Exception):
@@ -367,8 +369,9 @@ class Pattern:
         self.spent = 0.0
         if literal:
             return
-        if _regex is None and _NESTED_QUANT_RE.search(pattern):
-            raise RangeError("bad_request", f"{what}: cuantificadores anidados no permitidos (p. ej. (a+)+)")
+        if _regex is None and (_NESTED_QUANT_RE.search(pattern) or _ALT_QUANT_RE.search(pattern)):
+            raise RangeError("bad_request", f"{what}: cuantificadores anidados o alternancias cuantificadas "
+                                            "no permitidos (p. ej. (a+)+, (a|b)+)")
         try:
             self.rx = _regex.compile(pattern) if _regex is not None else re.compile(pattern)
         except (re.error, getattr(_regex, "error", re.error)) as e:

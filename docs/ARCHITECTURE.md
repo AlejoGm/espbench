@@ -408,7 +408,7 @@ boot ─────► devremote.service ────────────�
 - **Patrones del usuario** (`grep`, `until=re:`; las lecturas no piden token):
   hasta 256 caracteres, se evalúan los primeros 4096 de cada línea, y con el
   módulo `regex` cada búsqueda tiene timeout de 0,1 s y el pedido 2 s en total
-  (`bad_request`). Sin `regex` instalado se rechazan los cuantificadores anidados
+  (`bad_request`). Sin `regex` instalado se rechazan los cuantificadores anidados y las alternancias cuantificadas
   (`(a+)+`), que son los que explotan.
 - **`around`**: del `rst:` anterior a E (inclusive) al siguiente (exclusive), o
   `before`/`after` líneas. No se combina con `since`/`until`.

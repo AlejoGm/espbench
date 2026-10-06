@@ -15,7 +15,7 @@ pytest tests/
 | `test_device_log.py` | `DeviceLog`: prefijo, chunks y UTF-8 partidos, parcial retenido y `↪`, taglog en medio de una serial, header fuera del buffer, offsets en bytes, rotación por `session_id`, buffer pre-MAC, migración; eventos con cursor exacto (pre-MAC, migración solo de la sesión) |
 | `test_events.py` | `events.jsonl`: dos procesos escribiendo a la vez, lectura, truncado, migración de sesión, cursor del fin del log, `record()` del api |
 | `test_logrange.py` | Rangos del log: anchors (ordinales, tiempo con horas desordenadas y líneas sin prefijo, cursor a mitad de línea, vencido), `until` (evento, boot/panic en las líneas, patrón en la línea lógica, eco, histórico vs espera), `around`, filtros, truncado, `/events` |
-| `test_locks.py` | `locks/<tty>`: formato con y sin vencimiento, vencido se borra al leer, reserva de otra placa |
+| `test_locks.py` | `locks/<tty>`: formato con y sin vencimiento, vencido se ignora (no se borra al leer), flock, reserva de otra placa |
 | `test_runstate.py` | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
 | `test_protocol.py` | Pedido de flash completo por `socketpair`, esptool falso: auth (también por `api_token`), lock y reservas, SHA256, retry sin `--encrypt`, device cambiado, FSM, evento `flash`; el done llega con el monitor relanzado, la FSM en `monitoring` y el `cursor` del flash |
 | `test_remote_esp32.py` | El entrypoint entero con fakes solo en esptool/monitor/TCP: arranque, señal ignorada durante flash, desconexión, MAC por serial |
