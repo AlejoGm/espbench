@@ -301,3 +301,45 @@ def test_devremote_service_waits_for_time_sync():
     install = (INFRA.parent / "install.sh").read_text()
     assert "systemctl enable systemd-time-wait-sync.service" in install
     assert "TimeoutStartSec=90" in install           # sin red no se cuelga el boot
+
+
+# ---------- install.sh: dependencias Python ----------
+
+@pytest.fixture
+def fake_pip(tmp_path):
+    """pip falso: anota cada llamada (y el contenido del -r) y falla con los
+    paquetes de $PIP_FAIL."""
+    pip = tmp_path / "pip"
+    pip.write_text(r'''#!/bin/bash
+echo "$*" >> "$PIP_LOG"
+if [ "$2" = "--quiet" ] && [ "$3" = "-r" ]; then cat "$4" >> "$PIP_LOG"; fi
+for p in $PIP_FAIL; do [ "${@: -1}" = "$p" ] && exit 1; done
+exit 0
+''')
+    pip.chmod(0o755)
+    return pip
+
+
+def _pip_deps(tmp_path, pip, fail=""):
+    log = tmp_path / "pip.log"
+    env = {**os.environ, "PIP_LOG": str(log), "PIP_FAIL": fail}
+    r = subprocess.run(["bash", str(INFRA / "pip-deps.sh"), str(pip), str(INFRA.parent / "requirements.txt")],
+                       env=env, capture_output=True, text=True)
+    return r, log.read_text() if log.exists() else ""
+
+
+def test_install_regex_failure_does_not_abort(tmp_path, fake_pip):
+    """install.sh corre con set -e: si `regex` no se instala (sin wheel ni
+    compilador), avisa y sigue; logrange tiene fallback."""
+    r, log = _pip_deps(tmp_path, fake_pip, fail="regex")
+    assert r.returncode == 0, r.stderr
+    assert "no se pudo instalar 'regex'" in r.stderr
+    req_part = log.split("install --quiet regex")[0]
+    assert "fastapi" in req_part and "esptool" in req_part and "regex" not in req_part
+    assert 'pip-deps.sh" /opt/esp/venv/bin/pip' in (INFRA.parent / "install.sh").read_text()
+
+
+def test_install_required_dependency_failure_still_aborts(tmp_path, fake_pip):
+    fake_pip.write_text("#!/bin/bash\nexit 1\n")
+    r, _ = _pip_deps(tmp_path, fake_pip)
+    assert r.returncode != 0

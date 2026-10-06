@@ -14,6 +14,7 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | `devremote.service` | systemd | Al boot: levanta las sesiones de lo que ya esté enchufado. Espera a `time-sync.target` (la Pi no tiene RTC); `install.sh` habilita `systemd-time-wait-sync` con tope de 90 s | `/etc/systemd/system/` |
 | `dashboard.service` | systemd | `uvicorn server.api:app` en el puerto 8080 | `/etc/systemd/system/` |
 | `update.sh` | bash | Actualizar una Pi: fetch/pull + `install.sh` + restart dashboard + `devremote --reset` | (se corre desde el clone) |
+| `pip-deps.sh` | bash | Dependencias Python del venv (lo llama `install.sh`): `regex` aparte y opcional, su falla avisa y no aborta el install | (se corre desde el clone) |
 
 ## Nombres y puertos (`espbench-name`)
 

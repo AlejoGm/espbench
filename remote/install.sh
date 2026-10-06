@@ -111,7 +111,8 @@ install_xtensa_toolchain
 info "Creando venv en /opt/esp/venv..."
 python3 -m venv /opt/esp/venv
 info "Instalando dependencias Python..."
-/opt/esp/venv/bin/pip install --quiet -r "$REMOTE_DIR/requirements.txt"
+# regex es opcional: si falla, avisa y sigue (logrange tiene fallback). Ver pip-deps.sh.
+bash "$REMOTE_DIR/infra/pip-deps.sh" /opt/esp/venv/bin/pip "$REMOTE_DIR/requirements.txt"
 
 # ---------------------------------------------------------------------------
 # 5. Copy server files

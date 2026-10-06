@@ -31,3 +31,5 @@ fastapi
 uvicorn[standard]
 regex              # timeout en grep/until=re: de /api/board/{key}/log (ReDoS); sin él, logrange rechaza cuantificadores anidados
 ```
+
+`install.sh` las instala con `infra/pip-deps.sh`: `regex` va aparte y si falla solo avisa (el resto, si falla, aborta).
