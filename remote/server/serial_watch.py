@@ -25,6 +25,9 @@ Eventos (on_event(type, detail, cursor, ts), van a events.jsonl):
 - boot: cada línea rst: (la ROM la imprime siempre, es el inicio del arranque)
 - boot_loop: start al detectarlo / end cuando se estabiliza. Mientras está
   activo, los boot sueltos no se registran (un loop escribiría miles por hora).
+  El end lleva ts = último boot + ventana (cuándo terminó de verdad) y el ts y
+  cursor del último boot; se registra con la primera línea siguiente o con
+  poll() (el proceso lo llama cada segundo: una placa muda también lo cierra).
 - panic
 - fw: solo si cambió (proyecto, versión o IDF), al ver la línea ESP-IDF del
   arranque o, si no aparece, en el siguiente rst:.
@@ -36,6 +39,10 @@ import threading
 import time
 from typing import Callable, Optional
 
+from server import events, taglog
+
+TAG = "serial_watch"
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _RESET_RE = re.compile(r"rst:0x[0-9a-fA-F]+ \(([A-Z0-9_]+)\)")
 _FW_RES = {
@@ -45,7 +52,7 @@ _FW_RES = {
 }
 # (regex, tipo). El primer grupo, si hay, va como detalle.
 _PANIC_RES = [
-    (re.compile(r"Guru Meditation Error: Core\s+\d+ panic'ed \(([^)]*)\)"), "panic"),
+    (re.compile(r"Guru Meditation Error: Core\s+\d+ panic'ed \(([^)]*)\)"), "guru"),
     (re.compile(r"abort\(\) was called"), "abort"),
     (re.compile(r"Brownout detector was triggered"), "brownout"),
     (re.compile(r"Task watchdog got triggered"), "task_wdt"),
@@ -80,6 +87,8 @@ class SerialWatch:
         self._lock = threading.Lock()
         self._loop_active = False
         self._loop_boots = 0
+        self._last_boot_t = 0.0           # self._clock() del último boot (la ventana)
+        self._last_boot = None            # {"ts", "cursor"} del último boot, para el end
         self._fw_dirty = False
         self._fw_at = (None, None)        # (cursor, ts) de la primera línea que cambió el fw
         self.boots = 0
@@ -97,7 +106,7 @@ class SerialWatch:
         evs = []
         with self._lock:
             if self._loop_active:
-                evs.append(self._end_loop(None, None))
+                evs.append(self._end_loop(None, expired=False))
             self.boots = self.panics = 0
             self.last_reset = self.last_panic = None
             self._boot_times.clear()
@@ -114,10 +123,20 @@ class SerialWatch:
         with self._lock:
             changed = self._line(line, cursor, ts, evs) if line else False
             if self._loop_active and not self._in_loop():
-                evs.append(self._end_loop(cursor, ts))
+                evs.append(self._end_loop(cursor))
         self._emit(evs)
         if changed and self._on_change:
             self._on_change()
+
+    def poll(self) -> bool:
+        """Cierra un boot loop vencido aunque no lleguen líneas (placa muda).
+        Devuelve True si lo cerró (hay que republicar la salud)."""
+        evs = []
+        with self._lock:
+            if self._loop_active and not self._in_loop():
+                evs.append(self._end_loop(None))
+        self._emit(evs)
+        return bool(evs)
 
     # ---------- salida ----------
 
@@ -151,8 +170,8 @@ class SerialWatch:
         for type_, detail, cursor, ts in evs:
             try:
                 self._on_event(type_, detail, cursor, ts)
-            except Exception:
-                pass    # un evento que no se pudo escribir no corta la lectura del serial
+            except Exception as e:      # un evento que no se pudo escribir no corta la lectura del serial
+                taglog.debug(TAG, f"evento {type_} no registrado: {e}")
 
     def _expire_boots(self) -> None:
         now = self._clock()
@@ -163,9 +182,13 @@ class SerialWatch:
         self._expire_boots()
         return len(self._boot_times) >= self._loop_count
 
-    def _end_loop(self, cursor, ts) -> tuple:
+    def _end_loop(self, cursor, expired: bool = True) -> tuple:
+        """expired: el loop terminó solo → ts = último boot + ventana. Si no (lo
+        corta un flash/erase), ts = ahora."""
         self._loop_active = False
-        return ("boot_loop", {"phase": "end", "boots": self._loop_boots}, cursor, ts)
+        ts = self._last_boot_t + self._loop_window if expired else None
+        return ("boot_loop", {"phase": "end", "boots": self._loop_boots, "last_boot": self._last_boot},
+                cursor, ts)
 
     def _fw_event(self) -> tuple:
         self._fw_dirty = False
@@ -179,7 +202,11 @@ class SerialWatch:
                 evs.append(self._fw_event())
             reason = m.group(1)
             self.boots += 1
-            self._boot_times.append(self._clock())
+            self._last_boot_t = self._clock()
+            self._boot_times.append(self._last_boot_t)
+            self._last_boot = {"ts": events.iso_ms(ts if ts is not None else self._last_boot_t),
+                               # pre-MAC el cursor es una posición del buffer: no va al JSON
+                               "cursor": cursor if isinstance(cursor, str) else None}
             bare = reason.replace("_", "")      # RTCWDT_BROWN_OUT_RESET → ...BROWNOUT...
             abnormal = any(k in bare for k in _ABNORMAL_RESET)
             self.last_reset = {"ts": _now_iso(self._clock), "reason": reason, "abnormal": abnormal}

@@ -520,3 +520,24 @@ def test_state_event_cursor_is_atomic_with_its_taglog_line(monkeypatch, tmp_path
             line = data[off:].split(b"\n")[0].decode()
             assert line.endswith(f"{e['detail']['from']} -> {e['detail']['to']}"), line
     assert data.count(b"intrusa") == 2
+
+
+def test_tick_closes_boot_loop_and_republishes(monkeypatch, tmp_path):
+    """Placa que entró en boot loop y quedó muda: el tick del proceso (cada 1 s)
+    registra el end y republica la salud sin esperar otra línea."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    seen = []
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, state_sink=seen.append)
+    manager.discover()
+    clock = [1_800_000_000.0]
+    manager.watch._clock = lambda: clock[0]
+    for _ in range(3):
+        manager.on_serial(b"rst:0xc (SW_CPU_RESET),boot:0x13\r\n")
+    assert seen[-1]["health"]["boot_loop"]
+    manager.tick()
+    assert [e["detail"]["phase"] for e in _events(tmp_path) if e["type"] == "boot_loop"] == ["start"]
+    clock[0] += 300
+    n = len(seen)
+    manager.tick()
+    assert [e["detail"]["phase"] for e in _events(tmp_path) if e["type"] == "boot_loop"] == ["start", "end"]
+    assert len(seen) == n + 1 and not seen[-1]["health"]["boot_loop"]

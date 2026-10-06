@@ -134,6 +134,7 @@ def main(argv=None):
     try:
         while not _shutdown.is_set():
             _shutdown.wait(timeout=1.0)
+            manager.tick()
     except KeyboardInterrupt:
         _shutdown.set()
     finally:

@@ -68,7 +68,7 @@ def test_panic_is_detected_with_kind_and_detail():
     feed(w, BOOT + PANIC)
     h = w.health()
     assert h["panics"] == 1 and h["boots"] == 2
-    assert h["last_panic"]["kind"] == "panic" and h["last_panic"]["detail"] == "LoadProhibited"
+    assert h["last_panic"]["kind"] == "guru" and h["last_panic"]["detail"] == "LoadProhibited"
     assert "Guru Meditation" in h["last_panic"]["line"]
     assert h["last_reset"]["reason"] == "SW_CPU_RESET"
 
@@ -167,7 +167,7 @@ def test_panic_event():
     w, evs = watch_with_events()
     feed(w, PANIC)
     (panic,) = [e for e in evs if e[0] == "panic"]
-    assert panic[1]["kind"] == "panic" and panic[1]["reason"] == "LoadProhibited"
+    assert panic[1]["kind"] == "guru" and panic[1]["reason"] == "LoadProhibited"
     assert panic[1]["line"].startswith("Guru Meditation Error")
     assert panic[2] == "c:20261005_160000_1:0"
 
@@ -204,7 +204,8 @@ def test_boot_loop_groups_boots_into_start_and_end():
     assert evs[2][1] == {"phase": "start", "boots": 3}
     clock.t += 300                                        # se estabilizó
     feed(w, "I (100) app: andando\r\n", start=50)
-    assert evs[-1][0] == "boot_loop" and evs[-1][1] == {"phase": "end", "boots": 10}
+    assert evs[-1][0] == "boot_loop"
+    assert evs[-1][1]["phase"] == "end" and evs[-1][1]["boots"] == 10
     assert evs[-1][2] == "c:20261005_160000_1:50"
     feed(w, RST, start=60)
     assert evs[-1][0] == "boot"                           # vuelve a registrar boots
@@ -219,3 +220,45 @@ def test_flash_ends_an_active_boot_loop():
     assert evs[-1][0] == "boot_loop" and evs[-1][1]["phase"] == "end" and evs[-1][2] is None
     feed(w, RST, start=10)
     assert evs[-1][0] == "boot"
+
+
+def test_boot_loop_end_has_real_end_time_and_last_boot():
+    """El end no lleva la hora en que se notó, sino último boot + ventana."""
+    from server import events
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock, boot_loop_window=120)
+    for i in range(4):
+        feed(w, RST, start=i)
+        if i < 3:
+            clock.t += 5
+    last_boot_t = clock.t
+    clock.t += 600                                        # diez minutos después llega una línea
+    feed(w, "I (100) app: andando\r\n", start=50)
+    end = evs[-1]
+    assert end[0] == "boot_loop" and end[1]["phase"] == "end"
+    assert end[3] == last_boot_t + 120
+    assert end[1]["last_boot"] == {"ts": events.iso_ms(1003.0), "cursor": "c:20261005_160000_1:3"}
+
+
+def test_poll_closes_boot_loop_of_a_silent_board():
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock)
+    for i in range(3):
+        feed(w, RST, start=i)
+    assert not w.poll()                                   # sigue en loop
+    clock.t += 300                                        # la placa quedó muda
+    assert w.poll()
+    assert evs[-1][0] == "boot_loop" and evs[-1][1]["phase"] == "end" and evs[-1][2] is None
+    assert not w.poll()                                   # una sola vez
+
+
+def test_event_errors_are_logged_not_swallowed():
+    from server import taglog
+    seen = []
+    taglog.add_sink(lambda ts, level, tag, msg: seen.append((level, msg)))
+    try:
+        w = SerialWatch(on_event=lambda *a: (_ for _ in ()).throw(OSError("disco lleno")))
+        feed(w, RST)
+    finally:
+        taglog.reset_default_sinks()
+    assert any(level == "DEBUG" and "disco lleno" in msg for level, msg in seen)

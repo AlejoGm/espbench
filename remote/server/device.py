@@ -261,6 +261,12 @@ class DeviceManager:
         línea completa al SerialWatch."""
         self.device.device_log.write_serial(data)
 
+    def tick(self) -> None:
+        """Cada segundo, desde el loop principal: cierra un boot loop vencido
+        aunque la placa no imprima nada, y republica la salud."""
+        if self.watch.poll():
+            self.device.publish()
+
     def discover(self, attempts: int = 1, delay: float = 0.0,
                  sleep: Callable[[float], None] = time.sleep) -> bool:
         """Lee la MAC hasta `attempts` veces (el chip puede no estar listo justo
