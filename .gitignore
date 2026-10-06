@@ -25,3 +25,6 @@ client/.venv/
 
 # graphify (knowledge graph generado, no versionado)
 graphify-out/
+
+# bench-master: venv local
+master/.venv/

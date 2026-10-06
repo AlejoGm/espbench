@@ -297,3 +297,32 @@ el comportamiento real de `esp_idf_monitor`/esptool con hardware (flash, erase,
 MAC por serial, desconexión física). Del dashboard: que `SerialWatch` cuente un
 panic real (y vuelva a cero al flashear), y que la consola serie (`tmux send-keys`)
 le llegue al firmware a través de `esp_idf_monitor`.
+
+---
+
+## 11. bench-master (`master/` + `client/benches.py`)
+
+Un *bench* es cualquier host que corre el dashboard (`api.py`, :8080): una Pi u otra máquina. bench-master
+centraliza todos, y corre **en la máquina del dev**, no en un bench.
+
+```
+client/benches.py ── tailscale status --json (peers online) + ~/.config/espbench-benches.json
+      │                 └─ GET :8080/api/version → {app: "espbench", name}  ¿es bench? ¿cómo se llama?
+      ├─ deploy.py      remote sin host / host "auto" → resolve(key) → bench + puerto TCP
+      └─ master/app.py  poll cada 5 s → BenchCache
+                          ├─ /api/benches, /api/devices, /api/resolve/{key}
+                          └─ /bench/<nombre>/... → proxy HTTP + WS al dashboard de ese bench
+```
+
+- **Identidad**: la declara el bench (`/opt/esp/bench_name` o hostname), no la fuente. El mismo bench visto
+  por LAN y por Tailscale cuenta una vez; renombrarlo en la tailnet no lo cambia. Un bench sin actualizar
+  (`/api/version` solo con `version`) se acepta con el nombre de la fuente.
+- **Tailscale**: se prueban todos los peers online (sin patrón de nombre: un bench puede no llamarse `sensipi*`).
+  Los offline no se prueban (sería un timeout por cada uno).
+- **Resolve**: device_key, SN, MAC o `<bench>/<tty>`. Si la key está en dos benches, error con los dos: no se elige
+  uno al azar para flashear.
+- **Offline**: el bench queda en la lista con el último snapshot de sus devices (en memoria).
+- **Proxy**: sirve el frontend del propio bench (consistente con su API) bajo `/bench/<nombre>/`; por eso el
+  frontend usa URLs relativas (§8).
+- **Seguridad**: el master escucha en 127.0.0.1 y rechaza `Host` ajeno (DNS rebinding) y escrituras/WebSocket con
+  `Origin` ajeno (CSRF). El control de acceso a los benches es de Tailscale: ver `docs/security.md`.

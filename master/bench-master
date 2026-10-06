@@ -1,0 +1,16 @@
+#!/bin/bash
+# bench-master — levanta el master local (http://localhost:8090).
+# La primera vez (o si cambió requirements.txt) arma master/.venv.
+#   master/bench-master [--open] [--port 8090] [--poll 5]
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$DIR/.venv"
+if [ ! -x "$VENV/bin/python" ] || [ "$DIR/requirements.txt" -nt "$VENV/.installed" ]; then
+    echo "[bench-master] instalando dependencias en $VENV..."
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install -q --upgrade pip
+    "$VENV/bin/pip" install -q -r "$DIR/requirements.txt"
+    touch "$VENV/.installed"
+fi
+cd "$DIR/.."
+exec "$VENV/bin/python" -m master "$@"

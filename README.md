@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.14.0
+**Version:** 0.15.0
 
 ---
 
@@ -145,6 +145,25 @@ Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and
 
 ---
 
+## bench-master (all benches in one place)
+
+A *bench* is any host running the dashboard (a Pi or another machine). `bench-master` runs **on your dev machine**,
+finds every bench and shows all their devices in one grid, with each bench's monitor/console proxied through it:
+
+```bash
+master/bench-master --open      # first run creates master/.venv; http://localhost:8090
+```
+
+- **Discovery**: online Tailscale peers that answer `GET :8080/api/version` as espbench, plus hosts listed in
+  `~/.config/espbench-benches.json`: `{"hosts": ["10.0.0.5", "lab:8080"], "tailscale": true}`.
+- A bench names itself: `/opt/esp/bench_name` on the bench, or its hostname.
+- A bench that stops answering stays listed as offline with its last known devices.
+- Listens on 127.0.0.1 only and rejects cross-site requests: the proxy gives access to every bench's serial console.
+
+Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §11](docs/ARCHITECTURE.md).
+
+---
+
 ## Configuration Reference (`.flashcfg.json`)
 
 | Field | Description |
@@ -154,7 +173,7 @@ Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and
 | `paths.idf_py` | Path to `idf.py` (optional, auto-detected) |
 | `local.port` | Serial port for local flash |
 | `local.monitor` | Open monitor after flash |
-| `remote.host` | Pi IP or hostname |
+| `remote.host` | Pi IP or hostname. Omit it (or `"auto"`) to find the bench the device is on: `name` is then the device_key, SN, MAC or `<bench>/<tty>` |
 | `remote.port` | TCP port (`5000 + device index`) |
 | `remote.token` | Server auth token |
 | `remote.lock_user` | Username for device locking |
@@ -172,7 +191,9 @@ Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and
 espbench/
 ├── common.py                  # Shared: TCP framing, SHA256, MAC↔SN, HW model utils
 ├── client/
-│   └── deploy.py              # CLI: build + artifact + remote/local flash
+│   ├── deploy.py              # CLI: build + artifact + remote/local flash
+│   └── benches.py             # Bench discovery (Tailscale + config) and device → bench resolve
+├── master/                    # bench-master: all benches in one place (runs on the dev machine)
 ├── remote/
 │   ├── server/
 │   │   ├── remote_esp32.py    # Per-device process: wiring, MAC discovery, threads

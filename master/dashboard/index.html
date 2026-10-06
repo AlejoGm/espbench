@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>bench-master</title>
+    <link rel="stylesheet" href="shared/style.css">
+    <script src="shared/espbench.js"></script>
+    <style>
+        .bench-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: -12px 0 22px; }
+        .bench-chip {
+            background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 999px; color: #aaa;
+            padding: 2px 10px; font-size: 0.78rem; cursor: pointer; font-family: inherit;
+        }
+        .bench-chip.active { border-color: #6366f1; color: #e0e0e0; }
+        .bench-chip .dot, .bench-head .dot {
+            display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: #3fb950;
+        }
+        .bench-chip.offline .dot, .bench-head.offline .dot { background: #f85149; }
+        .bench-section { margin-bottom: 30px; }
+        .bench-head {
+            display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
+            border-bottom: 1px solid #2a2a2a; padding-bottom: 6px; margin-bottom: 14px;
+        }
+        .bench-name { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; color: #e8e8e8; }
+        .bench-meta { color: #666; font-size: 0.78rem; }
+        .bench-err { color: #ff7b72; font-size: 0.78rem; }
+        .bench-head a { color: #8b949e; font-size: 0.78rem; text-decoration: none; margin-left: auto; }
+        .bench-head a:hover { color: #e0e0e0; }
+        .bench-section.offline .device-card { opacity: 0.45; }
+        .btn-direct { color: #8b949e; text-decoration: none; font-size: 0.8rem; padding: 4px 6px; }
+        .btn-direct:hover { color: #e0e0e0; }
+        .rescan-btn {
+            background: none; border: 1px solid #2e2e2e; border-radius: 6px; color: #aaa;
+            padding: 3px 9px; cursor: pointer; font-family: inherit; font-size: 0.8rem;
+        }
+        .rescan-btn:disabled { opacity: 0.5; cursor: default; }
+        .empty-state code { color: #c9d1d9; }
+    </style>
+</head>
+<body>
+    <header class="home-header">
+        <div class="header-card">
+            <div class="header-brand">
+                <span class="header-icon">⚡</span>
+                <span class="header-title">bench-master</span>
+            </div>
+            <div class="header-summary" id="summary"></div>
+            <div class="header-meta">
+                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / )" autocomplete="off">
+                <button id="rescan" class="rescan-btn" title="Buscar benches ahora">↻</button>
+                <span id="version-badge" class="version-badge"></span>
+            </div>
+        </div>
+    </header>
+
+    <div id="bench-filters" class="bench-filters"></div>
+
+    <main id="benches"></main>
+    <div id="empty-state" class="empty-state hidden">
+        No se encontró ningún bench.<br>
+        ¿Tailscale está conectado? Los benches fuera de la tailnet van en
+        <code>~/.config/espbench-benches.json</code>: <code>{"hosts": ["10.0.0.5"]}</code>
+    </div>
+
+    <script>
+        var esc = EB.escapeHtml;
+        var benchFilter = null;   // nombre del bench elegido, o null = todos
+        var lastBenches = [], lastDevices = [];
+
+        function row(label, value) {
+            return '<div class="card-row"><span class="card-label">' + label + '</span>' +
+                   '<span class="card-value">' + value + '</span></div>';
+        }
+
+        function healthHtml(device) {
+            var b = EB.healthBadges(device.health);
+            if (!b.length) return '';
+            return '<div class="health-row">' + b.map(function(x) {
+                return '<span class="hbadge ' + x.cls + '" title="' + esc(x.title) + '">' + esc(x.text) + '</span>';
+            }).join('') + '</div>';
+        }
+
+        // La key con la que deploy.py (host "auto") encuentra esta placa.
+        function deployKey(device) {
+            return device.device_key || device.mac || (device.bench + '/' + device.tty_name);
+        }
+
+        function buildCard(device) {
+            var title = device.device_key || device.tty_name;
+            var proxied = 'bench/' + encodeURIComponent(device.bench) + '/device.html?tty=' + encodeURIComponent(device.tty_name);
+            var direct = device.bench_url + '/device.html?tty=' + encodeURIComponent(device.tty_name);
+            var fw = EB.firmwareHtml(device);
+
+            var card = document.createElement('div');
+            card.className = 'device-card ' + EB.cardState(device) + (device.mac ? '' : ' card-unknown') +
+                             (device.lock_user ? ' locked' : '');
+            card.dataset.search = [title, device.bench, device.tty_name, device.sn, device.mac, device.hw_model,
+                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
+                                  .filter(Boolean).join(' ').toLowerCase();
+            card.innerHTML =
+                '<div class="card-header">' +
+                    '<div class="card-title-wrap"><span class="card-title' + (device.mac ? '' : ' card-title-dim') + '">' +
+                        esc(title) + '</span></div>' +
+                    '<div class="card-header-badges">' +
+                        (device.lock_user ? '<span class="badge badge-locked">&#128274; ' + esc(device.lock_user) + '</span>' : '') +
+                        EB.stateBadgeHtml(device) +
+                        '<span class="badge ' + (device.status === 'RUNNING' ? 'badge-running' : 'badge-down') + '">' +
+                            esc(device.status || '?') + '</span>' +
+                    '</div>' +
+                '</div>' +
+                healthHtml(device) +
+                '<div class="card-body">' +
+                    (device.hw_model ? row('HW', esc(device.hw_model)) : '') +
+                    (fw ? row('Firmware', fw) : '') +
+                    row('Último flash', EB.lastFlashHtml(device)) +
+                    (device.sn ? row('SN', esc(device.sn)) : '') +
+                    row('Puerto', esc(device.tty_name) + ' <span class="dim">· tcp ' + esc(String(device.port_tcp)) + '</span>') +
+                '</div>' +
+                '<div class="card-footer">' +
+                    '<a class="btn-monitor" href="' + proxied + '">Ver monitor</a>' +
+                    '<a class="btn-direct" href="' + esc(direct) + '" title="Abrir directo en el bench">↗</a>' +
+                    '<button class="btn-copy">⎘ Config</button>' +
+                '</div>';
+            var btn = card.querySelector('.btn-copy');
+            btn.addEventListener('click', function() { copyConfig(device, btn); });
+            return card;
+        }
+
+        function copyConfig(device, btn) {
+            var text = JSON.stringify({name: deployKey(device), host: 'auto', token: '', lock_user: '', lock_token: ''}, null, 2);
+            function done() {
+                btn.textContent = '✓ Copiado';
+                btn.classList.add('btn-copy-done');
+                setTimeout(function() { btn.textContent = '⎘ Config'; btn.classList.remove('btn-copy-done'); }, 1800);
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done).catch(function() { prompt('Config:', text); });
+            } else {
+                prompt('Config:', text);
+            }
+        }
+
+        function benchHead(b) {
+            var meta = [b.version ? 'v' + b.version : null, b.source, b.address].filter(Boolean).map(esc).join(' · ');
+            var status = b.online ? '' :
+                ' <span class="bench-err">offline' + (b.last_seen ? ', visto ' + esc(EB.relTime(b.last_seen) || b.last_seen) : '') +
+                (b.error ? ' — ' + esc(b.error) : '') + '</span>';
+            return '<div class="bench-head' + (b.online ? '' : ' offline') + '">' +
+                       '<span class="bench-name"><span class="dot"></span>' + esc(b.name) + '</span>' +
+                       '<span class="bench-meta">' + meta + ' · ' + b.device_count + ' devices</span>' + status +
+                       '<a href="bench/' + encodeURIComponent(b.name) + '/">dashboard del bench →</a>' +
+                   '</div>';
+        }
+
+        function renderFilters(benches) {
+            var el = document.getElementById('bench-filters');
+            if (benchFilter && !benches.some(function(b) { return b.name === benchFilter; })) benchFilter = null;
+            var chips = [{name: null, label: 'todos', online: true}].concat(benches.map(function(b) {
+                return {name: b.name, label: b.name, online: b.online};
+            }));
+            el.innerHTML = '';
+            if (benches.length < 2) return;
+            chips.forEach(function(c) {
+                var chip = document.createElement('button');
+                chip.className = 'bench-chip' + (c.name === benchFilter ? ' active' : '') + (c.online ? '' : ' offline');
+                chip.innerHTML = (c.name ? '<span class="dot"></span>' : '') + esc(c.label);
+                chip.addEventListener('click', function() { benchFilter = c.name; render(); });
+                el.appendChild(chip);
+            });
+        }
+
+        function render() {
+            var benches = lastBenches, devices = lastDevices;
+            renderFilters(benches);
+            var shownDevices = devices.filter(function(d) { return !benchFilter || d.bench === benchFilter; });
+            renderSummary(shownDevices.filter(function(d) { return d.bench_online; }));
+
+            var main = document.getElementById('benches');
+            main.innerHTML = '';
+            document.getElementById('empty-state').classList.toggle('hidden', benches.length > 0);
+            benches.forEach(function(b) {
+                if (benchFilter && b.name !== benchFilter) return;
+                var section = document.createElement('section');
+                section.className = 'bench-section' + (b.online ? '' : ' offline');
+                section.innerHTML = benchHead(b);
+                var grid = document.createElement('div');
+                grid.className = 'cards-grid';
+                devices.forEach(function(d) { if (d.bench === b.name) grid.appendChild(buildCard(d)); });
+                section.appendChild(grid);
+                main.appendChild(section);
+            });
+            applySearch();
+        }
+
+        function renderSummary(devices) {
+            var c = EB.summarize(devices);
+            var online = lastBenches.filter(function(b) { return b.online; }).length;
+            function chip(n, cls, label, title) {
+                return n ? '<span class="sum-chip ' + cls + '" title="' + title + '"><b>' + n + '</b> ' + label + '</span>' : '';
+            }
+            document.getElementById('summary').innerHTML =
+                chip(online, 'sum-total', online === 1 ? 'bench' : 'benches', 'Benches online') +
+                chip(lastBenches.length - online, 'sum-down', 'offline', 'Benches que no responden') +
+                chip(c.total, 'sum-total', c.total === 1 ? 'device' : 'devices', 'Devices en benches online') +
+                chip(c.ok, 'sum-ok', 'ok', 'Monitoreando, sin problemas') +
+                chip(c.busy, 'sum-busy', 'ocupados', 'Flasheando, borrando o iniciando') +
+                chip(c.bad, 'sum-bad', 'con problemas', 'Panic, boot loop o reset anormal desde el último flash') +
+                chip(c.down, 'sum-down', 'caídos', 'Sin proceso vivo') +
+                chip(c.locked, 'sum-locked', 'bloqueados', 'Con lock de usuario');
+        }
+
+        function applySearch() {
+            var q = document.getElementById('search').value.trim().toLowerCase();
+            document.querySelectorAll('.device-card').forEach(function(card) {
+                card.classList.toggle('hidden', !!q && card.dataset.search.indexOf(q) < 0);
+            });
+        }
+
+        document.getElementById('search').addEventListener('input', applySearch);
+        document.addEventListener('keydown', function(e) {
+            var search = document.getElementById('search');
+            if (e.key === '/' && document.activeElement !== search) { e.preventDefault(); search.focus(); }
+            if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; applySearch(); search.blur(); }
+        });
+
+        function getJson(url, opts) {
+            return fetch(url, opts).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+        }
+
+        function refresh() {
+            return Promise.all([getJson('api/benches'), getJson('api/devices')])
+                .then(function(res) { lastBenches = res[0].benches; lastDevices = res[1]; render(); })
+                .catch(function(err) { console.error('Error:', err); });
+        }
+
+        document.getElementById('rescan').addEventListener('click', function() {
+            var btn = this;
+            btn.disabled = true;
+            getJson('api/rescan', {method: 'POST'}).then(refresh).catch(function() {})
+                .then(function() { btn.disabled = false; });
+        });
+
+        getJson('api/version').then(function(d) {
+            document.getElementById('version-badge').textContent = 'v' + d.version;
+        }).catch(function() {});
+
+        refresh();
+        setInterval(refresh, 5000);
+    </script>
+</body>
+</html>
