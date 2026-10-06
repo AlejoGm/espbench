@@ -1,6 +1,7 @@
 /*
  * espbench.js — lógica del dashboard sin DOM: formato, salud del device,
- * clasificación de líneas del log y el buffer incremental de la terminal.
+ * clasificación de líneas del log, el buffer incremental de la terminal,
+ * reservas ("vence en") y eventos (filas, contexto, marcas en el vivo).
  *
  * Se carga en el navegador como window.EB y en node con require() para los
  * tests (tests/js/test_espbench.js). Nada de acá toca el DOM.
@@ -245,7 +246,280 @@
         return out;
     }
 
+    // ── Reservas y locks (/api/devices: lock_user, lock_expires) ──────────
+
+    // Duración corta: "45 s", "20 min", "2 h 5 min", "3 d 4 h".
+    function fmtDur(sec) {
+        sec = Math.max(0, Math.round(sec));
+        if (sec < 60) return sec + ' s';
+        var m = Math.floor(sec / 60);
+        if (m < 60) return m + ' min';
+        var h = Math.floor(m / 60);
+        if (h < 24) return h + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+        var d = Math.floor(h / 24);
+        return d + ' d' + (h % 24 ? ' ' + (h % 24) + ' h' : '');
+    }
+
+    // Segundos hasta un ISO local del server (negativo si ya pasó), o null.
+    function secondsUntil(iso, now) {
+        var d = parseLocal(iso);
+        if (!d) return null;
+        return (d.getTime() - (now === undefined ? Date.now() : now)) / 1000;
+    }
+
+    // "vence en 20 min", o null si ya venció (vencida = inexistente, como en el server).
+    function expiresText(iso, now) {
+        var s = secondsUntil(iso, now);
+        return s === null || s <= 0 ? null : 'vence en ' + fmtDur(s);
+    }
+
+    /*
+     * Lock de un device para mostrar, o null si no hay (o la reserva ya venció:
+     * el server la ignora, el dashboard también aunque todavía no haya repolleado).
+     * reservation: tiene vencimiento (reserve); si no, es el lock del flash.
+     */
+    function lockInfo(d, now) {
+        if (!d || !d.lock_user) return null;
+        if (!d.lock_expires) {
+            return {user: d.lock_user, reservation: false, expires: null, text: 'sin vencimiento',
+                    title: 'Lock del flash de ' + d.lock_user + ' (sin vencimiento; no bloquea la consola)'};
+        }
+        var text = expiresText(d.lock_expires, now);
+        if (!text) return null;
+        return {user: d.lock_user, reservation: true, expires: d.lock_expires, text: text,
+                title: 'Reservada por ' + d.lock_user + ' hasta ' + d.lock_expires.replace('T', ' ')};
+    }
+
+    // Texto del confirm antes de forzar (escritura con 423, o "forzar" la reserva).
+    function forceConfirmText(lock, action, fallback) {
+        var who = lock ? 'La placa está reservada por ' + lock.user +
+                         (lock.reservation ? ' (' + lock.text + ', hasta ' + lock.expires.slice(11, 19) + ')' : '') + '.'
+                       : (fallback || 'La placa está reservada por otro usuario.');
+        return who + '\n¿' + action + ' igual? Queda registrado como forzado.';
+    }
+
+    // Búsqueda de la home: texto libre, o "@usuario" (solo el usuario del lock;
+    // "@" solo = cualquier placa con lock).
+    function searchMatch(q, text, lockUser) {
+        q = (q || '').trim().toLowerCase();
+        if (!q) return true;
+        if (q.charAt(0) === '@') return !!lockUser && lockUser.toLowerCase().indexOf(q.slice(1)) >= 0;
+        return (text || '').indexOf(q) >= 0;
+    }
+
+    // ── Eventos (/api/board/{key}/events) ─────────────────────────────────
+
+    var EVENT_TYPES = {
+        panic:     {icon: '⚠', label: 'panic'},
+        boot_loop: {icon: '∞', label: 'boot loop'},
+        boot:      {icon: '↻', label: 'boot'},
+        flash:     {icon: '⚡', label: 'flash'},
+        fw:        {icon: '◆', label: 'firmware'},
+        send:      {icon: '›', label: 'send'},
+        command:   {icon: '⌘', label: 'comando'},
+        reserve:   {icon: '🔒', label: 'reserva'},
+        release:   {icon: '🔓', label: 'libera'},
+        state:     {icon: '⇄', label: 'estado'},
+        session:   {icon: '●', label: 'sesión'}
+    };
+    var EVENT_ORDER = Object.keys(EVENT_TYPES);
+
+    var STATE_NAMES = {monitoring: 'monitoreando', flashing: 'flasheando', erasing: 'borrando',
+                       discovering: 'iniciando', unknown: 'sin MAC', disconnected: 'desconectado'};
+
+    function eventDetail(ev) {
+        var d = ev.detail || {};
+        var forced = d.forced ? ' · forzado' : '';
+        switch (ev.type) {
+        case 'boot': return (d.reason || '') + (d.abnormal ? ' ⚠' : '');
+        case 'panic': return (PANIC_KINDS[d.kind] || d.kind || 'panic') + (d.reason ? ' (' + d.reason + ')' : '');
+        case 'boot_loop': return (d.phase === 'end' ? 'fin' : 'inicio') + (d.boots ? ' · ' + d.boots + ' arranques' : '');
+        case 'fw': return [d.project, d.version].filter(Boolean).join(' ') + (d.idf ? ' · IDF ' + d.idf : '');
+        case 'state': return (STATE_NAMES[d.from] || d.from || '?') + ' → ' + (STATE_NAMES[d.to] || d.to || '?');
+        case 'flash': return d.ok ? '✓ ' + (d.status || 'ok') : '✗ ' + String(d.error || d.status || 'falló').replace(/_/g, ' ');
+        case 'send': return '"' + (d.text || '') + '"' + (d.enter ? ' ⏎' : '') + forced;
+        case 'command': return (d.command || '') + forced;
+        case 'reserve': return d.expires ? 'hasta ' + d.expires.replace('T', ' ').slice(0, 16) : '';
+        case 'release': return d.forced ? 'forzada' : '';
+        case 'session': return [d.tty, d.pid ? 'pid ' + d.pid : ''].filter(Boolean).join(' · ');
+        }
+        return '';
+    }
+
+    // c:<sesión>:<offset> → sesión, o null.
+    function cursorSession(cursor) {
+        var m = /^c:(\d{8}_\d{6}_\d+):\d+$/.exec(cursor || '');
+        return m ? m[1] : null;
+    }
+
+    // 20261005_160203_812 → "2026-10-05 16:02:03"
+    function sessionLabel(sid) {
+        var m = /^(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)/.exec(sid || '');
+        return m ? m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : (sid || '');
+    }
+
+    // Archivo de la sesión de un cursor (para /api/device/{tty}/sessions/{name}).
+    function sessionFile(sid, current) {
+        return !sid || sid === current ? 'output.log' : 'output_' + sid + '.log';
+    }
+
+    // Lo que muestra una fila de la pestaña Eventos.
+    function eventView(ev) {
+        var t = EVENT_TYPES[ev.type] || {icon: '·', label: ev.type};
+        var d = ev.detail || {};
+        var ts = ev.ts || '';
+        var detail = eventDetail(ev);
+        var full = ev.type === 'panic' && d.line ? d.line : detail;
+        return {
+            type: ev.type, icon: t.icon, label: t.label, cls: 'ev-' + String(ev.type).replace(/_/g, '-'),
+            date: ts.slice(0, 10), time: ts.slice(11, 19), detail: detail,
+            who: d.user || '', session: cursorSession(ev.cursor), cursor: ev.cursor || null,
+            title: ts.replace('T', ' ') + ' · ' + t.label + (full ? ': ' + full : '') +
+                   (ev.cursor ? '\n' + ev.cursor : '')
+        };
+    }
+
+    // [{type, n, icon, label}] en el orden de EVENT_TYPES, solo los que aparecen.
+    function eventCounts(events) {
+        var n = {};
+        (events || []).forEach(function (e) { n[e.type] = (n[e.type] || 0) + 1; });
+        return EVENT_ORDER.concat(Object.keys(n).filter(function (k) { return !EVENT_TYPES[k]; }))
+            .filter(function (k) { return n[k]; })
+            .map(function (k) {
+                var t = EVENT_TYPES[k] || {icon: '·', label: k};
+                return {type: k, n: n[k], icon: t.icon, label: t.label};
+            });
+    }
+
+    /*
+     * Parámetros de /api/board/{key}/log para ver un evento en contexto.
+     * panic / boot_loop: del rst: anterior al siguiente (el arranque entero que
+     * terminó en el crash). El resto: N líneas antes y después (un boot muestra
+     * lo que pasó antes del reset; un send, lo previo y la respuesta). Sin
+     * cursor (evento viejo sin cursor): null.
+     */
+    function eventContext(ev, before, after) {
+        if (!ev || !ev.cursor) return null;
+        var q = {around: ev.cursor, raw: '1', max_lines: '2000'};
+        if (ev.type !== 'panic' && ev.type !== 'boot_loop') {
+            q.before = String(before === undefined ? 40 : before);
+            q.after = String(after === undefined ? 200 : after);
+        }
+        return q;
+    }
+
+    // Línea compacta de /log ("HH:MM:SS.mmm > x", o con fecha si es de otro
+    // día) → línea con el prefijo del DeviceLog, para renderla como las del vivo.
+    var COMPACT_RE = /^\d\d:\d\d:\d\d\.\d{3} [>|\u21aa] /;
+    function expandRangeLine(line, date) {
+        return date && COMPACT_RE.test(line) ? date + ' ' + line : line;
+    }
+
+    // Índice de la línea del evento (la que devuelve around=<cursor>&before=0&after=0)
+    // dentro del contexto, o -1. Se compara con la hora (ms) incluida.
+    function findLine(lines, target, date, targetDate) {
+        if (!target) return -1;
+        var t = expandRangeLine(target, targetDate);
+        for (var i = 0; i < lines.length; i++) {
+            if (expandRangeLine(lines[i], date) === t) return i;
+        }
+        return -1;
+    }
+
+    // ── Marcas de eventos en el log en vivo ───────────────────────────────
+
+    var MARK_PANIC_RE = new RegExp([
+        "Guru Meditation Error: Core\\s+\\d+ panic'ed", 'abort\\(\\) was called', 'Brownout detector was triggered',
+        'Task watchdog got triggered', '\\*\\*\\*ERROR\\*\\*\\* A stack overflow in task', 'assert failed:'
+    ].join('|'));
+    var MARK_BOOT_RE = /rst:0x[0-9a-fA-F]+ \([A-Z0-9_]+\)/;
+
+    /*
+     * Marca de una línea por su contenido: 'boot' (rst:) o 'panic' (el inicio de
+     * un panic: la misma detección que serial_watch.line_kind, no el backtrace
+     * ni el "Rebooting..."), o null. Solo líneas seriales (o sin prefijo).
+     */
+    function lineMark(line) {
+        var p = splitPrefix(line);
+        if (p.origin === '|') return null;
+        var body = stripAnsi(p.body);
+        var i = body.lastIndexOf('\r');
+        if (i >= 0) body = body.slice(i + 1);
+        if (MARK_BOOT_RE.test(body)) return 'boot';
+        if (MARK_PANIC_RE.test(body)) return 'panic';
+        return null;
+    }
+
+    // "2026-10-05T16:02:03.123" (o con espacio) → ms epoch local, o null.
+    function tsMs(iso) {
+        var m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?/.exec(iso || '');
+        if (!m) return null;
+        return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +((m[7] || '0') + '00').slice(0, 3)).getTime();
+    }
+
+    /*
+     * Eventos del api (send, command, flash) → la línea del vivo donde marcarlos.
+     * El WebSocket manda texto, sin offsets: cada evento va a la PRIMERA línea con
+     * hora ≥ la del evento − slack. El slack (500 ms) es porque el api registra el
+     * evento después de mandar las teclas y el eco ya puede haber llegado.
+     * Aproximado a propósito (ver remote/dashboard/CLAUDE.md).
+     *
+     * add(events) → cuántos nuevos; take(lineIso) → los eventos que caen en esa
+     * línea (hay que llamarla en orden de líneas); dropBefore(iso) descarta los
+     * anteriores a la primera línea de la vista (recortada).
+     */
+    function EventMarks(slackMs) {
+        this.slack = slackMs === undefined ? 500 : slackMs;
+        this.reset();
+    }
+
+    EventMarks.prototype.reset = function () {
+        this._seen = {};
+        this._pending = [];
+    };
+
+    EventMarks.prototype.add = function (events) {
+        var added = 0;
+        for (var i = 0; i < (events || []).length; i++) {
+            var ev = events[i];
+            var key = ev.type + '|' + ev.cursor + '|' + ev.ts;
+            var t = tsMs(ev.ts);
+            if (this._seen[key] || t === null) continue;
+            this._seen[key] = true;
+            this._pending.push({t: t - this.slack, ev: ev});
+            added++;
+        }
+        this._pending.sort(function (a, b) { return a.t - b.t; });
+        return added;
+    };
+
+    EventMarks.prototype.take = function (lineIso) {
+        var t = tsMs(lineIso);
+        var out = [];
+        if (t === null) return out;
+        while (this._pending.length && this._pending[0].t <= t) out.push(this._pending.shift().ev);
+        return out;
+    };
+
+    EventMarks.prototype.dropBefore = function (lineIso) {
+        var t = tsMs(lineIso);
+        if (t === null) return;
+        while (this._pending.length && this._pending[0].t < t) this._pending.shift();
+    };
+
+    // Hay algún pendiente que ya cae en una línea con esa hora (o antes).
+    EventMarks.prototype.dueBy = function (lineIso) {
+        var t = tsMs(lineIso);
+        return t !== null && this._pending.length > 0 && this._pending[0].t <= t;
+    };
+
     return {
+        fmtDur: fmtDur, secondsUntil: secondsUntil, expiresText: expiresText, lockInfo: lockInfo,
+        forceConfirmText: forceConfirmText, searchMatch: searchMatch,
+        EVENT_TYPES: EVENT_TYPES, EVENT_ORDER: EVENT_ORDER, eventDetail: eventDetail, eventView: eventView,
+        eventCounts: eventCounts, eventContext: eventContext, cursorSession: cursorSession,
+        sessionLabel: sessionLabel, sessionFile: sessionFile, expandRangeLine: expandRangeLine, findLine: findLine,
+        lineMark: lineMark, tsMs: tsMs, EventMarks: EventMarks,
         errorText: errorText, errorCode: errorCode, withToken: withToken,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         isoLocal: isoLocal, sessionStart: sessionStart,

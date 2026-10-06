@@ -146,3 +146,161 @@ test('withToken: agrega Authorization sin pisar headers ni mutar opts', () => {
     assert.deepEqual(opts.headers, {'Content-Type': 'application/json'});
     assert.deepEqual(EB.withToken(undefined, ''), {});
 });
+
+// ── Reservas: "vence en", lock del flash, vencida = inexistente ─────────
+
+const NOW = new Date(2026, 9, 6, 16, 0, 0).getTime();
+
+test('fmtDur', () => {
+    assert.equal(EB.fmtDur(45), '45 s');
+    assert.equal(EB.fmtDur(20 * 60 + 10), '20 min');
+    assert.equal(EB.fmtDur(2 * 3600 + 5 * 60), '2 h 5 min');
+    assert.equal(EB.fmtDur(3 * 3600), '3 h');
+    assert.equal(EB.fmtDur(3 * 86400 + 4 * 3600), '3 d 4 h');
+    assert.equal(EB.fmtDur(-5), '0 s');
+});
+
+test('expiresText: cuenta regresiva y vencida = null', () => {
+    assert.equal(EB.expiresText('2026-10-06T16:20:00', NOW), 'vence en 20 min');
+    assert.equal(EB.expiresText('2026-10-06T16:00:30', NOW), 'vence en 30 s');
+    assert.equal(EB.expiresText('2026-10-06T16:00:00', NOW), null);
+    assert.equal(EB.expiresText('2026-10-06T15:59:00', NOW), null);
+    assert.equal(EB.expiresText(null, NOW), null);
+});
+
+test('lockInfo: reserva, lock del flash, vencida y sin lock', () => {
+    const r = EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T16:20:00'}, NOW);
+    assert.equal(r.reservation, true);
+    assert.equal(r.text, 'vence en 20 min');
+    assert.equal(r.title, 'Reservada por juan hasta 2026-10-06 16:20:00');
+    const f = EB.lockInfo({lock_user: 'ana', lock_expires: null}, NOW);
+    assert.equal(f.reservation, false);
+    assert.equal(f.text, 'sin vencimiento');
+    assert.equal(EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T15:00:00'}, NOW), null);
+    assert.equal(EB.lockInfo({lock_user: null}, NOW), null);
+    assert.equal(EB.lockInfo(null, NOW), null);
+});
+
+test('forceConfirmText: quién y hasta cuándo', () => {
+    const lock = EB.lockInfo({lock_user: 'juan', lock_expires: '2026-10-06T16:20:00'}, NOW);
+    const t = EB.forceConfirmText(lock, 'Mandar');
+    assert.match(t, /reservada por juan \(vence en 20 min, hasta 16:20:00\)/);
+    assert.match(t, /¿Mandar igual\? Queda registrado como forzado\./);
+    assert.match(EB.forceConfirmText(null, 'Resetear', "reservada por 'x' hasta y"), /^reservada por 'x'/);
+});
+
+test('searchMatch: texto libre o @usuario del lock', () => {
+    assert.ok(EB.searchMatch('', 'lo que sea', null));
+    assert.ok(EB.searchMatch('Board', 'board1 ttyusb0', null));
+    assert.ok(!EB.searchMatch('xx', 'board1', 'xx'));       // @ para el lock
+    assert.ok(EB.searchMatch('@ju', 'board1', 'Juan'));
+    assert.ok(EB.searchMatch('@', 'board1', 'juan'));
+    assert.ok(!EB.searchMatch('@', 'board1', null));
+    assert.ok(!EB.searchMatch('@ana', 'board1 ana', 'juan'));
+});
+
+// ── Eventos ───────────────────────────────────────────────────────────
+
+const SID = '20261006_155000_812';
+const ev = (type, detail, ts = '2026-10-06T16:02:03.123', off = 100) =>
+    ({ts, type, cursor: `c:${SID}:${off}`, detail});
+
+test('eventView: icono, hora, detalle corto y quién', () => {
+    const p = EB.eventView(ev('panic', {kind: 'guru', reason: 'LoadProhibited', line: "Guru Meditation Error: Core 1 panic'ed"}));
+    assert.equal(p.icon, '⚠');
+    assert.equal(p.cls, 'ev-panic');
+    assert.equal(p.time, '16:02:03');
+    assert.equal(p.date, '2026-10-06');
+    assert.equal(p.detail, 'Guru Meditation (LoadProhibited)');
+    assert.equal(p.session, SID);
+    assert.match(p.title, /Guru Meditation Error/);
+    const s = EB.eventView(ev('send', {text: 'status', enter: true, user: 'alejo', forced: true}));
+    assert.equal(s.detail, '"status" ⏎ · forzado');
+    assert.equal(s.who, 'alejo');
+    assert.equal(EB.eventView(ev('boot_loop', {phase: 'start', boots: 3})).cls, 'ev-boot-loop');
+    assert.equal(EB.eventDetail(ev('boot', {reason: 'TG1WDT_SYS_RESET', abnormal: true})), 'TG1WDT_SYS_RESET ⚠');
+    assert.equal(EB.eventDetail(ev('state', {from: 'monitoring', to: 'flashing'})), 'monitoreando → flasheando');
+    assert.equal(EB.eventDetail(ev('flash', {ok: false, error: 'esptool_failed'})), '✗ esptool failed');
+    assert.equal(EB.eventDetail(ev('flash', {ok: true, status: 'exitoso'})), '✓ exitoso');
+    assert.equal(EB.eventDetail(ev('fw', {project: 'simfw', version: '1.0.0', idf: 'v5.3'})), 'simfw 1.0.0 · IDF v5.3');
+    assert.equal(EB.eventDetail(ev('reserve', {user: 'juan', expires: '2026-10-06T16:30:00'})), 'hasta 2026-10-06 16:30');
+    assert.equal(EB.eventDetail(ev('release', {user: 'juan', forced: true})), 'forzada');
+    assert.equal(EB.eventView({ts: 'x', type: 'nuevo', cursor: null}).icon, '·');   // tipo desconocido
+});
+
+test('eventCounts: agrupado por tipo, en orden de gravedad', () => {
+    const c = EB.eventCounts([ev('boot', {}), ev('send', {}), ev('panic', {}), ev('boot', {}), ev('raro', {})]);
+    assert.deepEqual(c.map(x => [x.type, x.n]), [['panic', 1], ['boot', 2], ['send', 1], ['raro', 1]]);
+    assert.deepEqual(EB.eventCounts([]), []);
+});
+
+test('eventContext: panic de rst: a rst:, el resto con líneas antes/después', () => {
+    assert.deepEqual(EB.eventContext(ev('panic', {})), {around: `c:${SID}:100`, raw: '1', max_lines: '2000'});
+    assert.deepEqual(EB.eventContext(ev('send', {})),
+        {around: `c:${SID}:100`, raw: '1', max_lines: '2000', before: '40', after: '200'});
+    assert.equal(EB.eventContext({type: 'boot', cursor: null}), null);
+});
+
+test('cursores y sesiones: otra sesión va a su archivo rotado', () => {
+    assert.equal(EB.cursorSession(`c:${SID}:48213`), SID);
+    assert.equal(EB.cursorSession('now'), null);
+    assert.equal(EB.sessionLabel(SID), '2026-10-06 15:50:00');
+    assert.equal(EB.sessionFile(SID, SID), 'output.log');
+    assert.equal(EB.sessionFile(SID, '20261006_170000_900'), `output_${SID}.log`);
+});
+
+test('expandRangeLine / findLine: la línea del evento dentro del contexto', () => {
+    assert.equal(EB.expandRangeLine('16:02:03.123 > hola', '2026-10-06'), '2026-10-06 16:02:03.123 > hola');
+    assert.equal(EB.expandRangeLine('2026-10-05 23:59:59.000 > ayer', '2026-10-06'), '2026-10-05 23:59:59.000 > ayer');
+    assert.equal(EB.expandRangeLine('… 3 líneas omitidas …', '2026-10-06'), '… 3 líneas omitidas …');
+    const lines = ['16:02:03.000 > rst:0x1 (POWERON_RESET)', '16:02:03.123 > esp> ', '16:02:03.200 ↪ status'];
+    assert.equal(EB.findLine(lines, '16:02:03.200 ↪ status', '2026-10-06', '2026-10-06'), 2);
+    // el contexto cruzó la medianoche: la línea del evento viene con fecha en uno y sin ella en el otro
+    assert.equal(EB.findLine(['23:59:59.000 > a', '2026-10-07 00:00:01.000 > b'], '00:00:01.000 > b',
+                             '2026-10-06', '2026-10-07'), 1);
+    assert.equal(EB.findLine(lines, null, '2026-10-06', '2026-10-06'), -1);
+    assert.equal(EB.findLine(lines, '16:09:00.000 > otra', '2026-10-06', '2026-10-06'), -1);
+});
+
+test('lineMark: boot y el inicio del panic, no el backtrace ni taglog', () => {
+    const P = '2026-10-06 16:02:03.123 ';
+    assert.equal(EB.lineMark(P + '> rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)'), 'boot');
+    assert.equal(EB.lineMark(P + "> Guru Meditation Error: Core  1 panic'ed (LoadProhibited)."), 'panic');
+    assert.equal(EB.lineMark(P + '↪ abort() was called at PC 0x400d1234'), 'panic');
+    assert.equal(EB.lineMark(P + '> \x1b[0;31massert failed: x\x1b[0m'), 'panic');
+    assert.equal(EB.lineMark(P + '> Backtrace: 0x400d1234:0x3ffb0000'), null);
+    assert.equal(EB.lineMark(P + '> Rebooting...'), null);
+    assert.equal(EB.lineMark(P + '| INFO  | device         | rst:0x1 (POWERON_RESET) visto'), null);
+    assert.equal(EB.lineMark('rst:0xc (SW_CPU_RESET),boot:0x13'), 'boot');    // log viejo sin prefijo
+    assert.equal(EB.lineMark(P + '> I (1) app: hola'), null);
+});
+
+test('tsMs: milisegundos de la hora del log y de los eventos', () => {
+    assert.equal(EB.tsMs('2026-10-06T16:02:03.123') - EB.tsMs('2026-10-06 16:02:03.000'), 123);
+    assert.equal(EB.tsMs('2026-10-06T16:02:03.5') - EB.tsMs('2026-10-06T16:02:03'), 500);
+    assert.equal(EB.tsMs('basura'), null);
+});
+
+test('EventMarks: cada evento a la primera línea con hora ≥ la suya (− slack), una sola vez', () => {
+    const m = new EB.EventMarks(500);
+    assert.equal(m.add([ev('send', {text: 'status'}, '2026-10-06T16:02:05.000'),
+                        ev('flash', {ok: true}, '2026-10-06T16:02:10.000')]), 2);
+    assert.equal(m.add([ev('send', {text: 'status'}, '2026-10-06T16:02:05.000')]), 0);   // ya visto
+    assert.deepEqual(m.take('2026-10-06T16:02:04.000'), []);
+    assert.ok(m.dueBy('2026-10-06T16:02:04.600'));
+    // el eco llegó 100 ms antes de que el api registrara el send: cae igual en su línea
+    assert.deepEqual(m.take('2026-10-06T16:02:04.900').map(e => e.type), ['send']);
+    assert.deepEqual(m.take('2026-10-06T16:02:05.100'), []);
+    assert.ok(!m.dueBy('2026-10-06T16:02:09.000'));
+    assert.deepEqual(m.take('2026-10-06T16:02:11.000').map(e => e.type), ['flash']);
+    assert.deepEqual(m.take('sin hora'), []);
+});
+
+test('EventMarks: dropBefore descarta los anteriores a la vista; reset los vuelve a aceptar', () => {
+    const m = new EB.EventMarks(0);
+    m.add([ev('command', {command: 'reset'}, '2026-10-06T15:00:00.000'), ev('send', {}, '2026-10-06T16:00:00.000')]);
+    m.dropBefore('2026-10-06T15:30:00.000');
+    assert.deepEqual(m.take('2026-10-06T16:00:00.000').map(e => e.type), ['send']);
+    m.reset();
+    assert.equal(m.add([ev('send', {}, '2026-10-06T16:00:00.000')]), 1);
+});
