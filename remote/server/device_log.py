@@ -16,8 +16,10 @@ Una sola tubería de líneas (docs/specs/agents-cli.md §3):
                       └→ "<YYYY-MM-DD HH:MM:SS.mmm> <origen> <cuerpo>\\n"
 
 - Origen: `>` serial, `|` taglog, `↪` continuación de una línea serial.
-- La línea serial en curso se retiene en memoria hasta el \\n o hasta
-  PARTIAL_TIMEOUT sin bytes nuevos (un prompt de esp_console no termina en \\n).
+- La línea serial en curso se retiene en memoria hasta el \\n, hasta
+  PARTIAL_TIMEOUT sin bytes nuevos (un prompt de esp_console no termina en \\n)
+  o hasta MAX_HOLD desde su primer byte aunque sigan llegando (una línea que
+  gotea, "Connecting.....", no queda retenida para siempre).
   Si después llega más de la misma línea, sale con origen `↪`. Así una línea
   de taglog de otro hilo nunca queda pegada a una serial.
 - El archivo se escribe en binario y el offset se lleva sumando bytes: cada
@@ -46,6 +48,7 @@ una sesión anterior, se rota a output_<session_id>.log (el id sale de su
 header; un log viejo sin header usa la hora actual).
 """
 import codecs
+import contextlib
 import datetime as dt
 import os
 import pathlib
@@ -61,6 +64,7 @@ TAG = "devicelog"
 
 BUFFER_LIMIT = 256 * 1024   # bytes de líneas retenidas antes de saber dónde escribir
 PARTIAL_TIMEOUT = 0.150     # segundos sin bytes nuevos para escribir una línea serial sin \n
+MAX_HOLD = 1.0              # segundos como mucho que se retiene un segmento (acota el desorden de horas)
 MAX_LINE = 4096             # caracteres: una línea serial más larga se corta (sigue con ↪)
 
 ORIGIN_SERIAL = ">"
@@ -98,6 +102,7 @@ class DeviceLog:
                  clock: Callable[[], float] = time.time,
                  monotonic: Callable[[], float] = time.monotonic,
                  partial_timeout: float = PARTIAL_TIMEOUT,
+                 max_hold: float = MAX_HOLD,
                  autoflush: bool = True):
         """autoflush: un hilo escribe la línea parcial a los partial_timeout.
         Con False hay que llamar a tick() (tests con reloj falso)."""
@@ -106,6 +111,7 @@ class DeviceLog:
         self._clock = clock
         self._mono = monotonic
         self._partial_timeout = partial_timeout
+        self._max_hold = max_hold
         self._autoflush = autoflush
         self.started_at = clock()
         self.session_id = make_session_id(self.started_at, os.getpid())
@@ -134,6 +140,7 @@ class DeviceLog:
         self._pend: Optional[str] = None     # segmento serial retenido (sin \n todavía)
         self._pend_ts = 0.0
         self._pend_last = 0.0                # monotonic del último byte
+        self._pend_first = 0.0               # monotonic del primer byte del segmento
         self._cont = False                   # la línea lógica ya tiene un segmento escrito
         self._line_text = ""                 # línea lógica (para line_sink), con tope
         self._line_pos = None
@@ -173,7 +180,7 @@ class DeviceLog:
             for i, piece in enumerate(pieces):
                 if piece:
                     if self._pend is None:
-                        self._pend, self._pend_ts = piece, now
+                        self._pend, self._pend_ts, self._pend_first = piece, now, mono
                         if not self._cont:
                             self._line_text, self._line_ts = "", now
                     else:
@@ -184,7 +191,7 @@ class DeviceLog:
                         rest = self._pend[MAX_LINE:]
                         self._pend = self._pend[:MAX_LINE]
                         self._write_pending()
-                        self._pend, self._pend_ts = rest, now
+                        self._pend, self._pend_ts, self._pend_first = rest, now, mono
                 if i < len(pieces) - 1:
                     done.append(self._end_line(now))
             if data:
@@ -214,10 +221,19 @@ class DeviceLog:
         self.write_taglog(level, tag, msg)
 
     def tick(self) -> None:
-        """Escribe la línea serial retenida si pasó partial_timeout sin bytes nuevos."""
+        """Escribe la línea serial retenida si pasó partial_timeout sin bytes
+        nuevos o max_hold desde su primer byte."""
         with self._lock:
-            if self._pend is not None and self._mono() - self._pend_last >= self._partial_timeout:
+            if self._pend is not None and self._flush_delay() <= 0:
                 self._write_pending()
+
+    @contextlib.contextmanager
+    def atomic(self):
+        """Lo que se haga adentro (event() + la línea taglog que lo acompaña) no
+        se intercala con líneas de otros hilos: el cursor del evento cae en la
+        línea. El lock es reentrante: taglog vuelve a entrar por taglog_sink."""
+        with self._lock:
+            yield
 
     def event(self, type_: str, detail: Optional[dict] = None, cursor=None,
               ts: Optional[float] = None, by: str = "device") -> None:
@@ -225,6 +241,8 @@ class DeviceLog:
         (str o posición del buffer), o None = fin de la última línea escrita."""
         ts = self._clock() if ts is None else ts
         with self._lock:
+            if self._closed:            # desconectado: no hay línea a la que apuntar
+                return
             pos = self._pos() if cursor is None else cursor
             if isinstance(pos, _BufPos):
                 if self._buf_base is None:          # todavía en el buffer pre-MAC
@@ -281,8 +299,7 @@ class DeviceLog:
     def _emit(self, origin: str, ts: float, body: str) -> None:
         data = f"{format_ts(ts)} {origin} {body}\n".encode("utf-8", errors="replace")
         if self._fh is not None:
-            self._fh.write(data)       # sin buffer: un write() por línea
-            self._offset += len(data)
+            self._write_all(data)
             return
         if self._path is not None:     # cerrado (desconexión): no hay dónde escribir
             return
@@ -294,14 +311,33 @@ class DeviceLog:
             self._buffered -= len(dropped)
             self._dropped += len(dropped)
 
+    def _write_all(self, data: bytes) -> None:
+        """Archivo sin buffer: un write() por línea, que puede escribir menos de lo
+        pedido. El offset cuenta solo lo que llegó al archivo."""
+        view = memoryview(data)
+        while view:
+            n = self._fh.write(view)
+            if not n:
+                raise OSError(f"escritura corta en {self._path}")
+            self._offset += n
+            view = view[n:]
+
     def _write_pending(self) -> None:
-        """Escribe el segmento serial retenido; lo que siga de esa línea sale con ↪."""
+        """Escribe el segmento serial retenido; lo que siga de esa línea sale con ↪.
+        Una continuación vacía (el \\r de un \\r\\n que llegó tarde) no se escribe."""
+        body = self._pend.rstrip("\r")
+        self._pend = None
+        if self._cont and not body:
+            return
         if not self._cont:
             self._line_pos = self._pos()
-        origin = ORIGIN_CONT if self._cont else ORIGIN_SERIAL
-        self._emit(origin, self._pend_ts, self._pend.rstrip("\r"))
-        self._pend = None
+        self._emit(ORIGIN_CONT if self._cont else ORIGIN_SERIAL, self._pend_ts, body)
         self._cont = True
+
+    def _flush_delay(self) -> float:
+        """Segundos hasta que hay que escribir el segmento retenido (<= 0: ya)."""
+        now = self._mono()
+        return min(self._pend_last + self._partial_timeout, self._pend_first + self._max_hold) - now
 
     def _end_line(self, now: float):
         """Llegó un \\n: cierra la línea lógica. Devuelve (texto, cursor, ts) para line_sink."""
@@ -338,7 +374,7 @@ class DeviceLog:
                 if self._pend is None:
                     self._cond.wait()
                     continue
-                delay = self._pend_last + self._partial_timeout - self._mono()
+                delay = self._flush_delay()
                 if delay > 0:
                     self._cond.wait(delay)
                     continue
@@ -373,8 +409,7 @@ class DeviceLog:
         del buffer: así los offsets relativos al buffer siguen valiendo."""
         self._buf_base = (self._offset, self._dropped)
         for chunk in self._buffer:
-            self._fh.write(chunk)
-            self._offset += len(chunk)
+            self._write_all(chunk)
         for type_, detail, pos, ts, by in self._pending_events:
             self._append_event(events.make(type_, format_cursor(self.session_id, self._buf_to_offset(pos)),
                                            detail, by=by, ts=ts))

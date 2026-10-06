@@ -530,3 +530,106 @@ def test_late_mac_migrates_only_events_of_this_session(monkeypatch, tmp_path):
         ["rst:0x1 (POWERON_RESET)", "rst:0xc (SW_CPU_RESET)"]
     assert [e["cursor"] for e in events.read(old)] == ["c:20200101_000000_1:5"]
     log.close()
+
+
+# ---------------------------------------------------------------------------
+# Fixes de la revisión de la fase 1
+# ---------------------------------------------------------------------------
+
+def test_dripping_line_is_flushed_after_max_hold(monkeypatch, tmp_path):
+    """'Connecting.....' con un punto cada 100 ms nunca queda 150 ms quieta: a
+    MAX_HOLD desde su primer byte sale igual (y lo que sigue, con ↪)."""
+    mono = Clock(0.0)
+    log = make_log(monkeypatch, tmp_path, monotonic=mono)
+    log.adopt(MAC)
+    log.write_serial(b"Connecting")
+    for _ in range(7):                                     # un punto cada 125 ms (< 150 ms)
+        mono.t += 0.125
+        log.write_serial(b".")
+        log.tick()
+    assert len(_lines(_out_path(tmp_path))) == 1           # 0.875 s: todavía retenida
+    mono.t += 0.125
+    log.write_serial(b".")
+    log.tick()
+    assert _bodies(_out_path(tmp_path))[1] == (">", "Connecting........")
+    mono.t += 0.125
+    log.write_serial(b"..\r\n")
+    assert _bodies(_out_path(tmp_path))[2] == ("↪", "..")
+    log.close()
+
+
+def test_dripping_line_flushed_by_background_thread(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    log = DeviceLog("ttyUSB0", partial_timeout=0.1, max_hold=0.2)
+    log.adopt(MAC)
+    log.write_serial(b"Connecting")
+    deadline = time.monotonic() + 0.6
+    while time.monotonic() < deadline:          # un byte cada 20 ms: nunca 100 ms quieta
+        log.write_serial(b".")
+        time.sleep(0.02)
+    assert len(_lines(_out_path(tmp_path))) >= 2
+    log.close()
+
+
+def test_late_crlf_after_flushed_partial_writes_no_empty_continuation(monkeypatch, tmp_path):
+    mono = Clock(0.0)
+    log = make_log(monkeypatch, tmp_path, monotonic=mono)
+    seen = []
+    log.line_sink = lambda text, cursor, ts: seen.append(text)
+    log.adopt(MAC)
+    log.write_serial(b"esp> ")
+    mono.t += 1
+    log.tick()
+    log.write_serial(b"\r\n")
+    log.write_serial(b"siguiente\n")
+    assert _bodies(_out_path(tmp_path))[1:] == [(">", "esp> "), (">", "siguiente")]
+    assert seen == ["esp> ", "siguiente"]
+    log.close()
+
+
+def test_flusher_thread_ends_on_close(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    log = DeviceLog("ttyUSB0", partial_timeout=0.01)
+    log.adopt(MAC)
+    log.write_serial(b"parcial")
+    time.sleep(0.05)
+    t = log._flusher
+    log.close()
+    t.join(1.0)
+    assert not t.is_alive()
+
+
+def test_events_after_close_are_dropped(monkeypatch, tmp_path):
+    """Desconectado: no hay línea a la que apuntar (antes quedaba un cursor al
+    fin del archivo, de una línea que nunca se escribió)."""
+    log = make_log(monkeypatch, tmp_path)
+    log.line_sink = lambda text, cursor, ts: log.event("boot", {}, cursor, ts)
+    log.adopt(MAC)
+    log.close()
+    log.write_serial(b"rst:0xc (SW_CPU_RESET)\r\n")
+    log.event("state", {"to": "x"})
+    assert [e["type"] for e in events.read(paths.device_events_file(MAC))] == ["session"]
+
+
+class ShortWriter:
+    """Archivo que escribe de a 5 bytes, como un write() corto."""
+
+    def __init__(self, fh):
+        self.fh = fh
+
+    def write(self, data):
+        return self.fh.write(bytes(data[:5]))
+
+    def close(self):
+        self.fh.close()
+
+
+def test_short_writes_are_completed(monkeypatch, tmp_path):
+    log = make_log(monkeypatch, tmp_path)
+    log.adopt(MAC)
+    log._fh = ShortWriter(log._fh)
+    log.write_serial("línea larga con ñ\r\n".encode())
+    log.write_taglog("INFO", "x", "otra")
+    assert _bodies(_out_path(tmp_path))[1:] == [(">", "línea larga con ñ"), ("|", "INFO  | x              | otra")]
+    assert log.end_cursor() == f"c:{log.session_id}:{_out_path(tmp_path).stat().st_size}"
+    log.close()

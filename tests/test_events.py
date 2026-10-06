@@ -113,3 +113,13 @@ def test_record_from_api_uses_end_of_current_log(monkeypatch, tmp_path):
     assert ev["cursor"] == dlog.end_cursor() and ev["by"] == "api"
     assert events.read(paths.device_events_file(MAC))[-1]["type"] == "send"
     dlog.close()
+
+
+def test_migrate_keeps_remaining_file_writable_by_api(tmp_path):
+    """Lo que queda en el provisorio se reescribe: tiene que seguir siendo 666
+    (lo crea root, el api escribe como sfypi)."""
+    src, dst = tmp_path / "unknown" / "events.jsonl", tmp_path / "mac" / "events.jsonl"
+    events.append(src, events.make("boot", f"c:{S1}:1"))
+    events.append(src, events.make("boot", f"c:{S2}:1"))
+    events.migrate_session(src, dst, S2)
+    assert src.stat().st_mode & 0o777 == 0o666

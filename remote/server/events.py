@@ -174,6 +174,10 @@ def migrate_session(src: pathlib.Path, dst: pathlib.Path, session_id: str) -> in
     if others:
         tmp = src.with_name(src.name + ".tmp")
         tmp.write_bytes(b"".join(others))
+        try:
+            os.chmod(tmp, 0o666)     # el api (sfypi) tiene que poder seguir escribiendo
+        except OSError:
+            pass
         os.replace(tmp, src)
     else:
         try:

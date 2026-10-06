@@ -487,3 +487,36 @@ def test_serial_events_point_to_their_line(monkeypatch, tmp_path):
             found[e["type"]] = log[off:].split(b"\n")[0].decode()[26:]
     assert found["boot"].startswith("rst:0x1 (POWERON_RESET)")
     assert found["panic"].startswith("Guru Meditation Error")
+
+
+def test_state_event_cursor_is_atomic_with_its_taglog_line(monkeypatch, tmp_path):
+    """Una línea serial de otro hilo que llega justo entre el evento state y su
+    línea taglog no puede meterse en el medio: el cursor tiene que caer en
+    "a -> b". El sink que dispara la línea intrusa corre antes que el del log."""
+    from server import taglog
+    from server.events import parse_cursor
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, publish_state=False)
+    log = manager.device.device_log
+
+    def intruder(ts, level, tag, msg):
+        if "->" in msg:
+            t = threading.Thread(target=manager.on_serial, args=(b"I (1) app: intrusa\r\n",))
+            t.start()
+            t.join(0.2)          # con el lock tomado por _set_state, espera y entra después
+
+    taglog.clear_sinks()
+    taglog.add_sink(intruder)
+    taglog.add_sink(log.taglog_sink)
+    try:
+        manager.discover()
+        manager.device.start_flash()
+    finally:
+        taglog.reset_default_sinks()
+    data = (tmp_path / "devices" / "AABBCCDDEEFF" / "output.log").read_bytes()
+    for e in _events(tmp_path):
+        if e["type"] == "state":
+            _, off = parse_cursor(e["cursor"])
+            line = data[off:].split(b"\n")[0].decode()
+            assert line.endswith(f"{e['detail']['from']} -> {e['detail']['to']}"), line
+    assert data.count(b"intrusa") == 2

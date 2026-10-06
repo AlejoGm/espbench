@@ -148,9 +148,11 @@ class Device:
     def _set_state(self, new: DeviceState) -> None:
         old = self.state
         self.state = new
-        # El evento antes que el taglog: su cursor queda al inicio de la línea "a -> b".
-        self.device_log.event("state", {"from": old.value, "to": new.value})
-        taglog.info(TAG, f"{self._who()}: {old.value} -> {new.value}")
+        # Evento + línea taglog sin que otro hilo escriba en el medio: el cursor
+        # del evento queda al inicio de la línea "a -> b".
+        with self.device_log.atomic():
+            self.device_log.event("state", {"from": old.value, "to": new.value})
+            taglog.info(TAG, f"{self._who()}: {old.value} -> {new.value}")
         self._publish()
 
     def _publish(self) -> None:
