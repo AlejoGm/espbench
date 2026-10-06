@@ -1,11 +1,12 @@
 /*
  * meta.js — editores de la nota y las propiedades de una placa (window.EBMeta),
- * compartidos por index.html (cards) y device.html (header). La lógica sin DOM
- * (chips, validación, qué cambió) está en espbench.js; acá solo se arma DOM.
+ * compartidos por index.html (cards) y device.html (header), y de la ubicación del
+ * bench (header de index.html). La lógica sin DOM (chips, validación, qué cambió)
+ * está en espbench.js; acá solo se arma DOM.
  *
- * Escrituras por EBAuth.fetch: PATCH api/devices/{mac} {note | props, user} y
- * POST api/properties/{cat}/values (valor nuevo). `user` = el lock_user recordado
- * (eb.lockUser); sin él, el server pone el host del pedido.
+ * Escrituras por EBAuth.fetch: PATCH api/devices/{mac} {note | props, user},
+ * POST api/properties/{cat}/values (valor nuevo) y PATCH api/bench {location} (override manual).
+ * `user` = el lock_user recordado (eb.lockUser); sin él, el server pone el host del pedido.
  */
 (function () {
     'use strict';
@@ -198,9 +199,52 @@
         loadCatalog().then(render);
     }
 
+    // Ubicación del bench (header del dashboard): override manual de la automática (geolocalización por
+    // IP). PATCH api/bench {location}: un texto la fija; "" vuelve a la automática. loc: /api/version
+    // location (o null). onDone(changed, location nueva) al guardar o cancelar.
+    function locationEditor(host, loc, onDone) {
+        var v = EB.locationView(loc);
+        var saved = loc || null;
+        var done = track(function (changed) { (onDone || function () {})(changed, saved); });
+        host.innerHTML =
+            '<div class="meta-edit bench-loc-edit">' +
+                '<input class="note-input" maxlength="' + EB.LOCATION_MAX + '" aria-label="Ubicación del bench" ' +
+                'placeholder="' + esc(v && v.source === 'auto' ? v.label + ' (automática): escribí otra para fijarla' :
+                                     'Ubicación: Oficina BA, Lab Chile…') + '">' +
+                '<button class="rename-ok" title="Fijar esta ubicación (Enter)">✓</button>' +
+                '<button class="rename-cancel" title="Cancelar (Esc)">✗</button>' +
+                (v && v.source === 'manual' ? '<button class="meta-btn loc-auto" title="Sacar la fija y usar la ' +
+                    'geolocalización por IP">automática</button>' : '') +
+                '<span class="meta-err"></span>' +
+            '</div>';
+        var inp = host.querySelector('input');
+        var err = host.querySelector('.meta-err');
+        inp.value = v && v.source === 'manual' ? v.label : '';
+        inp.focus();
+        inp.select();
+        function save(text) {
+            var c = EB.locationCheck(text);
+            if (!c.ok) { err.textContent = c.error; return; }
+            if (c.text && v && v.source === 'manual' && c.text === v.label) { done(false); return; }
+            if (!c.text && !(v && v.source === 'manual')) { done(false); return; }   // nada fijo que sacar
+            err.textContent = '';
+            send('PATCH', 'api/bench', {location: c.text})
+                .then(function (r) { saved = r ? r.location : null; done(true); })
+                .catch(function (e) { err.textContent = e.message || 'Error de conexión'; });
+        }
+        host.querySelector('.rename-ok').onclick = function () { save(inp.value); };
+        host.querySelector('.rename-cancel').onclick = function () { done(false); };
+        var auto = host.querySelector('.loc-auto');
+        if (auto) auto.onclick = function () { save(''); };
+        inp.onkeydown = function (e) {
+            if (e.key === 'Enter') save(inp.value);
+            if (e.key === 'Escape') done(false);
+        };
+    }
+
     window.EBMeta = {
         loadCatalog: loadCatalog, catalog: function () { return catalog; },
-        noteEditor: noteEditor, propsEditor: propsEditor,
+        noteEditor: noteEditor, propsEditor: propsEditor, locationEditor: locationEditor,
         editing: function () { return open > 0; }
     };
 })();

@@ -431,7 +431,7 @@
             propValues(props[cat]).forEach(function (val) {
                 var f = findValue(catalog, cat, val);
                 var label = f.value ? f.value.label || val : val;
-                out.push({cat: cat, value: val, text: (f.cat ? f.cat.label : cat) + ': ' + label,
+                out.push({cat: cat, value: val, label: label, text: (f.cat ? f.cat.label : cat) + ': ' + label,
                           warn: !!(f.value && (f.value.warn || f.value.exclude_pick)), filter: cat + ':' + val,
                           unknown: !!catalog && !f.value,
                           title: (f.value && f.value.desc ? f.value.desc + '\n' : '') + 'click: filtrar ' + cat + ':' + val});
@@ -1013,34 +1013,105 @@
         return '<span class="big">' + html + '</span>';
     }
 
-    // Nota y propiedades de la card (solo placas con MAC): la nota destacada y los chips (click: filtrar
-    // cat:valor). edit: botones ✎/◇ (data-act="note|props") y el host .meta-editor para EBMeta.
+    // ── Propiedades en la card: specs, etiquetas y estado ────────────────
+
+    // Rol de cada categoría en la card: qué es la placa (spec: chip, conectividad), para qué está (tag: uso)
+    // y cómo está (estado). Una categoría que el server agregue después va como tag.
+    var PROP_ROLE = {chip: 'spec', conectividad: 'spec', uso: 'tag', estado: 'estado'};
+    var CAT_ICON = {chip: 'cpu', conectividad: 'access-point', uso: 'tag', estado: 'flag'};
+    var VALUE_ICON = {wifi: 'wifi', lte: 'antenna-bars-5', ble: 'bluetooth', 'nb-iot': 'antenna', ethernet: 'network',
+                      lora: 'radio', zigbee: 'affiliate', thread: 'affiliate'};
+
+    function propIcon(cat, value, warn) {
+        if (cat === 'estado' && warn) return 'alert-triangle';
+        if (cat === 'conectividad' && VALUE_ICON[value]) return VALUE_ICON[value];
+        return CAT_ICON[cat] || 'point';
+    }
+
+    // Las propiedades de una placa por rol: {spec, tag, estado}, cada una con los campos de propChips
+    // más role e icon. El orden es el del catálogo (categorías y valores: todas las cards iguales).
+    function cardProps(props, catalog) {
+        var out = {spec: [], tag: [], estado: []};
+        var chips = propChips(props, catalog);
+        function rank(p) {
+            var f = findValue(catalog, p.cat, p.value);
+            var i = f.cat ? (f.cat.values || []).indexOf(f.value) : -1;
+            return i < 0 ? 1e6 : i;
+        }
+        chips = chips.map(function (p, i) { return [p, i]; }).sort(function (a, b) {
+            return a[0].cat === b[0].cat ? (rank(a[0]) - rank(b[0])) || (a[1] - b[1]) : a[1] - b[1];
+        }).map(function (x) { return x[0]; });
+        chips.forEach(function (p) {
+            var role = PROP_ROLE[p.cat] || 'tag';
+            p.role = role;
+            p.icon = propIcon(p.cat, p.value, p.warn);
+            out[role].push(p);
+        });
+        return out;
+    }
+
+    function cardPropHtml(p) {
+        var cls = 'prop-chip pc-' + p.role + (p.cat === 'chip' ? ' pc-chip' : '') + (p.warn ? ' prop-warn' : '') +
+                  (p.unknown ? ' prop-unknown' : '');
+        return '<span class="' + cls + '" data-filter="' + escapeHtml(p.filter) + '" title="' +
+               escapeHtml(p.text + (p.unknown ? ' (fuera del catálogo)' : '') + '\n' + p.title) + '">' +
+               '<i class="ti ti-' + p.icon + '" aria-hidden="true"></i>' + escapeHtml(p.label) + '</span>';
+    }
+
+    /*
+     * Nota y propiedades de la card (solo placas con MAC). Una fila: el estado que excluye (no tocar / roto,
+     * rojo lleno) primero, las specs (cuadradas: chip invertido, conectividad con su ícono) y después las
+     * etiquetas (uso, redondas violetas) y el estado común (redondo ámbar). Sin separador: al partirse la
+     * fila quedaba colgando; la forma ya distingue specs de etiquetas. Debajo, la nota destacada. Sin nada: en el master no se dibuja
+     * nada; en el bench (edit), los botones para agregar ("+ chip, conectividad…", "Nota").
+     * edit: botones data-act="props|note" y el host .meta-editor para EBMeta.
+     */
     function boardMetaHtml(d, catalog, edit, now) {
         if (!d.mac) return '';
-        var note = noteHtml(d, now);
-        var chips = propChipsHtml(d.props, catalog);
-        if (!note && !chips && !edit) return '';
-        return '<div class="card-meta">' +
-            (note ? '<div class="card-note" title="' + escapeHtml(noteInfo(d, now).title) + '"><span class="note-icon">✎</span> ' + note + '</div>' : '') +
-            (chips || edit ? '<div class="prop-row">' + chips +
-                (edit ? '<button class="meta-btn" data-act="props" title="Propiedades: chip, conectividad, estado…">' + (chips ? '◇' : '◇ props') + '</button>' +
-                        '<button class="meta-btn" data-act="note" title="' + (note ? 'Editar la nota' : 'Agregar una nota') + '">' + (note ? '✎' : '✎ nota') + '</button>' : '') +
-                '</div>' : '') +
+        var n = noteInfo(d, now);
+        var cp = cardProps(d.props, catalog);
+        var hard = cp.estado.filter(function (p) { return p.warn; });
+        var soft = cp.estado.filter(function (p) { return !p.warn; });
+        var tags = cp.tag.concat(soft);
+        var any = cp.spec.length + tags.length + hard.length;
+        if (!n && !any && !edit) return '';
+        var row = '';
+        if (any || edit) {
+            row = '<div class="prop-row">' + hard.map(cardPropHtml).join('') + cp.spec.map(cardPropHtml).join('') +
+                tags.map(cardPropHtml).join('') +
+                (edit ? (any ? '<button class="meta-btn icon" data-act="props" title="Editar las propiedades" aria-label="Editar las propiedades"><i class="ti ti-adjustments-horizontal"></i></button>'
+                             : '<button class="meta-btn" data-act="props" title="Propiedades: chip, conectividad, uso, estado"><i class="ti ti-plus"></i>chip, conectividad…</button>') +
+                        (n ? '' : '<button class="meta-btn" data-act="note" title="Agregar una nota"><i class="ti ti-note"></i>Nota</button>') : '') +
+                '</div>';
+        }
+        return '<div class="card-meta">' + row +
+            (n ? '<div class="card-note" title="' + escapeHtml(n.title) + '"><span class="note-icon">✎</span><span class="note-body">' + noteHtml(d, now) + '</span>' +
+                 (edit ? '<button class="note-edit" data-act="note" title="Editar la nota" aria-label="Editar la nota"><i class="ti ti-pencil"></i></button>' : '') + '</div>' : '') +
             (edit ? '<div class="meta-editor"></div>' : '') +
         '</div>';
     }
 
+    // Etiqueta del bench de la card (bench-master): nombre y ubicación, aparte del modelo y el tty.
+    function benchTagHtml(bench, location, online) {
+        return '<span class="bench-tag' + (online === false ? ' off' : '') + '" title="Bench ' + escapeHtml(bench) +
+               (location ? ' · ' + escapeHtml(location) : '') + (online === false ? ' (sin respuesta)' : '') + '">' +
+               '<i class="ti ti-' + (online === false ? 'server-off' : 'server-2') + '" aria-hidden="true"></i><b>' + escapeHtml(bench) + '</b>' +
+               (location ? '<span class="loc"><i class="ti ti-map-pin" aria-hidden="true"></i>' + escapeHtml(location) + '</span>' : '') +
+               '</span>';
+    }
+
     /*
      * Card de una placa. opts: {buckets, href (monitor), direct (link directo, bench-master),
-     * bench (nombre, bench-master), rename (bench: lápiz para renombrar), catalog (/api/properties:
-     * colorea los chips y decide "no tocar"), meta (bench: botones para editar nota y propiedades), now}.
+     * bench (nombre, bench-master), location (del bench), benchTag (false: sin la etiqueta del bench, p. ej.
+     * agrupando por bench), rename (bench: lápiz para renombrar), catalog (/api/properties: colorea los chips
+     * y decide "no tocar"), meta (bench: botones para editar nota y propiedades), now}.
      * Los botones llevan data-act="rename|copy|note|props" para que la página les ponga el handler.
      */
     function boardCardHtml(d, opts) {
         opts = opts || {};
         var st = boardStatus(d, opts.now, opts.catalog);
         var title = d.device_key || d.tty_name;
-        var meta = [d.hw_model, opts.bench ? 'en ' + opts.bench : null, d.tty_name].filter(Boolean).join(', ');
+        var meta = [d.hw_model, d.tty_name].filter(Boolean).join(' · ');
         var tot = opts.buckets ? activityTotals(opts.buckets) : null;
         var boots = tot ? tot.boot : Math.max(0, ((d.health || {}).boots || 1) - 1);
         var panics = tot ? tot.panic : (d.health || {}).panics || 0;
@@ -1049,6 +1120,7 @@
         var live = d.state === 'monitoring' && d.status === 'RUNNING';
         var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
         return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
+            (opts.bench && opts.benchTag !== false ? '<div class="b-ctx">' + benchTagHtml(opts.bench, opts.location, d.bench_online) + '</div>' : '') +
             '<div class="bh"><div class="bh-name"><div class="name">' + escapeHtml(title) +
                 (opts.rename && d.mac ? ' <button class="icon-btn" data-act="rename" aria-label="Renombrar"><i class="ti ti-pencil"></i></button>' : '') +
                 '</div><div class="meta">' + escapeHtml(meta) + '</div></div>' +
@@ -1071,6 +1143,136 @@
                 '<a class="btn" href="' + escapeHtml(opts.href || ('device.html?tty=' + encodeURIComponent(d.tty_name))) + '"><i class="ti ti-terminal-2"></i>Monitor</a>' +
             '</div>' +
         '</article>';
+    }
+
+    // ── Agrupar la grilla de placas ───────────────────────────────────────
+
+    // Lo que ofrece el selector. bench-master (master: true) también agrupa por bench y por ubicación.
+    var GROUP_PROPS = ['chip', 'conectividad', 'uso', 'estado'];
+    function groupOptions(master) {
+        var out = [['', 'Sin agrupar']];
+        if (master) out.push(['bench', 'Bench'], ['location', 'Ubicación']);
+        return out.concat(GROUP_PROPS.filter(function (c) { return PROP_CATEGORIES.indexOf(c) >= 0; })
+                                     .map(function (c) { return [c, c.charAt(0).toUpperCase() + c.slice(1)]; }));
+    }
+
+    // La agrupación al cargar: la de la URL (?group=) gana a la recordada; una que no se ofrece = sin agrupar.
+    function pickGroup(fromUrl, stored, master) {
+        var ok = groupOptions(master).map(function (o) { return o[0]; });
+        if (fromUrl !== null && fromUrl !== undefined && ok.indexOf(fromUrl) >= 0) return fromUrl;
+        return ok.indexOf(stored) >= 0 ? stored : '';
+    }
+
+    // Libre: sana (En línea, no "no tocar") y sin lock; lo que `espbench pick` elegiría.
+    function boardFree(d, catalog, nowMs) {
+        return boardStatus(d, nowMs, catalog).cls === 'ok' && !lockInfo(d, nowMs);
+    }
+    function boardProblem(d, nowMs) {
+        var c = boardStatus(d, nowMs).cls;
+        return c === 'bad' || c === 'warn' || c === 'off';
+    }
+
+    var GROUP_EMPTY = {bench: 'Sin bench', location: 'Sin ubicación'};
+
+    /*
+     * Grupos para la grilla: [{key, label, empty, items, count, free, problems, benches, location}].
+     * by: '' (un solo grupo, todo), 'bench' (d.bench), 'location' (d.bench_location, sin distinguir mayúsculas)
+     * o una categoría de propiedades. Una placa con varios valores en una categoría multi (WiFi y LTE) va en
+     * cada grupo: agrupar responde "¿qué placas tienen LTE?" y esa también tiene. Sin valor → "Sin <x>", al
+     * final. Orden: el del catálogo para las propiedades (los valores fuera del catálogo después), alfabético
+     * para bench y ubicación. benches: los benches del grupo; location: la de un grupo por bench.
+     */
+    function groupBoards(devices, by, catalog, nowMs) {
+        devices = devices || [];
+        var groups = {}, keys = [];
+        function add(key, label, d) {
+            var g = groups[key];
+            if (!g) {
+                g = groups[key] = {key: key, label: label, empty: key === '', items: [], count: 0, free: 0, problems: 0,
+                                   benches: [], location: null};
+                keys.push(key);
+            }
+            if (g.items.indexOf(d) >= 0) return;
+            g.items.push(d);
+            g.count++;
+            if (boardFree(d, catalog, nowMs)) g.free++;
+            if (boardProblem(d, nowMs)) g.problems++;
+            if (d.bench && g.benches.indexOf(d.bench) < 0) g.benches.push(d.bench);
+            if (!g.location && d.bench_location) g.location = d.bench_location;
+        }
+        if (!by) {
+            devices.forEach(function (d) { add('*', '', d); });
+            return keys.length ? [groups['*']] : [];
+        }
+        var cat = (catalog || []).filter(function (c) { return c.id === by; })[0];
+        devices.forEach(function (d) {
+            var vals;
+            if (by === 'bench') vals = d.bench ? [[d.bench, d.bench]] : [];
+            else if (by === 'location') {
+                var loc = String(d.bench_location || '').trim();
+                vals = loc ? [[loc.toLowerCase(), loc]] : [];
+            } else {
+                vals = propValues((d.props || {})[by]).map(function (v) {
+                    var f = cat ? (cat.values || []).filter(function (x) { return x.id === v; })[0] : null;
+                    return [v, f && f.label ? f.label : v];
+                });
+            }
+            if (!vals.length) add('', GROUP_EMPTY[by] || 'Sin ' + by, d);
+            vals.forEach(function (v) { add(v[0], v[1], d); });
+        });
+        var order = cat ? (cat.values || []).map(function (v) { return v.id; }) : [];
+        keys.sort(function (a, b) {
+            if (a === '' || b === '') return a === '' ? 1 : -1;
+            var ia = order.indexOf(a), ib = order.indexOf(b);
+            if (ia >= 0 || ib >= 0) return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib);
+            return groups[a].label.toLowerCase().localeCompare(groups[b].label.toLowerCase());
+        });
+        return keys.map(function (k) { return groups[k]; });
+    }
+
+    // Encabezado de un grupo (ocupa toda la fila de la grilla): ícono, nombre, cantidad, libres y con problemas.
+    function groupHeaderHtml(g, by) {
+        var icon = by === 'bench' ? 'server-2' : by === 'location' ? 'map-pin' :
+                   g.empty ? 'circle-dashed' : propIcon(by, g.key, false);
+        var sub = by === 'bench' ? g.location : by === 'location' ? g.benches.join(', ') : '';
+        return '<div class="group-h' + (g.empty ? ' empty' : '') + '" data-group="' + escapeHtml(g.key) + '">' +
+            '<span class="gh-ic"><i class="ti ti-' + icon + '" aria-hidden="true"></i></span>' +
+            '<h3>' + escapeHtml(g.label) + '</h3>' +
+            (sub ? '<span class="gh-sub">' + (by === 'bench' ? '<i class="ti ti-map-pin" aria-hidden="true"></i>' : '') + escapeHtml(sub) + '</span>' : '') +
+            '<span class="gh-stat">' + g.count + (g.count === 1 ? ' placa' : ' placas') + '</span>' +
+            (g.free ? '<span class="gh-stat ok">' + g.free + (g.free === 1 ? ' libre' : ' libres') + '</span>' : '') +
+            (g.problems ? '<span class="gh-stat bad">' + g.problems + ' con problemas</span>' : '') +
+        '</div>';
+    }
+
+    // ── Ubicación del bench (/api/version location; PATCH api/bench = override manual) ──
+
+    var LOCATION_MAX = 60;
+
+    // Para mostrar: {label, source: auto|manual, stale, icon, title} o null. loc: el objeto del server
+    // (geo.location()), o un texto suelto (benches 0.41/0.42: manual).
+    function locationView(loc, now) {
+        if (typeof loc === 'string') loc = {label: loc, source: 'manual'};
+        if (!loc || !loc.label) return null;
+        var manual = loc.source === 'manual';
+        var when = loc.ts ? relTime(loc.ts, now) : null;
+        var detail = [loc.city, loc.region, loc.country].filter(Boolean).join(', ');
+        return {label: loc.label, source: manual ? 'manual' : 'auto', stale: !!loc.stale,
+                icon: manual ? 'map-pin' : 'current-location',
+                title: manual ? 'Ubicación fijada a mano (pisa la automática)' :
+                       'Ubicación automática por la IP pública' + (detail && detail !== loc.label ? ': ' + detail : '') +
+                       (loc.tz ? ' (' + loc.tz + ')' : '') +
+                       (loc.stale ? '. No se pudo actualizar' + (when ? ': es de ' + when : '') : (when ? ', ' + when : ''))};
+    }
+
+    // La regla de benchinfo.set_location: hasta 60 caracteres, sin control ni formato Unicode (Cf).
+    function locationCheck(text) {
+        var t = String(text == null ? '' : text).trim();
+        if (t.length > LOCATION_MAX) return {ok: false, text: t, error: 'más de ' + LOCATION_MAX + ' caracteres'};
+        if (/[\u0000-\u001f\u007f-\u009f]/.test(t) || /\p{Cf}/u.test(t)) {
+            return {ok: false, text: t, error: 'sin saltos de línea, tabs ni caracteres invisibles'};
+        }
+        return {ok: true, text: t, error: null};
     }
 
     // Gráfico de área (SVG) para una serie: curva suave, relleno, marcas en los índices de `marks`.
@@ -1118,6 +1320,9 @@
         lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl,
         SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, uptimeParts: uptimeParts, agoText: agoText,
         activityTotals: activityTotals, activityBarsHtml: activityBarsHtml, benchChips: benchChips, boardCardHtml: boardCardHtml, boardMetaHtml: boardMetaHtml,
+        cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
+        groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,
+        boardFree: boardFree, locationCheck: locationCheck, locationView: locationView, LOCATION_MAX: LOCATION_MAX,
         areaChartSvg: areaChartSvg
     };
 });

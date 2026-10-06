@@ -25,7 +25,9 @@
     <section class="card bench-head">
         <div class="bench-id">
             <div class="av"><i class="ti ti-server-2" aria-hidden="true"></i></div>
-            <div><h2 id="bench-name">…</h2><div class="sub" id="bench-sub"></div></div>
+            <div><h2 id="bench-name">…</h2>
+                <div class="sub"><button class="bench-loc empty hidden" id="bench-loc"></button><span id="bench-sub"></span></div>
+                <div class="meta-editor" id="loc-editor"></div></div>
         </div>
         <div class="mchips" id="bench-chips"></div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
@@ -37,6 +39,8 @@
     <div class="section-h">
         <h2>Placas</h2>
         <div class="tabs" id="tabs"></div>
+        <label class="group-sel" title="Agrupar las placas"><i class="ti ti-layout-rows" aria-hidden="true"></i>Agrupar
+            <select id="group" aria-label="Agrupar las placas"></select></label>
         <div class="legend"><span><i style="background:var(--boot)"></i>Reinicio</span><span><i style="background:var(--bad)"></i>Panic</span><span><i style="background:var(--flash)"></i>Flash</span><span><i style="background:var(--warn)"></i>Reservada</span></div>
     </div>
     <section class="boards" id="boards"></section>
@@ -45,7 +49,27 @@
 
 <script>
     var esc = EB.escapeHtml;
-    var devices = [], activity = {}, filter = 'all', renaming = null;
+    var devices = [], activity = {}, filter = 'all', renaming = null, location_ = null;
+
+    // Agrupar (EB.groupBoards): ?group= gana a la recordada (localStorage por página: a través de bench-master
+    // todos los benches comparten origen con el master, que tiene sus propias opciones).
+    var GROUP_KEY = 'eb.group.bench';
+    var groupBy = (function() {
+        var stored = null;
+        try { stored = localStorage.getItem(GROUP_KEY); } catch (e) {}
+        return EB.pickGroup(new URLSearchParams(location.search).get('group'), stored, false);
+    })();
+    document.getElementById('group').innerHTML = EB.groupOptions(false).map(function(o) {
+        return '<option value="' + o[0] + '"' + (o[0] === groupBy ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+    }).join('');
+    document.getElementById('group').addEventListener('change', function() {
+        groupBy = this.value;
+        try { localStorage.setItem(GROUP_KEY, groupBy); } catch (e) {}
+        var u = new URL(location.href);
+        if (groupBy) u.searchParams.set('group', groupBy); else u.searchParams.delete('group');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+        render();
+    });
 
     var TABS = [
         ['all', 'Todas', function() { return true; }],
@@ -87,10 +111,34 @@
             document.getElementById('bench-name').textContent = v.name || 'bench';
             document.getElementById('bench-sub').textContent = 'Versión ' + v.version;
             document.title = (v.name || 'espbench') + ' · espbench';
+            // Bench sin `location` en /api/version (anterior a 0.41): sin el botón.
+            if ('location' in v && !EBMeta.editing()) renderLocation(v.location);
         }).catch(function() {});
         getJson('api/bench/health').then(renderHealth).catch(function() {});
         getJson('api/update').then(function(u) { update = u; renderPin(); }).catch(function() {});
     }
+
+    // Ubicación del bench (automática por IP, o fijada a mano): el ícono dice cuál; click → override manual.
+    function renderLocation(loc) {
+        location_ = loc || null;
+        var v = EB.locationView(location_), b = document.getElementById('bench-loc');
+        b.classList.remove('hidden');
+        b.classList.toggle('empty', !v);
+        b.classList.toggle('stale', !!(v && v.stale));
+        b.title = v ? v.title + (v.source === 'manual' ? '\nClick: cambiarla o volver a la automática' : '\nClick: fijarla a mano') : 'Sin ubicación (geolocalización desactivada o sin red): agregar una';
+        b.innerHTML = v ? '<i class="ti ti-' + v.icon + '" aria-hidden="true"></i>' + esc(v.label) +
+                          '<span class="loc-src">' + (v.source === 'manual' ? 'manual' : 'auto') + '</span><i class="ti ti-pencil loc-ed" aria-hidden="true"></i>'
+                        : '<i class="ti ti-plus" aria-hidden="true"></i>ubicación';
+    }
+    document.getElementById('bench-loc').addEventListener('click', function() {
+        if (EBMeta.editing()) return;
+        var host = document.getElementById('loc-editor'), btn = this;
+        btn.classList.add('hidden');
+        EBMeta.locationEditor(host, location_, function(changed, loc) {
+            host.innerHTML = '';
+            renderLocation(changed ? loc : location_);
+        });
+    });
 
     document.getElementById('btn-update').addEventListener('click', function() {
         var btn = this;
@@ -129,9 +177,12 @@
             var l = EB.lockInfo(d);
             return tab[2](d) && EB.searchMatch(q, searchText(d), d.lock_user, l ? (l.reservation ? 'reserva' : 'flash') : '', d.props);
         });
-        document.getElementById('boards').innerHTML = shown.map(function(d) {
-            var a = activity[d.tty_name];
-            return EB.boardCardHtml(d, {buckets: a && a.buckets, rename: true, meta: true, catalog: catalog});
+        // Agrupada: un encabezado por grupo (ocupa la fila de la grilla); una placa con WiFi y LTE va en los dos.
+        document.getElementById('boards').innerHTML = EB.groupBoards(shown, groupBy, catalog).map(function(g) {
+            return (groupBy ? EB.groupHeaderHtml(g, groupBy) : '') + g.items.map(function(d) {
+                var a = activity[d.tty_name];
+                return EB.boardCardHtml(d, {buckets: a && a.buckets, rename: true, meta: true, catalog: catalog});
+            }).join('');
         }).join('');
         document.getElementById('empty').classList.toggle('hidden', devices.length > 0);
     }

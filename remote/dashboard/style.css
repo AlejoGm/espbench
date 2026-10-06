@@ -377,6 +377,7 @@ body.hide-ts .terminal .ln-ts { display: none; }
     .page { padding: 16px; }
     .search { width: 100%; margin-left: 0; order: 5; }
     .legend { display: none; }
+    .group-sel { order: 4; }
     .boards { grid-template-columns: 1fr; }
     body.device-page { padding: 8px; gap: 8px; }
     .terminal { padding: 10px 8px 10px 20px; font-size: 11.5px; }
@@ -386,11 +387,18 @@ body.hide-ts .terminal .ln-ts { display: none; }
 
 /* ══ Nota y propiedades de la placa (card, header del monitor; editores de meta.js) ══ */
 
-.card-meta { display: flex; flex-direction: column; gap: 8px; margin-top: -4px; }
+.card-meta { display: flex; flex-direction: column; gap: 10px; margin-top: -4px; }
 .card-note {
     background: var(--warn-bg); color: var(--warn); border-radius: var(--r-sm); padding: 7px 12px;
     font-size: 13px; overflow-wrap: anywhere; box-shadow: inset 3px 0 0 var(--warn);
 }
+.board .card-note { display: flex; align-items: flex-start; gap: 6px; padding: 9px 8px 9px 14px; font-size: 13.5px; }
+.board .card-note .note-body { flex: 1; min-width: 0; }
+.note-edit {
+    width: 26px; height: 26px; margin: -3px 0; border-radius: 50%; border: none; background: none; color: var(--warn);
+    display: inline-grid; place-items: center; font-size: 14px; flex: none; opacity: .7;
+}
+.note-edit:hover { opacity: 1; background: rgba(227,154,45,.15); }
 .note-icon { font-weight: 700; }
 .note-text { color: var(--ink); font-weight: 600; }
 .note-meta { color: var(--ink2); font-size: 12px; white-space: nowrap; }
@@ -411,6 +419,80 @@ body.hide-ts .terminal .ln-ts { display: none; }
     color: var(--ink3); font-size: 12px; font-weight: 600; white-space: nowrap;
 }
 .meta-btn:hover { color: var(--ink); border-color: var(--ink3); }
+.meta-btn .ti { font-size: 14px; }
+.board .meta-btn { height: 28px; display: inline-flex; align-items: center; gap: 4px; }
+.board .meta-btn.icon { width: 28px; padding: 0; justify-content: center; }
+
+/* Card: propiedades por rol (EB.boardMetaHtml). Specs (qué es la placa) cuadradas y neutras, el chip
+   invertido; etiquetas (uso) y estado redondas; estado que excluye (no tocar / roto) rojo lleno. */
+.board .prop-row { gap: 6px; }
+.board .prop-chip {
+    height: 28px; gap: 5px; padding: 0 10px 0 8px; border-radius: 8px; font-family: var(--font);
+    font-size: 12.5px; font-weight: 700; letter-spacing: -.005em;
+}
+.board .prop-chip .ti { font-size: 15px; opacity: .8; }
+.board .prop-chip.pc-spec { background: var(--row); color: var(--ink); border-color: var(--line); }
+.board .prop-chip.pc-spec .ti { color: var(--ink2); opacity: 1; }
+.board .prop-chip.pc-spec:hover { border-color: var(--ink3); }
+.board .prop-chip.pc-chip { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.board .prop-chip.pc-chip .ti { color: inherit; opacity: .7; }
+.board .prop-chip.pc-tag, .board .prop-chip.pc-estado { border-radius: 999px; padding: 0 11px 0 9px; font-weight: 600; }
+.board .prop-chip.pc-estado { background: var(--warn-bg); color: var(--warn); }
+.board .prop-chip.pc-estado:hover { border-color: var(--warn); }
+.board .prop-chip.pc-estado.prop-warn { background: var(--bad); color: #fff; font-weight: 800; }
+.board .prop-chip.pc-estado.prop-warn .ti { opacity: 1; }
+.board .prop-chip.prop-unknown { background: none; color: var(--ink2); border: 1px dashed var(--line2); }
+.board .pc-spec + .pc-tag, .board .pc-spec + .pc-estado { margin-left: 6px; }
+
+/* Card: de qué bench es (bench-master) */
+.b-ctx { display: flex; min-width: 0; margin-bottom: -6px; }
+.bench-tag {
+    display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 26px; padding: 0 10px 0 8px;
+    border-radius: 8px; background: var(--row); color: var(--ink2); font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.bench-tag .ti { font-size: 14px; flex: none; }
+.bench-tag b { color: var(--ink); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+.bench-tag .loc { display: inline-flex; align-items: center; gap: 3px; padding-left: 7px; margin-left: 1px; border-left: 1px solid var(--line2); overflow: hidden; text-overflow: ellipsis; }
+.bench-tag.off { color: var(--ink3); } .bench-tag.off b { color: var(--ink2); }
+
+/* Agrupar la grilla (EB.groupBoards / groupHeaderHtml): el encabezado ocupa la fila entera */
+.group-sel {
+    display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px 0 12px; border-radius: 999px;
+    background: var(--card); color: var(--ink2); font-size: 13px; font-weight: 600; box-shadow: var(--shadow); white-space: nowrap;
+}
+.group-sel .ti { font-size: 16px; }
+.group-sel select { border: none; background: none; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; outline: none; max-width: 140px; }
+.group-sel select option { background: var(--card); color: var(--ink); }
+.group-h { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding-top: 12px; }
+.group-h:first-child { padding-top: 0; }
+.group-h .gh-ic {
+    width: 34px; height: 34px; border-radius: 11px; background: var(--card); color: var(--ink2); display: grid;
+    place-items: center; font-size: 18px; box-shadow: var(--shadow); flex: none;
+}
+.group-h h3 { font-size: 17px; font-weight: 800; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.group-h.empty h3 { color: var(--ink3); font-weight: 700; }
+.group-h .gh-sub { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); font-size: 13px; }
+.gh-stat { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: var(--card); color: var(--ink2); white-space: nowrap; }
+.gh-stat.ok { color: var(--ok); }
+.gh-stat.bad { background: var(--bad-bg); color: var(--bad); }
+.group-h::after { content: ''; flex: 1 1 40px; height: 1px; background: var(--line2); }
+
+/* Ubicación del bench en el header del dashboard */
+.bench-id .sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bench-loc {
+    display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px 0 8px; border-radius: 999px;
+    border: 1px solid transparent; background: var(--row); color: var(--ink); font-size: 12.5px; font-weight: 700; max-width: 100%;
+}
+.bench-loc .ti { font-size: 14px; color: var(--ink2); }
+.bench-loc:hover { border-color: var(--line2); }
+.bench-loc.empty { background: none; border: 1px dashed var(--line2); color: var(--ink3); font-weight: 600; }
+.bench-loc.empty .ti { color: inherit; }
+.bench-loc .loc-src { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink3); margin-left: 2px; }
+.bench-loc .loc-ed { font-size: 12px; color: var(--ink3); margin-left: 2px; }
+.bench-loc:hover .loc-ed { color: var(--ink); }
+.bench-loc.stale { color: var(--ink2); } .bench-loc.stale .loc-src { color: var(--warn); }
+.bench-loc-edit { margin-top: 6px; }
+.bench-loc-edit .note-input { min-width: 18ch; }
 
 .meta-editor:empty { display: none; }
 .meta-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -455,6 +537,7 @@ body.hide-ts .terminal .ln-ts { display: none; }
 
 /* Celular: botones de nota/propiedades y chips con área táctil de 32 px */
 @media (max-width: 760px), (pointer: coarse) {
-    .meta-btn, .prop-chip { min-height: 32px; min-width: 32px; justify-content: center; }
+    .meta-btn, .prop-chip, .board .meta-btn, .board .prop-chip, .bench-loc { min-height: 32px; min-width: 32px; justify-content: center; }
+    .note-edit { width: 32px; height: 32px; }
     .meta-btn { font-size: 14px; padding: 0 12px; }
 }

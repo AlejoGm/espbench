@@ -19,6 +19,7 @@
         .rail .ri:hover { color: var(--ink); }
         main { padding: 22px 28px 48px 8px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
         .row1 { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+        .row1 > * { min-width: 0; }   /* el SVG del gráfico (dibujado al ancho anterior) no ensancha la página en el celular */
 
         .hero { background: var(--hero); color: var(--hero-ink); border-radius: var(--r-lg); padding: 26px 26px 0; display: flex; flex-direction: column; overflow: hidden; min-height: 420px; }
         .hero .sub { color: var(--hero-dim); font-size: 13px; }
@@ -113,6 +114,8 @@
         <div class="section-h">
             <h2>Placas</h2>
             <div class="tabs" id="tabs"></div>
+            <label class="group-sel" title="Agrupar las placas"><i class="ti ti-layout-rows" aria-hidden="true"></i>Agrupar
+                <select id="group" aria-label="Agrupar las placas"></select></label>
             <div class="legend"><span><i style="background:var(--boot)"></i>Reinicio</span><span><i style="background:var(--bad)"></i>Panic</span><span><i style="background:var(--flash)"></i>Flash</span><span><i style="background:var(--warn)"></i>Reservada</span></div>
         </div>
         <section class="boards" id="boards"></section>
@@ -156,7 +159,7 @@
         el.className = 'hero' + (b.online ? '' : ' off');
         el.innerHTML =
             '<div class="head"><div><h2>' + esc(b.name) + '</h2><div class="sub">' +
-                esc([h && h.model, 'versión ' + (b.version || '?'), b.online ? null : 'sin respuesta desde ' + (EB.relTime(b.last_seen) || 'antes')].filter(Boolean).join(', ')) +
+                esc([locLabel(b), h && h.model, 'versión ' + (b.version || '?'), b.online ? null : 'sin respuesta desde ' + (EB.relTime(b.last_seen) || 'antes')].filter(Boolean).join(', ')) +
             '</div></div>' + (u && u.pin ? '<span class="branch"><i class="ti ti-pin" aria-hidden="true"></i>' + esc(u.pin) + '</span>' : '') + '</div>' +
             '<div class="hchips">' + EB.benchChips(h).map(function(c) {
                 return '<div class="hchip ' + c.level + '"><div class="ic"><i class="ti ti-' + c.icon + '" aria-hidden="true"></i></div><div><b>' + esc(c.value) + '</b><span>' + esc(c.label) + '</span></div></div>';
@@ -189,12 +192,16 @@
     }
     window.addEventListener('resize', function() { if (selected) drawChart(benchTotals(selected)); });
 
+    // Ubicación del bench (/api/benches location: automática por IP o fijada a mano en el bench).
+    function locLabel(b) { var v = EB.locationView(b.location); return v ? v.label : null; }
+
     // ── lista de benches ──
 
     function renderBenches() {
         document.getElementById('benches').innerHTML = benches.map(function(b) {
             var n = b.device_count, u = (extra[b.name] || {}).update;
-            var sub = n + (n === 1 ? ' placa' : ' placas') + (u ? (u.pin ? ', fijo en ' + u.pin : ', sigue releases') : '');
+            var sub = (locLabel(b) ? locLabel(b) + ' · ' : '') + n + (n === 1 ? ' placa' : ' placas') +
+                      (u ? (u.pin ? ', fijo en ' + u.pin : ', sigue releases') : '');
             var st = b.online ? '<span class="status ok">En línea</span>' : '<span class="status">Sin respuesta</span>';
             return '<button class="lrow' + (b.online ? '' : ' dim') + (b.name === selected ? ' sel' : '') + '" data-bench="' + esc(b.name) + '">' +
                 '<div class="av' + (b.online ? '' : ' off') + '"><i class="ti ti-' + (b.online ? 'server-2' : 'server-off') + '" aria-hidden="true"></i></div>' +
@@ -281,6 +288,25 @@
         ['avoid', 'No tocar / rotas', function(d) { return EB.boardStatus(d, undefined, catalog).cls === 'avoid'; }]
     ];
 
+    // Agrupar (EB.groupBoards): ?group= gana a la recordada en localStorage.
+    var GROUP_KEY = 'eb.group.master';
+    var groupBy = (function() {
+        var stored = null;
+        try { stored = localStorage.getItem(GROUP_KEY); } catch (e) {}
+        return EB.pickGroup(new URLSearchParams(location.search).get('group'), stored, true);
+    })();
+    document.getElementById('group').innerHTML = EB.groupOptions(true).map(function(o) {
+        return '<option value="' + o[0] + '"' + (o[0] === groupBy ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+    }).join('');
+    document.getElementById('group').addEventListener('change', function() {
+        groupBy = this.value;
+        try { localStorage.setItem(GROUP_KEY, groupBy); } catch (e) {}
+        var u = new URL(location.href);
+        if (groupBy) u.searchParams.set('group', groupBy); else u.searchParams.delete('group');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+        renderBoards();
+    });
+
     function renderBoards() {
         var q = document.getElementById('search').value;
         var tab = TABS.filter(function(t) { return t[0] === filter; })[0];
@@ -292,16 +318,20 @@
         // Texto libre (también la nota y los valores de las propiedades) y "cat:valor" (click en un chip).
         var shown = devices.filter(function(d) {
             var l = EB.lockInfo(d);
-            var text = [d.device_key, d.bench, d.tty_name, d.sn, d.mac, d.hw_model, d.fw_project, d.fw_version, d.lock_user,
+            var text = [d.device_key, d.bench, d.bench_location, d.tty_name, d.sn, d.mac, d.hw_model, d.fw_project, d.fw_version, d.lock_user,
                         d.note, d.note_by, EB.propsSearchText(d.props)].filter(Boolean).join(' ').toLowerCase();
             return tab[2](d) && EB.searchMatch(q, text, d.lock_user, l ? (l.reservation ? 'reserva' : 'flash') : '', d.props);
         });
         // Nota y propiedades en solo lectura: se editan en el dashboard de cada bench (su token y su catálogo).
-        document.getElementById('boards').innerHTML = shown.map(function(d) {
-            var act = (((extra[d.bench] || {}).activity || {}).devices || {})[d.tty_name];
-            var tty = encodeURIComponent(d.tty_name);
-            return EB.boardCardHtml(d, {buckets: act && act.buckets, bench: d.bench, catalog: catalog,
-                                        href: benchUrl(d.bench, 'device.html?tty=' + tty), direct: d.bench_url + '/device.html?tty=' + tty});
+        // Agrupada: un encabezado por grupo; una placa con WiFi y LTE va en los dos. Por bench, la card no repite el bench.
+        document.getElementById('boards').innerHTML = EB.groupBoards(shown, groupBy, catalog).map(function(g) {
+            return (groupBy ? EB.groupHeaderHtml(g, groupBy) : '') + g.items.map(function(d) {
+                var act = (((extra[d.bench] || {}).activity || {}).devices || {})[d.tty_name];
+                var tty = encodeURIComponent(d.tty_name);
+                return EB.boardCardHtml(d, {buckets: act && act.buckets, bench: d.bench, location: d.bench_location,
+                                            benchTag: groupBy !== 'bench', catalog: catalog,
+                                            href: benchUrl(d.bench, 'device.html?tty=' + tty), direct: d.bench_url + '/device.html?tty=' + tty});
+            }).join('');
         }).join('');
         document.getElementById('empty').classList.toggle('hidden', benches.length > 0);
     }
