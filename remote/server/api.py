@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
+from server import benchinfo
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -46,7 +47,8 @@ def _read_first_line(path: pathlib.Path) -> str:
 @app.get("/api/version")
 async def get_version():
     """También es la identidad del bench para bench-master: `app` dice que es un
-    espbench (lo distingue de otros hosts de la tailnet) y `name`, cómo se llama.
+    espbench (lo distingue de otros hosts de la tailnet), `name`, cómo se llama, e
+    `id`, la MAC de la máquina (lo que lo identifica aunque cambie de nombre o de IP).
     `auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo si lo
     hay: `unlock` forzado lo exige)."""
     try:
@@ -57,6 +59,7 @@ async def get_version():
         "app": "espbench",
         "version": _read_first_line(paths.version_file()) or "dev",
         "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
+        "id": benchinfo.this_host_id(),
         "auth": has_token,
     }
 
@@ -616,6 +619,23 @@ async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authoriza
             detail.update(_forced_by(body, request))
         _record(state, "command", detail, cursor)
     return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
+
+
+# ---------- el bench entero: salud de la máquina y actividad de las placas ----------
+
+@app.get("/api/bench/health")
+async def bench_health():
+    """Temperatura, RAM, disco, carga y uptime de la máquina del bench."""
+    return await asyncio.to_thread(benchinfo.health)
+
+
+@app.get("/api/activity")
+async def bench_activity(hours: int = 24):
+    """Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y
+    los eventos recientes que merecen un aviso."""
+    hours = max(1, min(hours, 168))
+    devices = [dataclasses.asdict(d) for d in registry.list_devices()]
+    return await asyncio.to_thread(benchinfo.activity, devices, hours)
 
 
 # ---------- update del bench (espbench-update) ----------

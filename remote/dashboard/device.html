@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>espbench — monitor</title>
+    <script src="theme.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
     <link rel="stylesheet" href="style.css">
     <script src="espbench.js"></script>
     <script src="auth.js"></script>
@@ -12,7 +16,7 @@
 <body class="device-page">
 
     <div class="device-header">
-        <a class="back-link" href="./">← inicio</a>
+        <a class="back-link" href="./"><i class="ti ti-arrow-left" aria-hidden="true"></i>Placas</a>
         <span class="separator">/</span>
         <span class="device-name" id="device-name"></span>
         <div class="device-badges" id="device-badges"></div>
@@ -20,11 +24,12 @@
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
-            <button class="action-btn hidden" id="btn-release" title="Liberar la reserva/lock con su lock_user y lock_token">🔓 Liberar</button>
-            <button class="action-btn action-btn--danger hidden" id="btn-force" title="Soltar la reserva/lock de otro (queda registrado como forzado)">⚠ Forzar</button>
-            <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)">↺ Reset</button>
-            <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
-            <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)">⟳ Sesión</button>
+            <button class="action-btn hidden" id="btn-release" title="Liberar la reserva/lock con su lock_user y lock_token"><i class="ti ti-lock-open"></i>Liberar</button>
+            <button class="action-btn action-btn--danger hidden" id="btn-force" title="Soltar la reserva/lock de otro (queda registrado como forzado)"><i class="ti ti-alert-triangle"></i>Forzar</button>
+            <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)"><i class="ti ti-refresh"></i>Reset</button>
+            <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)"><i class="ti ti-player-skip-back"></i>Boot</button>
+            <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)"><i class="ti ti-power"></i>Sesión</button>
+            <button class="action-btn" data-theme-toggle aria-label="Cambiar tema"><i class="ti ti-moon"></i></button>
         </div>
     </div>
 
@@ -38,15 +43,15 @@
 
     <div class="term-toolbar">
         <input id="filter" class="filter-input" type="search" placeholder="Filtrar líneas…  ( / )" autocomplete="off">
-        <button class="tool-btn" id="btn-problems" title="Mostrar solo panics, resets, errores y warnings">⚠ Solo problemas</button>
-        <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic">⤒ Último panic</button>
-        <button class="tool-btn" id="btn-ts" title="Mostrar la hora de cada línea (la pone la Pi al recibirla)">🕑 Hora</button>
+        <button class="tool-btn" id="btn-problems" title="Mostrar solo panics, resets, errores y warnings"><i class="ti ti-alert-triangle"></i>Solo problemas</button>
+        <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic"><i class="ti ti-arrow-bar-to-up"></i>Último panic</button>
+        <button class="tool-btn" id="btn-ts" title="Mostrar la hora de cada línea (la pone la Pi al recibirla)"><i class="ti ti-clock"></i>Hora</button>
         <span class="tool-sep"></span>
         <span class="line-count" id="line-count"></span>
-        <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)">⏸ Pausar</button>
-        <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)">⌫ Limpiar</button>
-        <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa">⤓ Log</a>
-        <button class="tool-btn" id="btn-history" title="Eventos, flasheos y sesiones anteriores">☰ Historial</button>
+        <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)"><i class="ti ti-player-pause"></i>Pausar</button>
+        <button class="tool-btn" id="btn-clear" title="Limpiar la vista (el archivo no se toca)"><i class="ti ti-eraser"></i>Limpiar</button>
+        <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa"><i class="ti ti-download"></i>Log</a>
+        <button class="tool-btn" id="btn-history" title="Eventos, flasheos y sesiones anteriores"><i class="ti ti-history"></i>Historial</button>
     </div>
 
     <div class="device-main">
@@ -59,7 +64,7 @@
                 <button class="side-tab active" data-tab="events">Eventos</button>
                 <button class="side-tab" data-tab="jobs">Flasheos</button>
                 <button class="side-tab" data-tab="sessions">Sesiones</button>
-                <button class="side-close" id="side-close" title="Cerrar">✕</button>
+                <button class="side-close" id="side-close" title="Cerrar"><i class="ti ti-x"></i></button>
             </div>
             <div class="side-body" id="side-events"></div>
             <div class="side-body hidden" id="side-jobs"></div>
@@ -71,15 +76,15 @@
         <span class="prompt">›</span>
         <input id="serial-text" placeholder="Enviar al serial del device…  (↑↓ historial)" maxlength="256">
         <label class="enter-opt" title="Mandar Enter después del texto"><input type="checkbox" id="serial-enter" checked> ⏎</label>
-        <button class="action-btn" type="submit">Enviar</button>
+        <button class="action-btn" type="submit"><i class="ti ti-send"></i>Enviar</button>
     </form>
 
     <div class="viewer hidden" id="viewer">
         <div class="viewer-box">
             <div class="viewer-head">
                 <span class="viewer-title" id="viewer-title"></span>
-                <a class="tool-btn" id="viewer-download" target="_blank">⤓ Descargar</a>
-                <button class="tool-btn" id="viewer-close">✕ Cerrar</button>
+                <a class="tool-btn" id="viewer-download" target="_blank"><i class="ti ti-download"></i>Descargar</a>
+                <button class="tool-btn" id="viewer-close"><i class="ti ti-x"></i>Cerrar</button>
             </div>
             <div class="terminal viewer-body" id="viewer-body"></div>
         </div>
@@ -257,7 +262,7 @@
             $('new-lines-n').textContent = unseen;
             $('new-lines').classList.toggle('hidden', follow || unseen === 0);
             $('btn-panic').classList.toggle('hidden', !lastPanicEl);
-            $('btn-follow').textContent = follow ? '⏸ Pausar' : '▶ Seguir';
+            $('btn-follow').innerHTML = follow ? '<i class="ti ti-player-pause"></i>Pausar' : '<i class="ti ti-player-play"></i>Seguir';
             $('btn-follow').classList.toggle('active', !follow);
         }
 

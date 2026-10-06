@@ -32,9 +32,9 @@ DEV_B = {"tty_name": "ttyUSB0", "port_tcp": 5000, "mac": "AA:BB:CC:DD:EE:FF", "s
          "device_key": "medidor-b", "status": "RUNNING"}
 
 
-def bench(name, *devices, ok=True, url=None, error=None):
+def bench(name, *devices, ok=True, url=None, error=None, id=None):
     return Bench(name=name, url=url or f"http://{name}:8080", address=name, port=8080, source="tailscale",
-                 version="0.14.0", ok=ok, error=error, devices=list(devices))
+                 version="0.14.0", ok=ok, error=error, devices=list(devices), id=id)
 
 
 class Clock:
@@ -71,6 +71,41 @@ def test_cache_keeps_offline_bench_with_last_snapshot():
 
     cache.update([bench("pi1", DEV_A), bench("pi2", DEV_B)])   # vuelve
     assert cache.get("pi2").online and cache.get("pi2").error is None
+
+
+def test_cache_bench_renamed_replaces_old_name():
+    """sensipi03 pasa a llamarse dev (bench_name): misma URL, otro nombre. No tiene
+    que quedar sensipi03 caído con sus placas viejas duplicadas."""
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080"), bench("pi2", DEV_B)])
+    cache.update([bench("dev", DEV_A, url="http://100.1.1.3:8080"), bench("pi2", DEV_B)])
+    assert [st.bench.name for st in cache.states()] == ["dev", "pi2"]
+    assert [d["bench"] for d in cache.devices()] == ["dev", "pi2"]
+
+
+def test_cache_same_host_renamed_and_seen_by_another_address():
+    """Por MAC del host: renombrado y visto por otra URL (LAN → Tailscale) es el mismo bench."""
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://192.168.1.20:8080", id="dc:a6:32:00:00:01")])
+    cache.update([bench("dev", DEV_A, url="http://100.1.1.3:8080", id="dc:a6:32:00:00:01")])
+    assert [(st.bench.name, st.online) for st in cache.states()] == [("dev", True)]
+    assert cache.get("dev") is not None and cache.get("sensipi03") is None
+
+
+def test_cache_legacy_bench_upgraded_to_id():
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080")])                      # sin id
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080", id="dc:a6:32:00:00:01")])
+    assert len(cache.states()) == 1 and cache.states()[0].bench.id == "dc:a6:32:00:00:01"
+
+
+def test_cache_two_hosts_same_name_get_distinct_names():
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("raspberrypi", DEV_A, url="http://10.0.0.1:8080", id="aa:00:00:00:00:01"),
+                  bench("raspberrypi", DEV_B, url="http://10.0.0.2:8080", id="aa:00:00:00:00:02")])
+    names = sorted(st.bench.name for st in cache.states())
+    assert names == ["raspberrypi-0001", "raspberrypi-0002"]
+    assert cache.get("raspberrypi-0002").bench.devices == [DEV_B]
 
 
 def test_cache_devices_failure_keeps_previous_snapshot():
@@ -238,7 +273,7 @@ def test_proxy_serves_real_bench_frontend_with_relative_urls():
             return (await c.get("/bench/pi1/"), await c.get("/bench/pi1/device.html?tty=esp-slot1"),
                     await c.get("/bench/pi1/espbench.js"), await c.get("/bench/pi1/api/version"))
     index, device, js, version = run(go())
-    assert index.status_code == 200 and "fetch('api/devices')" in index.text
+    assert index.status_code == 200 and "getJson('api/devices')" in index.text
     assert 'href="/' not in index.text and 'href="/' not in device.text
     assert "EB.wsUrl(location, 'ws/device/'" in device.text
     assert js.status_code == 200
@@ -260,7 +295,8 @@ def test_note_and_props_reach_the_master_and_the_bench_catalog_through_the_proxy
     devices, props, master_index, bench_index = run(go())
     assert devices[0]["note"] == "dev ana" and devices[0]["props"] == {"chip": "esp32-s3", "estado": "no-tocar"}
     assert [c["id"] for c in props["categories"]][:3] == ["estado", "uso", "chip"]
-    assert "EB.propChipsHtml" in master_index and "/api/properties" in master_index
+    # los chips los dibuja EB.boardCardHtml (espbench.js) con la unión de los catálogos
+    assert "EB.mergeCatalogs" in master_index and "'api/properties'" in master_index and "catalog: catalog" in master_index
     assert 'src="meta.js"' in bench_index            # relativo: anda bajo /bench/<n>/
 
 

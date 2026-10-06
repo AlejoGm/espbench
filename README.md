@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.39.3
+**Version:** 0.40.0
 
 ---
 
@@ -247,7 +247,7 @@ placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_H
 
 ## Dashboard
 
-Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and real-time serial logs via WebSocket.
+Web UI at `http://<pi-ip>:8080`, light or dark theme: the bench (temperature, RAM, disk, load, uptime), each board with its status, uptime, last log and 24 h activity, and a live serial monitor with events, history and console.
 
 Escrituras, token de la API y cómo liberar una placa: ver [Despliegue y seguridad](#despliegue-y-seguridad).
 

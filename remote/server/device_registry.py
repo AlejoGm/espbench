@@ -239,6 +239,9 @@ class DeviceInfo:
     note_by: Optional[str] = None
     note_at: Optional[str] = None
     props: dict = dataclasses.field(default_factory=dict)
+    # Última escritura del log de la sesión (epoch): el dashboard marca "sin log"
+    # una placa que monitorea pero no imprime nada hace rato.
+    last_log_epoch: Optional[float] = None
 
 
 class DeviceRegistry:
@@ -343,7 +346,15 @@ class DeviceRegistry:
             note_by=entry.get("note_by"),
             note_at=entry.get("note_at"),
             props=dict(entry.get("props") or {}),
+            last_log_epoch=self._log_mtime(state),
         )
+
+    @staticmethod
+    def _log_mtime(state: dict) -> Optional[float]:
+        try:
+            return os.stat(state["log_path"]).st_mtime if state.get("log_path") else None
+        except OSError:
+            return None
 
     @staticmethod
     def _get_last_flash_user(tty_name: str, mac: Optional[str] = None) -> Optional[str]:

@@ -8,8 +8,9 @@ puerto 8080): una Raspberry Pi u otra máquina. Se buscan en dos fuentes:
 - Config: hosts listados a mano (benches fuera de la tailnet).
 
 A cada candidato se le pide GET /api/version. Es bench si contesta
-{"app": "espbench", ...}; el nombre lo declara el propio bench (`name`), así
-el mismo bench visto por LAN y por Tailscale cuenta una sola vez.
+{"app": "espbench", ...}. Lo identifica la MAC de la máquina (`id`): el mismo
+bench visto por LAN y por Tailscale cuenta una sola vez, y renombrarlo no lo
+convierte en otro. El nombre (`name`) lo declara el bench y es para mostrar.
 
 Solo stdlib: lo usan deploy.py, bench-master y el CLI de agentes.
 
@@ -65,6 +66,12 @@ class Bench:
     devices: List[dict] = dataclasses.field(default_factory=list)
     auth: Optional[bool] = None     # el bench tiene token de la API (/api/version)
     legacy: bool = False            # sin `app: espbench`: bench viejo (sin /api/board, reservas, notas)
+    id: Optional[str] = None        # MAC de la máquina (/api/version); None en benches viejos
+
+    @property
+    def key(self) -> str:
+        """Identidad: la MAC del host; sin ella (bench viejo), el nombre."""
+        return self.id or "name:" + self.name
 
 
 # ---------- config ----------
@@ -155,7 +162,8 @@ def probe(c: Candidate, timeout: float, get_json: Callable = http_get_json) -> O
         return None
     return Bench(name=str(info.get("name") or c.label or c.address), url=c.url, address=c.address,
                  port=c.port, source=c.source, version=info.get("version"), ok=True,
-                 auth=info.get("auth") if isinstance(info.get("auth"), bool) else None, legacy=legacy)
+                 auth=info.get("auth") if isinstance(info.get("auth"), bool) else None, legacy=legacy,
+                 id=str(info["id"]).lower() if info.get("id") else None)
 
 
 def fetch_devices(b: Bench, timeout: float, get_json: Callable = http_get_json) -> Bench:
@@ -189,14 +197,14 @@ def scan(cfg: Optional[dict] = None, status: Optional[dict] = None,
         found = list(ex.map(lambda c: probe(c, timeout, get_json), cands))
         benches, seen = [], set()
         for b in found:
-            if b and b.name not in seen:
-                seen.add(b.name)
+            if b and b.key not in seen:          # el mismo host por LAN y por Tailscale cuenta una vez
+                seen.add(b.key)
                 benches.append(b)
         list(ex.map(lambda b: fetch_devices(b, timeout, get_json), benches))
     return benches
 
 
-_CACHED_FIELDS = ("name", "url", "address", "port", "source", "version", "auth", "legacy")
+_CACHED_FIELDS = ("name", "url", "address", "port", "source", "version", "auth", "legacy", "id")
 
 
 def _load_cache(path: pathlib.Path, ttl_s: float, now: float) -> Optional[List[Bench]]:

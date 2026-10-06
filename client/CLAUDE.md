@@ -57,10 +57,11 @@ Solo stdlib: lo usan `deploy.py`, bench-master (`master/`) y el CLI `espbench` s
 - Candidatos: peers **online** de `tailscale status --json` + `hosts` de `~/.config/espbench-benches.json`
   (`ESPBENCH_BENCHES_CONFIG` para otra ruta): `{"tailscale": true, "hosts": ["10.0.0.5", "lab:8080"], "timeout_s": 2}`.
 - Es bench si `GET /api/version` devuelve `app: "espbench"` (o solo `{"version"}`, benches sin actualizar: `legacy`,
-  el CLI los ignora). El nombre lo declara el bench (`name`); dos caminos al mismo bench cuentan una vez.
+  el CLI los ignora). Lo identifica la MAC de la máquina (`id`, `Bench.key`; sin ella, el nombre): dos caminos al
+  mismo bench cuentan una vez.
 - `resolve(key)`: key = device_key, SN, MAC, tty, `<dev>@<bench>` o `<bench>/<tty>`. `ResolveError` (`kind`:
   `not_found` / `ambiguous`, con `hits`) si no está o si está en más de un bench.
-- `scan_cached(path, ttl_s)`: la lista de benches (no sus devices) se reusa `ttl_s` (30 s); los devices se piden siempre.
+- `scan_cached(path, ttl_s)`: la lista de benches (no sus devices, incluido su `id`) se reusa `ttl_s` (30 s); los devices se piden siempre.
 
 En `.flashcfg.json`, un remote de `deploy.py` **sin `host`** (o `"host": "auto"`) se resuelve así: `{"name": "medidor-a", "lock_user": ..., "lock_token": ...}`.
 Un solo scan por corrida (`_benches_cache`).
