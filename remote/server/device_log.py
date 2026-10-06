@@ -236,22 +236,25 @@ class DeviceLog:
             yield
 
     def event(self, type_: str, detail: Optional[dict] = None, cursor=None,
-              ts: Optional[float] = None, by: str = "device") -> None:
+              ts: Optional[float] = None, by: str = "device") -> Optional[str]:
         """Registra un evento en events.jsonl. cursor: el que recibió line_sink
-        (str o posición del buffer), o None = fin de la última línea escrita."""
+        (str o posición del buffer), o None = fin de la última línea escrita.
+        Devuelve el cursor del evento (None si quedó pendiente pre-MAC o si el
+        log está cerrado)."""
         ts = self._clock() if ts is None else ts
         with self._lock:
             if self._closed:            # desconectado: no hay línea a la que apuntar
-                return
+                return None
             pos = self._pos() if cursor is None else cursor
             if isinstance(pos, _BufPos):
                 if self._buf_base is None:          # todavía en el buffer pre-MAC
                     self._pending_events.append((type_, detail, pos, ts, by))
-                    return
+                    return None
                 pos = self._buf_to_offset(pos)
             if isinstance(pos, int):
                 pos = format_cursor(self.session_id, pos)
             self._append_event(events.make(type_, pos, detail, by=by, ts=ts))
+            return pos
 
     # ---------- adopción ----------
 

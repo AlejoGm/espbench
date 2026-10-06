@@ -422,3 +422,70 @@ def test_flash_event_on_failure(esp_base):
 def test_rejected_request_is_not_a_flash_event(esp_base):
     request({"action": "upload_and_flash", "lock_user": "", "lock_token": ""})
     assert _flash_events(esp_base) == []
+
+
+# ---------- respuesta final fuera de monitor_paused (spec §8.2) ----------
+
+def test_done_arrives_with_monitor_restarted_and_fsm_monitoring(esp_base):
+    """Antes el done salía dentro de monitor_paused: un send inmediato del
+    cliente daba 409 (flashing) y el monitor todavía no estaba. start() espera
+    (con tope) a que el cliente vea el done: con el orden viejo, el cliente lo
+    ve con el monitor parado y la FSM en flashing."""
+    payload = make_artifact()
+    device = make_device()
+    done_seen = threading.Event()
+
+    class SlowStartMonitor(FakeMonitor):
+        def start(self):
+            done_seen.wait(1.0)
+            super().start()
+
+    mon = SlowStartMonitor()
+    client, server = socket.socketpair()
+    t = threading.Thread(target=protocol.serve_connection, args=(server, CFG, mon, device, FakeTools()))
+    t.start()
+    send_msg(client, flash_header(payload))
+    assert recv_msg(client)["phase"] == "ready"
+    client.sendall(payload)
+    while True:
+        m = recv_msg(client)
+        if "ok" in m:
+            break
+    seen = (list(mon.calls), device.state)
+    done_seen.set()
+    t.join(timeout=10)
+    client.close()
+    assert m["phase"] == "done" and m["ok"]
+    assert seen == (["stop", "start"], DeviceState.MONITORING)
+
+
+def test_done_carries_flash_event_cursor_before_monitor_lines(esp_base):
+    """El cursor del flash es anterior a todo lo que imprime el monitor
+    relanzado (si no, --since flash perdería el rst: del firmware nuevo)."""
+    from server import events
+
+    class TalkingMonitor(FakeMonitor):
+        def __init__(self, device):
+            super().__init__()
+            self.device = device
+
+        def start(self):
+            super().start()
+            self.device.device_log.write_serial(b"rst:0x1 (POWERON_RESET),boot:0x13\r\n")
+
+    payload = make_artifact()
+    device = make_device()
+    done = final(request(flash_header(payload), payload, mon=TalkingMonitor(device), device=device))
+    (flash,) = _flash_events(esp_base)
+    assert done["cursor"] == flash["cursor"]
+    boot = [e for e in events.read(esp_base / "devices" / "AABBCCDDEEFF" / "events.jsonl") if e["type"] == "boot"]
+    assert events.parse_cursor(boot[-1]["cursor"])[1] >= events.parse_cursor(flash["cursor"])[1]
+    assert _result(esp_base)["cursor"] == flash["cursor"]
+
+
+def test_failed_flash_also_answers_after_resume_with_cursor():
+    payload = make_artifact()
+    mon, device = FakeMonitor(), make_device()
+    done = final(request(flash_header(payload), payload, FakeTools(mac="11:22:33:44:55:66"), mon, device=device))
+    assert done["error"] == "device_changed" and done["cursor"].startswith("c:")
+    assert mon.calls == ["stop", "start"] and device.state == DeviceState.MONITORING

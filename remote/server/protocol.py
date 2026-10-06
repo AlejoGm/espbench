@@ -346,16 +346,18 @@ def write_result(jobdir: pathlib.Path, meta: dict, resp: dict) -> None:
         taglog.warn(TAG, f"no se pudo escribir result.json: {e}")
 
 
-def record_flash_event(device: Device, job_id: str, user: str, resp: dict) -> None:
-    """Evento `flash` en events.jsonl, con la respuesta final (éxito o fallo)."""
+def record_flash_event(device: Device, job_id: str, user: str, resp: dict) -> Optional[str]:
+    """Evento `flash` en events.jsonl, con la respuesta final (éxito o fallo).
+    Devuelve su cursor (None si no se pudo registrar)."""
     ok = bool(resp.get("ok"))
     try:
-        device.device_log.event("flash", {
+        return device.device_log.event("flash", {
             "job_id": job_id, "ok": ok,
             "status": resp.get("status") or ("exitoso" if ok else "fallido"),
             "error": resp.get("error"), "user": user})
     except Exception as e:
         taglog.warn(TAG, f"no se pudo registrar el evento flash: {e}")
+        return None
 
 
 # ---------- rutas y estado del device ----------
@@ -425,19 +427,22 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
     meta = {"job_id": job_id, "action": action, "user": user, "mac": device.mac,
             "requested_at": dt.datetime.now().isoformat(timespec="seconds")}
 
-    def reply(resp: dict) -> None:
+    def finish(resp: dict) -> dict:
+        """Evento `flash` + result.json, con el cursor del evento en la respuesta.
+        Va ANTES de reanudar el monitor: si no, el primer boot del firmware nuevo
+        podría quedar con un cursor anterior al del flash (--since flash no lo ve)."""
+        cursor = record_flash_event(device, job_id, user, resp)
+        if cursor:
+            resp = {**resp, "cursor": cursor}
         write_result(jobdir, meta, resp)
-        record_flash_event(device, job_id, user, resp)
-        send_msg(sock, resp)
+        return resp
 
     artifact = jobdir / "artifact.zip"
     try:
         receive_artifact(sock, header, action, artifact)   # errores -> control_server responde "exception"
         extract_artifact(artifact, jobdir)
     except Exception as e:
-        failed = {"ok": False, "error": "exception", "message": str(e)}
-        write_result(jobdir, meta, failed)
-        record_flash_event(device, job_id, user, failed)
+        finish({"ok": False, "error": "exception", "message": str(e)})
         raise
     params = flash_params(header, cfg)
     taglog.info(TAG, f"parámetros: chip={params['chip']} baud={params['baud']} "
@@ -445,38 +450,50 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
 
     job_log_path = jobdir / "job.log"
 
+    # La respuesta final sale DESPUÉS de monitor_paused: con el monitor relanzado y
+    # la FSM de nuevo en monitoring (un send inmediato del cliente ya no da 409).
+    final = None
     try:
         with monitor_paused(mon, device), _job_logger(job_id, job_log_path) as job_log:
             try:
-                esptool = tools.find_esptool()
+                resp = _flash_job(tools, tty, device, params, jobdir, job_log, job_log_path,
+                                  job_id, user, stream_line)
             except Exception as e:
-                taglog.error(TAG, f"esptool no encontrado: {e}")
-                reply({"ok": False, "error": "esptool_not_found", "message": str(e)})
-                return
-
-            mismatch = _device_changed(tools, tty, device)
-            if mismatch:
-                reply(mismatch)
-                return
-
-            try:
-                result = run_flash(tools, esptool, tty, params, jobdir, job_log, on_line=stream_line)
-            except Exception as e:
-                taglog.error(TAG, f"no se pudieron armar los comandos de flasheo: {e}")
-                reply({"ok": False, "error": "build_cmd_failed", "message": str(e)})
-                return
-
-            resp = flash_response(result, job_id, tty, params, job_log_path)
-            taglog.info(TAG, f"resultado: {resp['status']} (erase={result.rc_erase}, write={result.rc_write})")
-            if result.ok:
-                _after_success(jobdir, device, user)
-            reply({**resp, "phase": "done"})
-    except Exception as e:
+                taglog.error(TAG, f"error crítico durante el flash: {e}")
+                resp = {"ok": False, "error": "flash_critical_error", "message": str(e)}
+            final = finish(resp)
+    except Exception as e:      # al pausar o reanudar (FSM, job.log)
         taglog.error(TAG, f"error crítico durante el flash: {e}")
-        try:
-            reply({"ok": False, "error": "flash_critical_error", "message": str(e)})
-        except Exception:
-            pass
+        if final is None:
+            final = finish({"ok": False, "error": "flash_critical_error", "message": str(e)})
+    send_msg(sock, final)
+
+
+def _flash_job(tools: FlashTools, tty: str, device: Device, params: dict, jobdir: pathlib.Path,
+               job_log, job_log_path: pathlib.Path, job_id: str, user: str, stream_line) -> dict:
+    """Con el monitor pausado: esptool, verificación de MAC, flash. Devuelve la
+    respuesta final (éxito o error)."""
+    try:
+        esptool = tools.find_esptool()
+    except Exception as e:
+        taglog.error(TAG, f"esptool no encontrado: {e}")
+        return {"ok": False, "error": "esptool_not_found", "message": str(e)}
+
+    mismatch = _device_changed(tools, tty, device)
+    if mismatch:
+        return mismatch
+
+    try:
+        result = run_flash(tools, esptool, tty, params, jobdir, job_log, on_line=stream_line)
+    except Exception as e:
+        taglog.error(TAG, f"no se pudieron armar los comandos de flasheo: {e}")
+        return {"ok": False, "error": "build_cmd_failed", "message": str(e)}
+
+    resp = flash_response(result, job_id, tty, params, job_log_path)
+    taglog.info(TAG, f"resultado: {resp['status']} (erase={result.rc_erase}, write={result.rc_write})")
+    if result.ok:
+        _after_success(jobdir, device, user)
+    return {**resp, "phase": "done"}
 
 
 def _device_changed(tools: FlashTools, tty: str, device: Device) -> Optional[dict]:

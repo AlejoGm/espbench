@@ -633,3 +633,14 @@ def test_short_writes_are_completed(monkeypatch, tmp_path):
     assert _bodies(_out_path(tmp_path))[1:] == [(">", "línea larga con ñ"), ("|", "INFO  | x              | otra")]
     assert log.end_cursor() == f"c:{log.session_id}:{_out_path(tmp_path).stat().st_size}"
     log.close()
+
+
+def test_event_returns_its_cursor(monkeypatch, tmp_path):
+    """protocol manda el cursor del evento flash en la respuesta final."""
+    log = make_log(monkeypatch, tmp_path)
+    assert log.event("state", {"to": "x"}) is None          # pre-MAC: queda pendiente
+    log.adopt("AA:BB:CC:DD:EE:FF")
+    size = _out_path(tmp_path).stat().st_size
+    assert log.event("flash", {}) == f"c:{log.session_id}:{size}"
+    log.close()
+    assert log.event("flash", {}) is None                    # cerrado: no hay línea

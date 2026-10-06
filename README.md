@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.21.0
+**Version:** 0.22.0
 
 ---
 
@@ -217,7 +217,7 @@ espbench/
 5. Pi checks token, device state (rejects with `device_busy` during an erase) and lock, then ACKs
 6. Upload artifact, Pi verifies SHA256
 7. Pi: device → FLASHING, stops monitor → `esptool write_flash` (retries without `--encrypt` on rc=2) → restarts monitor → back to MONITORING
-8. Client receives result JSON (esptool output is streamed live while flashing)
+8. Client receives result JSON (esptool output is streamed live while flashing), sent once the monitor is back up; it carries the `cursor` of the `flash` event in the device log
 
 ---
 

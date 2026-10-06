@@ -201,7 +201,7 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `panic` | `SerialWatch` | kind, reason, line |
 | `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor} |
 | `state` | `Device` (FSM), en cada transición; evento y línea taglog bajo el lock del `DeviceLog` (`atomic()`) | from, to |
-| `flash` | `protocol.py`, al armar la respuesta final | job_id, ok, status, error, user |
+| `flash` | `protocol.py`, con la respuesta final y antes de reanudar el monitor (§5) | job_id, ok, status, error, user |
 | `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user |
 | `reserve` / `release` | api | user, expires |
 
@@ -243,9 +243,17 @@ authenticate → validate_action → check_flashable (FSM) → LockStore
 → monitor_paused [device.start_flash · mon.stop]
       verificar MAC → run_flash (erase? + write, reintento sin --encrypt si rc=2)
       → .elf a devices/<mac>/current.elf, last_user
+      → evento flash + result.json
   [mon.start · device.finish_flash]
-→ {phase: done, ok, status, write_rc, ...}
+→ {phase: done, ok, status, write_rc, ..., cursor}
 ```
+
+- **La respuesta final sale después de `monitor_paused`**: con el monitor
+  relanzado y la FSM de vuelta en `monitoring` (antes salía adentro, y un `send`
+  inmediato del cliente daba 409). Lleva el `cursor` del evento `flash`.
+- **El evento `flash` se registra antes de reanudar el monitor**: su cursor queda
+  antes de todo lo que imprima el firmware nuevo, así `--since flash --until boot`
+  ve el primer `rst:`.
 
 - Cada paso es una función aparte, testeable con fakes (`tests/test_protocol.py`).
   Las herramientas externas (esptool, lectura de MAC) llegan en `FlashTools`.
