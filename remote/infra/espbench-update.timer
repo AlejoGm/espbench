@@ -1,0 +1,11 @@
+[Unit]
+Description=espbench: update automático al boot y cada noche
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*-*-* 04:00
+# Que no se actualicen todos los benches en el mismo minuto.
+RandomizedDelaySec=20min
+
+[Install]
+WantedBy=timers.target

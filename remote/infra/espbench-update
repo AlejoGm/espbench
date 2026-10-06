@@ -1,0 +1,189 @@
+#!/bin/bash
+# espbench-update — actualiza el bench: fetch + checkout + install.sh + restart, con rollback.
+#
+#   espbench-update               manual: al PIN si hay uno (trae lo último de esa rama), si no al último release
+#   espbench-update --release     manual: al último release y saca el PIN
+#   espbench-update --ref <ref>   manual: a una rama, tag o commit, y queda fijo ahí (PIN) para probar
+#   espbench-update --auto        timer (boot y nocturno): al último release; nada si hay PIN o el bench está ocupado
+#   espbench-update --force ...   manual aunque una placa esté flasheando o reservada
+#
+# Release = tag vX.Y.Z. Config: $ESP_BASE/update.conf (REPO_DIR, PIN; lo escribe install.sh).
+# Estado del último update: $ESP_BASE/update_status.json (lo lee GET /api/update). Log: $ESP_BASE/update.log.
+# Después de instalar, el dashboard tiene que contestar /api/version con la versión nueva; si no, vuelve al
+# commit anterior. Corre como root.
+set -uo pipefail
+
+# install.sh reemplaza este archivo mientras corre: bash lee el script de a pedazos, así que corre de una copia.
+if [ -z "${_ESPBENCH_UPDATE_COPY:-}" ]; then
+    tmp="$(mktemp "${TMPDIR:-/tmp}/espbench-update.XXXXXX")"
+    cp "$0" "$tmp"
+    _ESPBENCH_UPDATE_COPY="$tmp" exec bash "$tmp" "$@"
+fi
+trap 'rm -f "$_ESPBENCH_UPDATE_COPY"' EXIT
+
+ESP_BASE="${ESP_BASE:-/opt/esp}"
+CONF="$ESP_BASE/update.conf"
+STATUS="$ESP_BASE/update_status.json"
+LOG="$ESP_BASE/update.log"
+LOCK="$ESP_BASE/update.lock"
+DASHBOARD_URL="${ESPBENCH_DASHBOARD_URL:-http://127.0.0.1:8080}"
+HEALTH_TIMEOUT="${ESPBENCH_HEALTH_TIMEOUT:-60}"
+PY="${ESPBENCH_PYTHON:-$ESP_BASE/venv/bin/python}"
+PYPATH="${ESPBENCH_PYTHONPATH:-$ESP_BASE}"
+RELEASE_GLOB='v[0-9]*.[0-9]*.[0-9]*'
+
+mode=manual; target_kind=default; ref=""; force=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --auto)    mode=auto ;;
+        --release) target_kind=release ;;
+        --ref)     target_kind=ref; ref="${2:?--ref necesita una rama, tag o commit}"; shift ;;
+        --force)   force=1 ;;
+        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        *)         echo "opción desconocida: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+case "$ref" in -*) echo "ref no válida: $ref" >&2; exit 2 ;; esac
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
+
+conf_get() { [ -f "$CONF" ] && sed -n "s/^$1=//p" "$CONF" | tail -1; }
+conf_set() {   # conf_set KEY VALUE: reemplaza la línea o la agrega
+    local tmp; tmp="$(mktemp)"
+    { [ -f "$CONF" ] && grep -v "^$1=" "$CONF"; echo "$1=$2"; } > "$tmp"
+    mv "$tmp" "$CONF"
+}
+
+# status STATE MESSAGE: update_status.json (atómico). Los campos salen de variables globales.
+status() {
+    local tmp; tmp="$(mktemp)"
+    python3 - "$tmp" "$1" "$2" "$mode" "${target_label:-}" "${from_sha:-}" "${from_version:-}" \
+        "${to_sha:-}" "${to_version:-}" "$(conf_get PIN)" "$started_at" <<'EOF'
+import datetime, json, sys
+out, state, msg, mode, target, fsha, fver, tsha, tver, pin, started = sys.argv[1:]
+now = datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()
+json.dump({"state": state, "message": msg, "mode": mode, "target": target or None,
+           "from": {"commit": fsha[:12] or None, "version": fver or None},
+           "to": {"commit": tsha[:12] or None, "version": tver or None},
+           "pin": pin or None, "started_at": started,
+           "finished_at": None if state == "running" else now}, open(out, "w"))
+EOF
+    chmod 644 "$tmp"
+    mv "$tmp" "$STATUS"
+}
+
+finish() {   # finish STATE MESSAGE EXIT_CODE
+    status "$1" "$2"
+    log "$1: $2"
+    exit "$3"
+}
+
+started_at="$(python3 -c 'import datetime; print(datetime.datetime.now().astimezone().replace(microsecond=0).isoformat())')"
+
+# ---------- un update a la vez (mkdir es atómico; flock no está en todos lados) ----------
+if ! mkdir "$LOCK" 2>/dev/null; then
+    other="$(cat "$LOCK/pid" 2>/dev/null)"
+    if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
+        echo "ya hay un update corriendo (pid $other)" >&2
+        exit 75
+    fi
+    rm -rf "$LOCK"; mkdir "$LOCK" || exit 75          # lock de un update que murió
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"; rm -f "$_ESPBENCH_UPDATE_COPY"' EXIT
+
+REPO_DIR="${ESPBENCH_REPO_DIR:-$(conf_get REPO_DIR)}"
+[ -n "$REPO_DIR" ] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
+    || finish failed "no encuentro el repo (REPO_DIR en $CONF): corré install.sh desde el clone" 1
+
+pin="$(conf_get PIN)"
+if [ "$mode" = auto ] && [ -n "$pin" ]; then
+    finish skipped "fijo en '$pin' (PIN): el update automático no lo toca. Volver: espbench-update --release" 0
+fi
+
+log "=== espbench-update ($mode) en $REPO_DIR ==="
+status running "buscando cambios"
+
+# ---------- fetch ----------
+# Sin `timeout` en todos lados: git corta si la transferencia se queda por debajo de 1 KB/s durante 30 s.
+if ! GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30 \
+        git -C "$REPO_DIR" fetch --prune --tags --force origin >>"$LOG" 2>&1; then
+    [ "$mode" = auto ] && finish skipped "sin conexión con origin (git fetch falló)" 0
+    finish failed "git fetch falló (ver $LOG)" 1
+fi
+
+latest_release() { git -C "$REPO_DIR" tag -l "$RELEASE_GLOB" --sort=-v:refname | head -1; }
+
+resolve() {   # resolve REF → sha (rama de origin, tag o commit)
+    local r="$1" c
+    for c in "refs/remotes/origin/$r" "refs/tags/$r" "$r"; do
+        git -C "$REPO_DIR" rev-parse --verify -q "$c^{commit}" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+case "$target_kind" in
+    ref)     target_label="$ref" ;;
+    release) target_label="" ;;
+    default) target_label="${pin:-}" ;;
+esac
+if [ -z "$target_label" ]; then
+    target_label="$(latest_release)"
+    [ -n "$target_label" ] || finish skipped "no hay releases (tags vX.Y.Z) en origin" 0
+fi
+to_sha="$(resolve "$target_label")" || finish failed "'$target_label' no es una rama, tag ni commit de origin" 1
+
+from_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
+from_version="$(cat "$ESP_BASE/VERSION" 2>/dev/null || true)"
+to_version="$(git -C "$REPO_DIR" show "$to_sha:VERSION" 2>/dev/null | head -1)"
+
+# El PIN refleja lo que se pidió, aunque no haya nada que instalar.
+case "$target_kind" in
+    ref)     conf_set PIN "$ref" ;;
+    release) conf_set PIN "" ;;
+esac
+
+if [ "$to_sha" = "$from_sha" ] && [ "$from_version" = "$to_version" ]; then
+    finish up_to_date "ya está en $target_label ($to_version, ${to_sha:0:7})" 0
+fi
+
+# ---------- ¿bench ocupado? ----------
+busy="$(cd "$PYPATH" 2>/dev/null && ESP_BASE="$ESP_BASE" PYTHONPATH="$PYPATH" "$PY" -m server.update busy 2>/dev/null)"
+if [ -n "$busy" ] && [ "$force" != 1 ]; then
+    [ "$mode" = auto ] && finish skipped "ocupado: $busy (se reintenta en el próximo update automático)" 0
+    finish failed "ocupado: $busy (--force para actualizar igual)" 1
+fi
+
+# ---------- instalar y verificar ----------
+deploy() {   # deploy SHA
+    git -C "$REPO_DIR" checkout -q -f --detach "$1" >>"$LOG" 2>&1 || return 1
+    bash "$REPO_DIR/remote/install.sh" >>"$LOG" 2>&1 || return 1
+    systemctl restart dashboard >>"$LOG" 2>&1 || return 1
+    devremote --reset >>"$LOG" 2>&1 || log "devremote --reset falló (las sesiones se levantan con: devremote)"
+    return 0
+}
+
+healthy() {   # healthy VERSION: el dashboard contesta /api/version con esa versión
+    local want="$1" got i
+    for ((i = 0; i < HEALTH_TIMEOUT; i += 2)); do
+        got="$(curl -fsS -m 3 "$DASHBOARD_URL/api/version" 2>/dev/null \
+               | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
+        [ "$got" = "$want" ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
+log "actualizando ${from_version:-?} (${from_sha:0:7}) → $to_version ($target_label, ${to_sha:0:7})"
+status running "instalando $target_label"
+if deploy "$to_sha" && healthy "$to_version"; then
+    finish ok "actualizado a $target_label ($to_version, ${to_sha:0:7})" 0
+fi
+
+log "el update falló: vuelvo a ${from_sha:0:7}"
+status running "rollback a ${from_sha:0:7}"
+if deploy "$from_sha" && healthy "$from_version"; then
+    finish rolled_back "$target_label no levantó; quedó en ${from_version:-?} (${from_sha:0:7}). Ver $LOG" 1
+fi
+finish failed "$target_label no levantó y el rollback tampoco: entrar al bench (ver $LOG)" 1

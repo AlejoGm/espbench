@@ -349,6 +349,7 @@ boot ─────► devremote.service ────────────�
 
 | Endpoint | |
 |---|---|
+| `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
 | `GET /api/version` | `{app: "espbench", version, name, auth}`: identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
@@ -586,3 +587,33 @@ client/benches.py ── tailscale status --json (peers online) + ~/.config/espb
   frontend usa URLs relativas (§8).
 - **Seguridad**: el master escucha en 127.0.0.1 y rechaza `Host` ajeno (DNS rebinding) y escrituras/WebSocket con
   `Origin` ajeno (CSRF). El control de acceso a los benches es de Tailscale: ver `docs/security.md`.
+
+---
+
+## 13. Updates del bench (`remote/infra/espbench-update`)
+
+```
+espbench-update.timer (boot+3 min, 04:00) ─► espbench-update --auto ─┐
+POST /api/update (bench-master ⟳) ─► sudo systemd-run ─► --ref X / --release ─┤
+sudo espbench-update / update.sh [ref] ──────────────────────────────────────┘
+      └─ /opt/esp/update.conf (REPO_DIR, PIN) → git fetch → checkout --detach <target>
+         → install.sh → restart dashboard → devremote --reset → /api/version == VERSION ?
+                                                                 └─ no: checkout del commit anterior + install (rollback)
+```
+
+- **Qué sigue un bench**: el último tag `vX.Y.Z` (orden de versión, no de fecha), salvo que tenga **PIN**: una rama,
+  tag o commit fijado con `--ref` (para probar algo sin release). `--auto` no toca un bench con PIN; `--release` lo
+  saca. Una instalación nueva desde un clone que no está en un release queda con PIN en su rama.
+- **Dónde está el clone**: `install.sh` escribe `REPO_DIR` en `update.conf`. Convención: `/opt/espbench`, de root:
+  el update corre como root (git incluido) y nadie toca ese clone a mano.
+- **Rollback**: el chequeo es que el dashboard conteste `/api/version` con el `VERSION` del commit nuevo en ≤ 60 s.
+  Si no, vuelve al commit anterior con el mismo camino. `update_status.json` queda en `rolled_back` (o `failed` si
+  el rollback tampoco levanta: hay que entrar al bench).
+- **Ocupado**: `--auto` no actualiza con una placa flasheando/borrando o una reserva vigente (`server/update.py`,
+  `busy_reason`); el manual falla salvo `--force`. Un lock de flash (sin vencimiento) no cuenta.
+- **Desde la API**: `POST /api/update` (`{ref?, force?}`, con el token si hay `api_token`) lanza el script con
+  `sudo systemd-run` en su propio unit: el update reinicia el dashboard, así que no puede ser hijo de él. `GET
+  /api/update` = `{version, pin, status}`.
+- **Un update a la vez**: lock con `mkdir` (`update.lock` con el pid; uno de un proceso muerto se toma).
+- El script corre de una copia temporal: `install.sh` reemplaza `/usr/local/bin/espbench-update` mientras corre.
+- **Riesgo**: quien pueda pushear tags al repo controla todos los benches sin PIN. Hoy el repo es de un solo dueño.

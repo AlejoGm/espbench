@@ -70,6 +70,12 @@ Corre en la máquina del dev, escuchando en `127.0.0.1`. Como su proxy da consol
 benches, rechaza `Host` ajeno (DNS rebinding) y escrituras o WebSockets con `Origin` ajeno (CSRF desde
 cualquier página abierta en el browser). Con `--host 0.0.0.0` lo ve toda la red: no hacerlo sin autenticación.
 
+## Updates automáticos
+
+Los benches sin PIN instalan solos el último tag `vX.Y.Z` del repo (boot + nocturno). Quien pueda pushear un tag
+controla lo que corre en todos esos benches: cuidar quién tiene permiso de escritura en el repo. `POST /api/update`
+deja mover un bench a cualquier rama/tag/commit **del repo** (no a otro origin): con `api_token` exige el token.
+
 ## Pendiente
 
 - Identidad en la API de los benches vía `tailscale whois` (quién mandó qué por la consola), para auditoría.

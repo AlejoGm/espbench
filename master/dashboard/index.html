@@ -36,6 +36,16 @@
         }
         .rescan-btn:disabled { opacity: 0.5; cursor: default; }
         .empty-state code { color: #c9d1d9; }
+        .bench-pin { color: #d29922; font-size: 0.78rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+        .upd { font-size: 0.75rem; border-radius: 4px; padding: 0 6px; }
+        .upd-running { color: #58a6ff; border: 1px solid #1f3a5f; }
+        .upd-bad { color: #ff7b72; border: 1px solid #5a2020; }
+        .upd-ok { color: #3fb950; border: 1px solid #1f4a2a; }
+        .upd-btn {
+            background: none; border: 1px solid #2e2e2e; border-radius: 6px; color: #8b949e;
+            padding: 0 8px; cursor: pointer; font-family: inherit; font-size: 0.75rem;
+        }
+        .upd-btn:hover { color: #e0e0e0; }
     </style>
 </head>
 <body>
@@ -66,7 +76,7 @@
     <script>
         var esc = EB.escapeHtml;
         var benchFilter = null;   // nombre del bench elegido, o null = todos
-        var lastBenches = [], lastDevices = [];
+        var lastBenches = [], lastDevices = [], updates = {};   // updates: GET bench/<n>/api/update
 
         function row(label, value) {
             return '<div class="card-row"><span class="card-label">' + label + '</span>' +
@@ -147,6 +157,61 @@
             }
         }
 
+        // Estado del último espbench-update del bench: solo lo que pide atención.
+        function updateHtml(u) {
+            if (!u) return '';
+            var html = u.pin ? '<span class="bench-pin" title="Fijo en esta ref: el update automático no lo toca">📌 ' +
+                               esc(u.pin) + '</span>' : '';
+            var st = u.status;
+            if (!st) return html;
+            var title = esc((st.message || '') + (st.finished_at ? ' — ' + st.finished_at : ''));
+            var recent = st.finished_at && Date.now() - new Date(st.finished_at).getTime() < 3600 * 1000;
+            if (st.state === 'running') html += ' <span class="upd upd-running" title="' + title + '">⟳ actualizando…</span>';
+            else if (st.state === 'rolled_back') html += ' <span class="upd upd-bad" title="' + title + '">↩ update a ' +
+                                                         esc(st.target || '?') + ' falló, volvió atrás</span>';
+            else if (st.state === 'failed') html += ' <span class="upd upd-bad" title="' + title + '">✗ update falló</span>';
+            else if (st.state === 'ok' && recent) html += ' <span class="upd upd-ok" title="' + title + '">✓ actualizado</span>';
+            return html;
+        }
+
+        function tokenKey(name) { return 'eb.apiToken:/bench/' + name + '/'; }   // la misma clave que auth.js del bench
+        function getToken(name) { try { return localStorage.getItem(tokenKey(name)) || ''; } catch (e) { return ''; } }
+        function setToken(name, t) { try { localStorage.setItem(tokenKey(name), t); } catch (e) {} }
+
+        function postUpdate(name, body, retried) {
+            var headers = {'Content-Type': 'application/json'};
+            var token = getToken(name);
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            return fetch('bench/' + encodeURIComponent(name) + '/api/update', {
+                method: 'POST', headers: headers, body: JSON.stringify(body)
+            }).then(function(r) {
+                if (r.status === 401 && !retried) {
+                    var t = prompt('El bench ' + name + ' pide el token de la API:');
+                    if (!t) return;
+                    setToken(name, t.trim());
+                    return postUpdate(name, body, true);
+                }
+                return r.json().then(function(d) {
+                    if (r.ok) return refresh();
+                    var det = d && d.detail;
+                    var msg = (det && (det.message || det.error)) || det || ('HTTP ' + r.status);
+                    if (r.status === 409 && /ocupado/.test(msg) && confirm(msg + '\n\n¿Actualizar igual?')) {
+                        return postUpdate(name, Object.assign({}, body, {force: true}), retried);
+                    }
+                    alert('Update de ' + name + ': ' + msg);
+                });
+            }).catch(function(e) { alert('Update de ' + name + ': ' + e); });
+        }
+
+        function askUpdate(b) {
+            var u = updates[b.name] || {};
+            var ref = prompt('Actualizar ' + b.name + ' (hoy v' + (b.version || '?') + (u.pin ? ', fijo en ' + u.pin : '') + ').\n\n' +
+                             'Rama, tag o commit para probar (queda fijo ahí).\n' +
+                             'Vacío = último release (y vuelve a seguir los releases).', u.pin || '');
+            if (ref === null) return;
+            postUpdate(b.name, ref.trim() ? {ref: ref.trim()} : {});
+        }
+
         function benchHead(b) {
             var meta = [b.version ? 'v' + b.version : null, b.source, b.address].filter(Boolean).map(esc).join(' · ');
             var status = b.online ? '' :
@@ -155,6 +220,8 @@
             return '<div class="bench-head' + (b.online ? '' : ' offline') + '">' +
                        '<span class="bench-name"><span class="dot"></span>' + esc(b.name) + '</span>' +
                        '<span class="bench-meta">' + meta + ' · ' + b.device_count + ' devices</span>' + status +
+                       updateHtml(updates[b.name]) +
+                       (b.online ? '<button class="upd-btn" data-update="' + esc(b.name) + '" title="Actualizar el bench">⟳ update</button>' : '') +
                        '<a href="bench/' + encodeURIComponent(b.name) + '/">dashboard del bench →</a>' +
                    '</div>';
         }
@@ -190,6 +257,8 @@
                 var section = document.createElement('section');
                 section.className = 'bench-section' + (b.online ? '' : ' offline');
                 section.innerHTML = benchHead(b);
+                var ub = section.querySelector('[data-update]');
+                if (ub) ub.addEventListener('click', function() { askUpdate(b); });
                 var grid = document.createElement('div');
                 grid.className = 'cards-grid';
                 devices.forEach(function(d) { if (d.bench === b.name) grid.appendChild(buildCard(d)); });
@@ -236,9 +305,22 @@
             return fetch(url, opts).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
         }
 
+        // Un bench sin /api/update (versión vieja) queda sin estado de update.
+        function fetchUpdates(benches) {
+            return Promise.all(benches.filter(function(b) { return b.online; }).map(function(b) {
+                return getJson('bench/' + encodeURIComponent(b.name) + '/api/update')
+                    .then(function(u) { updates[b.name] = u; })
+                    .catch(function() { delete updates[b.name]; });
+            }));
+        }
+
         function refresh() {
             return Promise.all([getJson('api/benches'), getJson('api/devices')])
-                .then(function(res) { lastBenches = res[0].benches; lastDevices = res[1]; render(); })
+                .then(function(res) {
+                    lastBenches = res[0].benches; lastDevices = res[1];
+                    return fetchUpdates(lastBenches);
+                })
+                .then(render)
                 .catch(function(err) { console.error('Error:', err); });
         }
 

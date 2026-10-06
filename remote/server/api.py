@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from server import auth, events, history, locks, logrange, paths, runstate, taglog
+from server import update as bench_update
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
@@ -526,6 +527,45 @@ async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authoriza
             detail.update(_forced_by(body, request))
         _record(state, "command", detail, cursor)
     return {"ok": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
+
+
+# ---------- update del bench (espbench-update) ----------
+
+@app.get("/api/update")
+async def get_update():
+    """Último espbench-update (`status`, None si nunca corrió) y si el bench está
+    fijo en una rama/tag/commit (`pin`; None = sigue los releases)."""
+    return {"version": _read_first_line(paths.version_file()) or "dev",
+            "pin": bench_update.read_pin(), "status": bench_update.read_status()}
+
+
+@app.post("/api/update")
+async def post_update(body: Optional[dict] = Body(None), authorization: Optional[str] = Header(None)):
+    """Actualiza el bench en segundo plano. `{"ref": "<rama|tag|commit>"}` lo deja
+    fijo ahí (para probar algo sin release); sin `ref`, al último release y sigue
+    los releases. Reinicia el dashboard: el resultado se ve en GET /api/update."""
+    _require_auth(authorization)
+    body = body if isinstance(body, dict) else {}
+    ref = str(body.get("ref") or "").strip()
+    force = body.get("force") is True
+    if ref and not bench_update.valid_ref(ref):
+        _fail(400, "bad_request", f"ref no válida: {ref!r}")
+    st = bench_update.read_status() or {}
+    if st.get("state") == "running":
+        _fail(409, "busy", f"ya hay un update corriendo ({st.get('message', '')})")
+    if not force:
+        reason = bench_update.busy_reason()
+        if reason:
+            _fail(409, "busy", f"bench ocupado: {reason} (force: true para actualizar igual)")
+    unit = f"espbench-update-manual-{int(time.time())}"
+    try:
+        r = await _run(bench_update.start_command(ref or None, force=force, unit=unit))
+    except FileNotFoundError as e:
+        _fail(502, "update_unavailable", f"no se pudo lanzar el update: {e}")
+    if r.returncode != 0:
+        _fail(502, "update_unavailable", f"no se pudo lanzar el update: {(r.stderr or r.stdout).strip()}")
+    taglog.info(TAG, f"update pedido: {ref or 'último release'} (unit {unit})")
+    return {"ok": True, "ref": ref or None, "unit": unit}
 
 
 @app.websocket("/ws/device/{tty:path}")

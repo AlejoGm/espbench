@@ -1,6 +1,7 @@
 """Tests de los endpoints de historial y consola de api.py. Sin TestClient (no
 hay httpx): se llaman los handlers directo."""
 import asyncio
+import os
 import pathlib
 import sys
 import time
@@ -736,3 +737,61 @@ def test_version_identifies_bench(monkeypatch):
 def test_version_without_files():
     r = run(api.get_version())
     assert r["app"] == "espbench" and r["version"] == "dev" and r["name"]
+
+
+# ---------- update del bench (espbench-update) ----------
+
+def test_get_update_status_and_pin():
+    r = run(api.get_update())
+    assert r["pin"] is None and r["status"] is None
+    paths.update_conf_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.update_conf_file().write_text("REPO_DIR=/opt/espbench\nPIN=feat/x\n")
+    paths.update_status_file().write_text('{"state": "ok", "target": "feat/x"}')
+    r = run(api.get_update())
+    assert r["pin"] == "feat/x" and r["status"] == {"state": "ok", "target": "feat/x"}
+    paths.update_conf_file().write_text("REPO_DIR=/opt/espbench\nPIN=\n")
+    assert run(api.get_update())["pin"] is None
+
+
+def test_post_update_launches_unit_outside_dashboard(tmux):
+    r = run(api.post_update({"ref": "feat/bench-master"}))
+    assert r["ok"] and r["ref"] == "feat/bench-master"
+    cmd = tmux[-1]
+    assert cmd[:4] == ["sudo", "-n", "systemd-run", f"--unit={r['unit']}"] and "--no-block" in cmd
+    assert cmd[-3:] == ["/usr/local/bin/espbench-update", "--ref", "feat/bench-master"]
+    run(api.post_update({}))
+    assert tmux[-1][-1] == "--release"
+    run(api.post_update({"force": True}))
+    assert tmux[-1][-2:] == ["--release", "--force"]
+
+
+@pytest.mark.parametrize("ref", ["--release", "-x", "a b", "../x", "a;rm", "x" * 101, "rama..mala"])
+def test_post_update_rejects_bad_refs(tmux, ref):
+    with pytest.raises(HTTPException) as e:
+        run(api.post_update({"ref": ref}))
+    assert err(e) == (400, "bad_request") and tmux == []
+
+
+def test_post_update_busy_or_already_running(tmux):
+    runstate.write("ttyUSB0", {"state": "flashing", "pid": os.getpid()})
+    with pytest.raises(HTTPException) as e:
+        run(api.post_update({}))
+    assert err(e) == (409, "busy") and "ttyUSB0 flashing" in e.value.detail["message"] and tmux == []
+    assert run(api.post_update({"force": True}))["ok"]
+    runstate.remove("ttyUSB0")
+    paths.update_status_file().write_text('{"state": "running", "message": "instalando v1.0.0"}')
+    with pytest.raises(HTTPException) as e:
+        run(api.post_update({"force": True}))
+    assert err(e) == (409, "busy")
+
+
+def test_post_update_needs_token_and_reports_launch_failure(tmux, monkeypatch):
+    set_token("s3cret")
+    with pytest.raises(HTTPException) as e:
+        run(api.post_update({}))
+    assert err(e) == (401, "auth") and tmux == []
+    monkeypatch.setattr(api.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(
+        returncode=1, stdout="", stderr="sudo: a password is required"))
+    with pytest.raises(HTTPException) as e:
+        run(api.post_update({}, authorization="Bearer s3cret"))
+    assert err(e) == (502, "update_unavailable") and "password" in e.value.detail["message"]

@@ -11,8 +11,8 @@ Todo lo que corre en la Raspberry Pi. Arquitectura: [../docs/ARCHITECTURE.md](..
 ## Instalar / actualizar
 
 ```bash
-sudo bash install.sh            # idempotente: /opt/esp/, venv, udev, systemd
-sudo bash infra/update.sh       # desde el clone: pull + install + restart
+sudo bash install.sh            # idempotente: /opt/esp/, venv, udev, systemd, update.conf
+sudo espbench-update            # update con rollback (solo: timer al boot y 04:00, sigue los releases)
 ```
 
 ## Modelo de procesos

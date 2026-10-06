@@ -61,6 +61,16 @@ def api_token_file() -> pathlib.Path:
     return esp_base() / "api_token"
 
 
+def update_conf_file() -> pathlib.Path:
+    """REPO_DIR y PIN de espbench-update (lo escribe install.sh)."""
+    return esp_base() / "update.conf"
+
+
+def update_status_file() -> pathlib.Path:
+    """Resultado del último espbench-update (no va en run/: ahí todo es un tty)."""
+    return esp_base() / "update_status.json"
+
+
 def bench_name_file() -> pathlib.Path:
     """(opcional) Nombre del bench para bench-master. Sin él, el hostname."""
     return esp_base() / "bench_name"

@@ -24,6 +24,7 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 | `auth.py` | ambos | Token opcional `/opt/esp/api_token`: escrituras del API (`Bearer`) y token del flash si no hay `--token` |
 | `locks.py` | ambos | `locks/<tty>`: `user:token[:expires[:mac]]` (lock del flash / reserva; `:` y `%` del par escapados); vencido = inexistente: **se ignora, no se borra al leerlo**; `python3 -m server.locks unlock <tty>` (lo usa `devremote --unlock`) |
 | `runstate.py` | ambos | `run/<tty>.json`: escritura atómica, lectura, `pid_alive` |
+| `update.py` | dashboard (+ `espbench-update`) | `busy_reason` (placa flasheando o reservada), PIN y estado del último update, comando para lanzarlo |
 | `paths.py` | ambos | Todas las rutas bajo `ESP_BASE` (default `/opt/esp`) |
 | `taglog.py` | ambos | Logging `taglog.info(TAG, msg)`, sinks pluggables |
 

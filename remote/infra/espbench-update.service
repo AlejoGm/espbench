@@ -1,0 +1,9 @@
+[Unit]
+Description=espbench: update automático al último release (tag vX.Y.Z), con rollback
+Wants=network-online.target
+After=network-online.target time-sync.target dashboard.service devremote.service
+
+[Service]
+Type=oneshot
+# --auto: no hace nada si el bench está fijo en una rama (PIN) o hay una placa flasheando o reservada.
+ExecStart=/usr/local/bin/espbench-update --auto

@@ -1,7 +1,7 @@
 # Guía de prueba: bench nuevo + bench-master
 
 Cómo probar la rama `feat/agents-bench-master` de punta a punta: primero sin hardware (en la Mac), después un
-bench real actualizado, y por último bench-master contra los benches de la tailnet. Lo específico de agentes
+bench real instalado de cero, y por último bench-master contra los benches de la tailnet. Lo específico de agentes
 (`espbench`, reservas, eventos, token) está en [PI_CHECKLIST.md](PI_CHECKLIST.md); acá solo se repite lo que
 cambia al pasar por bench-master.
 
@@ -73,34 +73,50 @@ Cortar todo con Ctrl-C al terminar.
 
 ---
 
-## 2. Actualizar un bench real
+## 2. Bench real: instalación desde cero
 
-En el bench (por ssh), desde el clone del repo:
+El clone va en `/opt/espbench` (de root); `install.sh` lo anota en `/opt/esp/update.conf` y de ahí en más el bench
+se actualiza solo. En el bench (por ssh):
 
 ```bash
-cd ~/espbench
-git fetch origin
-git switch feat/agents-bench-master        # la primera vez crea la rama local con upstream en origin
-sudo bash remote/infra/update.sh           # pull + install + restart dashboard + devremote --reset
+# 1. Parar todo
+sudo systemctl stop dashboard devremote
+sudo -u sfypi tmux kill-server 2>/dev/null; sudo pkill -f remote_esp32.py
+
+# 2. Backup de los nombres de las placas
+sudo cp /opt/esp/devices.json ~/devices.json.bak
+
+# 3. Borrar lo viejo (el toolchain se queda: son ~100 MB que el install volvería a bajar)
+sudo rm -rf /opt/espbench ~/espbench
+sudo find /opt/esp -mindepth 1 -maxdepth 1 ! -name toolchain -exec rm -rf {} +
+
+# 4. Clone en la rama a probar + install (queda con PIN en esa rama: el update automático no la pisa)
+sudo git clone -b feat/agents-bench-master https://github.com/AlejoGm/espbench.git /opt/espbench
+sudo bash /opt/espbench/remote/install.sh
+
+# 5. Nombres de vuelta, nombre del bench y arrancar
+sudo cp ~/devices.json.bak /opt/esp/devices.json && sudo chmod 666 /opt/esp/devices.json
+echo "sensipi04" | sudo tee /opt/esp/bench_name       # opcional: sin esto, el hostname
+sudo systemctl restart dashboard && sudo systemctl start devremote
 ```
+
+El paso 3 borra para siempre logs, historial de flasheos y jobs viejos: copiar antes lo que se quiera guardar.
 
 Checks en el bench:
 
-- [ ] `cat /opt/esp/VERSION` = `0.32.1` (o el `VERSION` del repo).
+- [ ] `cat /opt/esp/VERSION` = el `VERSION` del repo.
+- [ ] `cat /opt/esp/update.conf` → `REPO_DIR=/opt/espbench` y `PIN=feat/agents-bench-master`.
+- [ ] `systemctl list-timers espbench-update.timer` → programado (boot + 04:00).
 - [ ] `devremote --status`: todas las sesiones `RUNNING`.
 - [ ] Lo de **P0** de [PI_CHECKLIST.md](PI_CHECKLIST.md) (regex, time-sync, header de sesión, events.jsonl).
-
-Nombre del bench (opcional; sin esto se usa el hostname):
-
-```bash
-echo "lab-cordoba" | sudo tee /opt/esp/bench_name     # se lee en cada pedido: no hace falta reiniciar
-```
 
 Desde la Mac:
 
 ```bash
 curl -s http://<pi>:8080/api/version
-# {"app":"espbench","version":"0.32.0","name":"sensipi02","auth":false}
+# {"app":"espbench","version":"0.33.0","name":"sensipi04","auth":false}
+curl -s http://<pi>:8080/api/update
+# {"version":"0.33.0","pin":"feat/agents-bench-master","status":null}
 ```
 
 ### 2.1 Dashboard directo (que las URLs relativas no rompieron nada)
@@ -228,7 +244,45 @@ python3 -c "import sys; sys.path.insert(0, '$EB'); from client import benches; b
 
 ---
 
-## 5. Seguridad de Tailscale (cuando se decida aplicarla)
+## 5. Updates del bench (`espbench-update`)
+
+En el bench:
+
+```bash
+sudo espbench-update                         # al PIN (lo último de feat/agents-bench-master): up_to_date si no hay nada
+cat /opt/esp/update_status.json; tail -20 /opt/esp/update.log
+sudo systemctl start espbench-update.service # lo que corre el timer (--auto): con PIN → skipped
+```
+
+- [ ] `espbench-update` sin cambios → `state: up_to_date`, no reinicia nada.
+- [ ] Pushear un commit a la rama y `sudo espbench-update` → `state: ok`, `/api/version` con la versión nueva,
+      sesiones reiniciadas (`devremote --status`).
+- [ ] `--auto` con PIN → `skipped` ("fijo en ...").
+- [ ] Con una placa reservada (`espbench reserve <dev>`): `--auto` sin PIN → `skipped` (ocupado); manual → `failed`
+      salvo `--force`.
+- [ ] **Rollback**: rama de prueba con un `remote/server/api.py` roto a propósito (por ejemplo un `raise` al importar)
+      y `sudo espbench-update --ref <esa-rama>` → `state: rolled_back`, el bench vuelve a la versión anterior y el
+      dashboard anda. Borrar la rama después.
+
+Desde bench-master:
+
+- [ ] La cabecera del bench muestra `📌 feat/agents-bench-master`.
+- [ ] **⟳ update** con la misma rama → a los segundos `⟳ actualizando…`, el bench se va offline un momento (reinicia
+      el dashboard) y vuelve con `✓ actualizado`.
+- [ ] **⟳ update** con una ref que no existe → el bench queda igual y el estado dice `✗ update falló`.
+- [ ] Con `api_token` en el bench: lo pide una vez.
+
+Releases (cuando haya uno, desde main):
+
+```bash
+git tag v$(cat VERSION) && git push origin v$(cat VERSION)
+```
+
+- [ ] Un bench sin PIN (`sudo espbench-update --release`) pasa al tag; con el timer, esa misma noche.
+
+---
+
+## 6. Seguridad de Tailscale (cuando se decida aplicarla)
 
 Detalle y JSON de la política en [security.md](security.md). Orden sugerido:
 

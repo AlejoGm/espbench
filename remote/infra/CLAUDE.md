@@ -13,7 +13,9 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | `espbench-attach@.service` | systemd | Hotplug: `devremote --start %I` como `sfypi` | `/etc/systemd/system/` |
 | `devremote.service` | systemd | Al boot: levanta las sesiones de lo que ya esté enchufado. Espera a `time-sync.target` (la Pi no tiene RTC); `install.sh` habilita `systemd-time-wait-sync` con tope de 90 s | `/etc/systemd/system/` |
 | `dashboard.service` | systemd | `uvicorn server.api:app` en el puerto 8080 | `/etc/systemd/system/` |
-| `update.sh` | bash | Actualizar una Pi: fetch/pull + `install.sh` + restart dashboard + `devremote --reset` | (se corre desde el clone) |
+| `espbench-update` | bash | Update del bench con rollback: release (tag `vX.Y.Z`), o la ref fijada (PIN). Ver ARCHITECTURE §13 | `/usr/local/bin/` |
+| `espbench-update.service` / `.timer` | systemd | `espbench-update --auto` 3 min después del boot y a las 04:00 (± 20 min) | `/etc/systemd/system/` |
+| `update.sh` | bash | Atajo de `espbench-update` desde el clone: sin args, la rama del clone; `update.sh <ref>`; `--release` | (se corre desde el clone) |
 | `pip-deps.sh` | bash | Dependencias Python del venv (lo llama `install.sh`): `regex` aparte y opcional, su falla avisa y no aborta el install | (se corre desde el clone) |
 
 ## Nombres y puertos (`espbench-name`)
@@ -48,5 +50,7 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 udev → `espbench-attach@<tty>.service` → `devremote --start`. **No** usar `RUN+=` desde udev para lanzar tmux: corre en el tmux server de root y lo mata el fin del evento. La regla anterior hacía exactamente eso, y por eso el hotplug nunca funcionó.
 
 ## Tests
+
+`tests/test_update.py` corre `espbench-update` con git de verdad (origin bare con releases y ramas) y `install.sh`/`systemctl`/`devremote`/`curl` falsos: releases por versión, PIN, ocupado, rollback, lock.
 
 `tests/test_infra.py` corre estos scripts reales con `tmux`/`udevadm`/`pkill`/`sudo` falsos en el `PATH`. Para eso existen `ESPBENCH_DEV_DIR` y `DEVREMOTE_NO_REEXEC`, que **son solo para tests**. La regla udev y los units de systemd solo se verifican en la Pi.

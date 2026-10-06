@@ -160,6 +160,30 @@ info "Instalando espbench-name en /usr/local/bin/..."
 cp "$REMOTE_DIR/infra/espbench-name" /usr/local/bin/espbench-name
 chmod +x /usr/local/bin/espbench-name
 
+# espbench-update: se instala con cp + mv (no cp encima): si este install lo
+# corre el propio espbench-update, no se le pisa el archivo mientras corre.
+info "Instalando espbench-update en /usr/local/bin/..."
+cp "$REMOTE_DIR/infra/espbench-update" /usr/local/bin/.espbench-update.new
+chmod +x /usr/local/bin/.espbench-update.new
+mv -f /usr/local/bin/.espbench-update.new /usr/local/bin/espbench-update
+
+# update.conf: dónde está el clone (REPO_DIR, siempre el de este install) y el PIN.
+# Instalación nueva: si el clone no está en un release, queda fijo en su rama (o
+# commit), así el update automático no lo mueve a un release más viejo.
+UPDATE_CONF=/opt/esp/update.conf
+touch "$UPDATE_CONF"
+{ grep -v '^REPO_DIR=' "$UPDATE_CONF"; echo "REPO_DIR=$REPO_DIR"; } > "$UPDATE_CONF.tmp"
+mv -f "$UPDATE_CONF.tmp" "$UPDATE_CONF"
+if ! grep -q '^PIN=' "$UPDATE_CONF"; then
+    pin=""
+    if ! git -C "$REPO_DIR" describe --exact-match --tags --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD &>/dev/null; then
+        pin="$(git -C "$REPO_DIR" symbolic-ref -q --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+    fi
+    echo "PIN=$pin" >> "$UPDATE_CONF"
+fi
+chmod 644 "$UPDATE_CONF"
+info "update.conf: $(tr '\n' ' ' < "$UPDATE_CONF")"
+
 # ---------------------------------------------------------------------------
 # 8. Install udev rules
 # ---------------------------------------------------------------------------
@@ -190,6 +214,10 @@ cp "$REMOTE_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
 info "Instalando servicio de hotplug espbench-attach@..."
 cp "$REMOTE_DIR/infra/espbench-attach@.service" /etc/systemd/system/espbench-attach@.service
 
+info "Instalando update automático (espbench-update.timer: boot + 04:00)..."
+cp "$REMOTE_DIR/infra/espbench-update.service" /etc/systemd/system/espbench-update.service
+cp "$REMOTE_DIR/infra/espbench-update.timer" /etc/systemd/system/espbench-update.timer
+
 # ---------------------------------------------------------------------------
 # 10. Reload udev
 # ---------------------------------------------------------------------------
@@ -216,6 +244,7 @@ info "Habilitando servicios systemd..."
 systemctl daemon-reload
 systemctl enable devremote
 systemctl enable dashboard
+systemctl enable --now espbench-update.timer
 if systemctl cat systemd-time-wait-sync.service &>/dev/null; then
     systemctl enable systemd-time-wait-sync.service
 fi

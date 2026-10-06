@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.32.1
+**Version:** 0.33.0
 
 ---
 
@@ -41,10 +41,15 @@ sudo apt update && sudo apt install -y git tmux python3 python3-pip python3-venv
 
 ### 3. Clone repo
 
+The clone lives in `/opt/espbench`, owned by root: `install.sh` records it in `/opt/esp/update.conf` and the
+bench updates itself from there (see [Update](#update-existing-pi)). Nobody runs git by hand on the bench.
+
 ```bash
-git clone https://github.com/AlejoGm/espbench.git
-cd espbench
+sudo git clone https://github.com/AlejoGm/espbench.git /opt/espbench
+cd /opt/espbench
 ```
+
+To run a branch instead of the latest release, clone it with `-b <branch>`: the install pins the bench to it.
 
 ### 4. System hardening (optional but recommended)
 
@@ -98,11 +103,29 @@ Dashboard: `http://<pi-hostname>:8080`
 
 ## Update (existing Pi)
 
+Los benches siguen los **releases** (tags `vX.Y.Z`) solos: `espbench-update.timer` corre `espbench-update --auto`
+3 min después del boot y cada noche a las 04:00 (± 20 min). Instala el último release, reinicia `dashboard` y
+resetea las sesiones; si después el dashboard no contesta `/api/version` con la versión nueva, **vuelve al commit
+anterior**. No toca un bench ocupado (placa flasheando/borrando o con reserva vigente): reintenta la próxima vez.
+
 ```bash
-sudo bash remote/infra/update.sh
+sudo espbench-update                    # ahora: al PIN si hay, si no al último release
+sudo espbench-update --ref feat/x       # probar una rama/tag/commit: queda fijo ahí (PIN), el automático no lo toca
+sudo espbench-update --release          # volver a seguir los releases
+cat /opt/esp/update_status.json         # resultado del último update (también GET /api/update)
+tail -50 /opt/esp/update.log
 ```
 
-Hace `fetch` + `pull` (aborta si hay cambios locales sin commitear), reinstala, reinicia `dashboard` y resetea las sesiones de `devremote` (necesario para que los devices ya conectados corran el código nuevo — reiniciar el servicio `devremote` solo arranca sesiones que falten, no las existentes).
+Desde bench-master: botón **⟳ update** en cada bench (`POST /api/update`).
+
+**Publicar un release** (lo toman todos los benches sin PIN esa noche):
+
+```bash
+git switch main && git pull && git tag v$(cat VERSION) && git push origin v$(cat VERSION)
+```
+
+`remote/infra/update.sh` sigue andando desde el clone (`sudo bash remote/infra/update.sh [ref]`): es un atajo de
+`espbench-update` que, sin argumentos, actualiza la rama en la que está el clone.
 
 ---
 
@@ -367,6 +390,9 @@ espbench/
 │   └── jobs/<job_id>/            extracted artifact + job.log
 ├── locks/<tty>                   device lock (user:token[:expires[:mac]])
 ├── api_token                     (optional) API + flash token
+├── update.conf                   REPO_DIR (the clone, /opt/espbench) + PIN (empty = follow releases)
+├── update_status.json, update.log  last espbench-update
+├── bench_name                    (optional) bench name for bench-master
 └── VERSION
 ```
 
