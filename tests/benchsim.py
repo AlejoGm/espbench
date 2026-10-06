@@ -313,6 +313,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _route(self, method, parts, query, body, auth):
         if method == "GET" and parts == ["api", "devices"]:
             return _call(api.get_devices)
+        if method == "GET" and parts == ["api", "version"]:
+            return _call(api.get_version)
         if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "board"]:
             fn = {"log": api.board_log, "events": api.board_events}.get(parts[3])
             if fn is not None:

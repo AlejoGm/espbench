@@ -5,7 +5,7 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 
 # espbench
 
-`espbench` maneja placas ESP32 enchufadas a una Raspberry Pi (el banco): flash, consola serie, log con hora por línea y eventos por placa. Corre en esta máquina; la Pi la decide la config (`ESPBENCH_HOST` / `~/.config/espbench.json` / `remote.host` del `.flashcfg.json` del proyecto). `espbench <cmd> --help` tiene todas las opciones.
+`espbench` maneja placas ESP32 enchufadas a una Raspberry Pi (el banco): flash, consola serie, log con hora por línea y eventos por placa. Corre en esta máquina. Sin host configurado (`ESPBENCH_HOST` / `~/.config/espbench.json` / `remote.host` del `.flashcfg.json`) encuentra solo los benches de la tailnet: `espbench benches --json` los lista, `ls` muestra las placas de todos (campo `bench`) y cada comando busca la placa en todos. `espbench <cmd> --help` tiene todas las opciones.
 
 ## Configuración (una vez, antes de reservar)
 
@@ -14,7 +14,7 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 ## Reglas
 
 - **Siempre `--json`.** Cada comando imprime un solo objeto JSON. Decidí por el **exit code** y el string `error`, nunca parseando texto.
-- La placa se nombra por `device_key`, SN o MAC (`espbench ls` las lista). El tty puede cambiar entre comandos.
+- La placa se nombra por `device_key`, SN o MAC (`espbench ls` las lista). El tty puede cambiar entre comandos. Si está en dos benches (`ambiguous`, exit 7, `matches` dice dónde): `<dev>@<bench>` o `--bench <bench>`.
 - El build lo hacés vos (`idf.py build`); `espbench flash` sube lo que hay en `--build-dir` (default `build`).
 - El texto de cada `send` queda en el log de eventos de la Pi y cualquiera en la red lo lee: mandá comandos, nunca secretos.
 
@@ -80,7 +80,7 @@ Los logs se comen tokens. Pedí lo justo:
 | 4 | `timeout` | no apareció el `until`: mirá `lines` (¿salió otra cosa?) antes de subir el `--timeout` |
 | 5 | `busy` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos |
 | 6 | `locked`, `reservation_lost`, `token_mismatch` | `locked`: otra persona tiene la placa. `espbench who <dev> --json`: con `reservation: true` es una reserva (vence sola: elegí otra placa o esperá); con `reservation: false` es el **lock permanente de su último flash** (no vence): elegí otra placa con `available: true`, o pedile al usuario que el dueño la suelte (`python client/deploy.py --unlock` con su `.flashcfg.json`, o `devremote --unlock <tty>` en la Pi). Nunca reintentes en loop. `reservation_lost`: tu reserva venció o la soltaron; `message` dice cuál. Si venció y nadie la tomó, `espbench reserve <dev> --json` y reintentá la escritura una vez; si la tiene otro, pará y avisá |
-| 7 | `not_found`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
+| 7 | `not_found`, `ambiguous`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `ambiguous`: el mismo nombre en dos benches, elegí con `<dev>@<bench>`. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |
 | 9 | `session_ended` | la placa se desconectó o su proceso se relanzó: `espbench ls --json`; si volvió, seguí desde `--since session` |
 | 10 | `network`, `auth`, `auth_config` | sin conexión con la Pi o token de la API faltante/incorrecto (`ESPBENCH_TOKEN`): avisale al usuario |

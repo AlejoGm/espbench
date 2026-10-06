@@ -3,7 +3,8 @@
 """
 espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
 
-    espbench ls [--all]
+    espbench benches
+    espbench ls [--all] [--bench B]
     espbench status|who|reserve|release|restart-session <dev>
     espbench events <dev>|--all [--type a,b] [--since A] [--limit N]
     espbench logs <dev> [--since A] [--until X] [--around E] [--before N] [--after N] [--grep re]
@@ -12,11 +13,16 @@ espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
     espbench flash <dev> [--build-dir B] [--no-encrypt] [--erase] [--verify[=10s]] [--until X] [--timeout D]
     espbench reset <dev> [--bootloader] [--verify[=10s]] [--until X] [--timeout D]
 
-Comunes: --json, --host, --profile, --expect-panic. Con --json, un objeto JSON
-por comando en stdout. Exit codes y `error`: docs/specs/agents-cli.md §8.3.
+Comunes: --json, --host, --profile, --bench, --expect-panic. Con --json, un objeto
+JSON por comando en stdout. Exit codes y `error`: docs/specs/agents-cli.md §8.3.
+
+Sin host (--host, ESPBENCH_HOST, perfil, .flashcfg.json) los benches se encuentran
+solos (client/benches.py): `ls` lista las placas de todos y <dev> se busca en todos
+(`<dev>@<bench>` o --bench para elegir uno).
 """
 import argparse
 import contextlib
+import dataclasses
 import json
 import pathlib
 import re
@@ -32,6 +38,7 @@ from client.espbench_lib import EspbenchError  # noqa: E402
 class Out:
     def __init__(self, as_json: bool):
         self.json = as_json
+        self.extra = {}         # va en todo objeto (discovery: el bench donde está la placa)
 
     def log(self, msg: str) -> None:
         if not self.json:
@@ -39,6 +46,8 @@ class Out:
 
     def emit(self, obj: dict, human=None) -> int:
         error = obj.get("error") if not obj.get("ok", True) else None
+        if self.extra:
+            obj = {**obj, **{k: v for k, v in self.extra.items() if k not in obj}}
         if self.json:
             print(json.dumps(obj, ensure_ascii=False))
         else:
@@ -59,18 +68,35 @@ def _human_lines(r: dict) -> None:
         print(f"== {crash.get('type')} {json.dumps(crash.get('detail') or {}, ensure_ascii=False)}", file=sys.stderr)
 
 
+def _table(rows: list) -> None:
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+
+
 def _human_devices(r: dict) -> None:
-    rows = [("KEY", "SN", "MAC", "TTY", "STATE", "LIBRE", "LOCK", "FW")]
+    multi = any("bench" in d for d in r["devices"])
+    rows = [(("BENCH",) if multi else ()) + ("KEY", "SN", "MAC", "TTY", "STATE", "LIBRE", "LOCK", "FW")]
     for d in r["devices"]:
         lock = d.get("lock_user") or ""
         if lock and d.get("lock_expires"):
             lock += f" (hasta {d['lock_expires']})"
         fw = " ".join(x for x in (d.get("fw_project"), d.get("fw_version")) if x)
-        rows.append(tuple(str(x or "-") for x in (d["key"], d.get("sn"), d.get("mac"), d.get("tty"),
-                                                   d.get("state"), "sí" if d.get("available") else "no", lock, fw)))
-    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
-    for row in rows:
-        print("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+        cols = ((d.get("bench"),) if multi else ()) + (d["key"], d.get("sn"), d.get("mac"), d.get("tty"),
+                                                      d.get("state"), "sí" if d.get("available") else "no", lock, fw)
+        rows.append(tuple(str(x or "-") for x in cols))
+    _table(rows)
+    for e in r.get("errors") or []:
+        print(f"bench {e['bench']}: {e['error']}", file=sys.stderr)
+
+
+def _human_benches(r: dict) -> None:
+    rows = [("BENCH", "HOST", "VERSION", "AUTH", "PLACAS", "LIBRES", "")]
+    for b in r["benches"]:
+        note = "viejo: ignorado" if not b["supported"] else (b["error"] or "")
+        rows.append((b["name"], b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
+                     str(b["boards"]), str(b["available"]), note))
+    _table(rows)
 
 
 def _human_events(r: dict) -> None:
@@ -91,7 +117,27 @@ def _human_kv(r: dict) -> None:
 
 # ---------- comandos ----------
 
+def cmd_benches(cfg: lib.Config, a, out: Out) -> int:
+    """Siempre escanea (y refresca la cache del discovery)."""
+    found = lib.Benches(only=None)
+    found.load(fresh=True)
+    bs = [lib.bench_summary(b, cfg.lock_user) for b in found.found
+          if getattr(a, "bench", None) in (None, b.name)]
+    return out.emit({"ok": True, "benches": bs}, _human_benches)
+
+
 def cmd_ls(c: lib.Client, a, out: Out) -> int:
+    if a.multi is not None:     # sin host: todas las placas de todos los benches
+        devs, errors = [], []
+        for b, bc in a.multi:
+            if not b.ok:
+                errors.append({"bench": b.name, "error": b.error})
+            devs += [{"bench": b.name, **lib.summarize_device(d, bc.config.lock_user)}
+                     for d in b.devices if a.all or d.get("mac")]
+        r = {"ok": True, "devices": devs}
+        if errors:
+            r["errors"] = errors
+        return out.emit(r, _human_devices)
     devs = [lib.summarize_device(d, c.config.lock_user) for d in c.devices() if a.all or d.get("mac")]
     return out.emit({"ok": True, "devices": devs}, _human_devices)
 
@@ -125,18 +171,28 @@ def cmd_who(c: lib.Client, a, out: Out) -> int:
 
 def cmd_events(c: lib.Client, a, out: Out) -> int:
     if a.all:
-        evs = []
-        for d in c.devices():
-            if not d.get("mac"):
-                continue
-            key = lib.bare_mac(d["mac"])
-            label = d.get("device_key") or d.get("sn") or d["mac"]
-            r = c.board_events(key, types=a.type, since=a.since, limit=a.limit)
-            evs += [{**e, "board": label} for e in r.get("events") or []]
+        evs, errors = [], []
+        for b, bc in (a.multi if a.multi is not None else [(None, c)]):
+            try:
+                for d in (b.devices if b is not None else bc.devices()):
+                    if not d.get("mac"):
+                        continue
+                    key = lib.bare_mac(d["mac"])
+                    label = d.get("device_key") or d.get("sn") or d["mac"]
+                    r = bc.board_events(key, types=a.type, since=a.since, limit=a.limit)
+                    extra = {"bench": b.name} if b is not None else {}
+                    evs += [{**e, "board": label, **extra} for e in r.get("events") or []]
+            except EspbenchError as e:
+                if b is None:
+                    raise
+                errors.append({"bench": b.name, "error": e.error, "message": e.message})   # un bench no frena al resto
         evs.sort(key=lambda e: e.get("ts") or "")
         if a.limit:
             evs = evs[-a.limit:]
-        return out.emit({"ok": True, "events": evs}, _human_events)
+        r = {"ok": True, "events": evs}
+        if errors:
+            r["errors"] = errors
+        return out.emit(r, _human_events)
     if not a.dev:
         raise EspbenchError("bad_request", "events: falta la placa (o --all)")
     board = c.resolve(a.dev)
@@ -304,6 +360,23 @@ def cmd_restart_session(c: lib.Client, a, out: Out) -> int:
     return out.emit({"ok": True, "board": board.label, "tty": board.tty}, _human_kv)
 
 
+def _discover(cfg: lib.Config, a, out: Out, found: "lib.Benches") -> None:
+    """Sin host: `ls` / `events --all` van a todos los benches (a.multi); un
+    comando con <dev> va al bench donde está la placa (cfg.host) y la nombra por
+    su MAC (lo que se pidió puede ser `<dev>@<bench>`)."""
+    if a.fn is cmd_ls or (a.fn is cmd_events and getattr(a, "all", False)):
+        a.multi = [(b, lib.Client(dataclasses.replace(cfg, host=b.url, sources=dict(cfg.sources)), log=out.log))
+                   for b in found.list()]
+        return
+    if not getattr(a, "dev", None):
+        return
+    bench, d = found.locate(a.dev)
+    cfg.host = bench.url
+    cfg.sources["host"] = f"bench:{bench.name}"
+    a.dev = d.get("mac") or d.get("tty_name")
+    out.extra["bench"] = bench.name
+
+
 # ---------- argumentos ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -312,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="salida JSON (un objeto)")
     common.add_argument("--host", default=argparse.SUPPRESS, help="host de la Pi (host[:puerto], default 8080)")
     common.add_argument("--profile", default=argparse.SUPPRESS, help="perfil de ~/.config/espbench.json")
+    common.add_argument("--bench", default=argparse.SUPPRESS,
+                        help="solo ese bench (discovery por Tailscale/config, ignora ESPBENCH_HOST y el perfil)")
     common.add_argument("--expect-panic", action="store_true", default=argparse.SUPPRESS,
                         help="un panic en la ventana es el resultado buscado (exit 0)")
 
@@ -324,7 +399,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, parents=[common], help=help_)
         sp.set_defaults(fn=fn)
         if dev:
-            sp.add_argument("dev", help="device_key, SN, MAC o tty")
+            sp.add_argument("dev", help="device_key, SN, MAC o tty (sin host: también <dev>@<bench>)")
         return sp
 
     def waits(sp, timeout_help="espera máxima (default 30s)"):
@@ -333,7 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--for", dest="for_", metavar="D", help="ventana fija (firmware que nunca queda idle)")
         sp.add_argument("--max-lines", type=int, help="tope de líneas (default 200; cabeza + cola)")
 
-    sp = add("ls", cmd_ls, "placas de la Pi", dev=False)
+    add("benches", cmd_benches, "benches encontrados (Tailscale + ~/.config/espbench-benches.json)", dev=False)
+
+    sp = add("ls", cmd_ls, "placas de la Pi (sin host: de todos los benches)", dev=False)
     sp.add_argument("--all", action="store_true", help="incluye las que todavía no tienen MAC")
 
     add("status", cmd_status, "estado, salud y últimos eventos de una placa")
@@ -397,10 +474,20 @@ def main(argv=None) -> int:
         return 1
     a.json = getattr(a, "json", False)
     a.expect_panic = getattr(a, "expect_panic", False)
+    a.multi = None
     out = Out(a.json)
     try:
         cfg = lib.Config.load(host=getattr(a, "host", None), profile=getattr(a, "profile", None),
                               device=getattr(a, "dev", None))
+        if a.fn is cmd_benches:
+            return cmd_benches(cfg, a, out)
+        bench = getattr(a, "bench", None)
+        if bench is not None:
+            if getattr(a, "host", None):
+                raise EspbenchError("bad_request", "--host y --bench no van juntos")
+            cfg.host = None
+        if cfg.discovery:
+            _discover(cfg, a, out, lib.Benches(only=bench))
         client = lib.Client(cfg, log=out.log)
         return a.fn(client, a, out)
     except EspbenchError as e:

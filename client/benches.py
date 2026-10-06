@@ -23,6 +23,8 @@ import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
+import time
 import urllib.error
 import urllib.request
 from typing import Callable, List, Optional, Tuple
@@ -31,6 +33,7 @@ DASHBOARD_PORT = 8080
 CONFIG_ENV = "ESPBENCH_BENCHES_CONFIG"
 DEFAULT_CONFIG = pathlib.Path.home() / ".config" / "espbench-benches.json"
 DEFAULT_TIMEOUT_S = 2.0
+CACHE_TTL_S = 30.0       # scan_cached: la lista de benches (no sus devices) se reusa este tiempo
 
 _TAILSCALE_PATHS = ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale")
 
@@ -60,6 +63,8 @@ class Bench:
     ok: bool = False
     error: Optional[str] = None
     devices: List[dict] = dataclasses.field(default_factory=list)
+    auth: Optional[bool] = None     # el bench tiene token de la API (/api/version)
+    legacy: bool = False            # sin `app: espbench`: bench viejo (sin /api/board, reservas, notas)
 
 
 # ---------- config ----------
@@ -137,7 +142,8 @@ def probe(c: Candidate, timeout: float, get_json: Callable = http_get_json) -> O
     """Bench si el host contesta como espbench; None si no (no es un bench o no responde).
 
     Un bench sin actualizar contesta solo {"version": ...} (o {"version", "auth"}, los
-    de la rama de agentes): se lo acepta igual y se lo nombra como lo conoce la fuente."""
+    de la rama de agentes): se lo acepta igual (`legacy`: bench-master y deploy.py lo
+    muestran, el CLI `espbench` lo ignora) y se lo nombra como lo conoce la fuente."""
     try:
         info = get_json(c.url + "/api/version", timeout)
     except (OSError, ValueError, urllib.error.URLError):
@@ -148,7 +154,8 @@ def probe(c: Candidate, timeout: float, get_json: Callable = http_get_json) -> O
     if info.get("app") != "espbench" and not legacy:
         return None
     return Bench(name=str(info.get("name") or c.label or c.address), url=c.url, address=c.address,
-                 port=c.port, source=c.source, version=info.get("version"), ok=True)
+                 port=c.port, source=c.source, version=info.get("version"), ok=True,
+                 auth=info.get("auth") if isinstance(info.get("auth"), bool) else None, legacy=legacy)
 
 
 def fetch_devices(b: Bench, timeout: float, get_json: Callable = http_get_json) -> Bench:
@@ -189,6 +196,52 @@ def scan(cfg: Optional[dict] = None, status: Optional[dict] = None,
     return benches
 
 
+_CACHED_FIELDS = ("name", "url", "address", "port", "source", "version", "auth", "legacy")
+
+
+def _load_cache(path: pathlib.Path, ttl_s: float, now: float) -> Optional[List[Bench]]:
+    try:
+        data = json.loads(path.read_text())
+        if now - float(data["ts"]) > ttl_s or now < float(data["ts"]):
+            return None
+        return [Bench(**{k: b.get(k) for k in _CACHED_FIELDS}, ok=True) for b in data["benches"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_cache(path: pathlib.Path, found: List[Bench], now: float) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".benches.", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump({"ts": now, "benches": [{k: getattr(b, k) for k in _CACHED_FIELDS} for b in found]}, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass        # sin cache: el próximo comando escanea de nuevo
+
+
+def scan_cached(cache_path, ttl_s: float = CACHE_TTL_S, fresh: bool = False, cfg: Optional[dict] = None,
+                status: Optional[dict] = None, get_json: Callable = http_get_json,
+                now: Callable[[], float] = time.time) -> Tuple[List[Bench], bool]:
+    """Como scan(), pero la lista de benches (qué hosts son benches) se guarda en
+    `cache_path` y se reusa por `ttl_s`: el scan sondea cada peer de la tailnet
+    (hasta timeout_s por peer que no contesta). Los devices se piden siempre de
+    nuevo. Devuelve (benches, salió_de_la_cache)."""
+    cache_path = pathlib.Path(cache_path)
+    cfg = cfg if cfg is not None else load_config()
+    if not fresh:
+        cached = _load_cache(cache_path, ttl_s, now())
+        if cached is not None:
+            timeout = float(cfg.get("timeout_s", DEFAULT_TIMEOUT_S))
+            if cached:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(cached))) as ex:
+                    list(ex.map(lambda b: fetch_devices(b, timeout, get_json), cached))
+            return cached, True
+    found = scan(cfg, status, get_json)
+    _save_cache(cache_path, found, now())
+    return found, False
+
+
 # ---------- resolve ----------
 
 def _norm_mac(s: str) -> str:
@@ -196,13 +249,20 @@ def _norm_mac(s: str) -> str:
 
 
 def device_matches(key: str, bench: str, d: dict) -> bool:
-    """`key` = device_key, SN, MAC (con o sin separadores) o "<bench>/<tty>"."""
+    """`key` = device_key, SN, MAC (con o sin separadores), tty, "<bench>/<tty>"
+    o "<placa>@<bench>" (cualquiera de las anteriores, solo en ese bench)."""
     k = key.strip()
     if not k:
         return False
+    if "@" in k:
+        dev, _, b = k.rpartition("@")
+        if b == bench and dev and device_matches(dev, bench, d):
+            return True
     if "/" in k:
         b, _, tty = k.partition("/")
         return b == bench and tty in (d.get("tty_name"), d.get("tty"))
+    if k in (d.get("tty_name"), d.get("tty")):
+        return True
     if d.get("device_key") and d["device_key"].lower() == k.lower():
         return True
     if d.get("sn") and d["sn"].lower() == k.lower():
@@ -215,7 +275,12 @@ def find(key: str, benches: List[Bench]) -> List[Tuple[Bench, dict]]:
 
 
 class ResolveError(LookupError):
-    pass
+    """`kind`: "not_found" o "ambiguous"; `hits`: los (bench, device) del ambiguo."""
+
+    def __init__(self, message: str, kind: str = "not_found", hits: Optional[list] = None):
+        super().__init__(message)
+        self.kind = kind
+        self.hits = hits or []
 
 
 def resolve(key: str, benches: Optional[List[Bench]] = None) -> Tuple[Bench, dict]:
@@ -227,5 +292,6 @@ def resolve(key: str, benches: Optional[List[Bench]] = None) -> Tuple[Bench, dic
         raise ResolveError(f"'{key}' no está en ningún bench (benches encontrados: {names})")
     if len(hits) > 1:
         where = ", ".join(f"{b.name}/{d.get('tty_name')}" for b, d in hits)
-        raise ResolveError(f"'{key}' es ambiguo, aparece en: {where}. Usá '<bench>/<tty>'")
+        raise ResolveError(f"'{key}' es ambiguo, aparece en: {where}. Usá '<placa>@<bench>' o '<bench>/<tty>'",
+                           "ambiguous", hits)
     return hits[0]

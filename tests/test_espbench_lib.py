@@ -765,3 +765,10 @@ def test_around_cursor_from_events_after_session_change(client, board):
     (panic,) = client.board_events(b.key, types="panic")["events"]
     r = client.read_range(b.key, around=panic["cursor"])
     assert any("Guru Meditation" in l for l in r["lines"]) and r["session_ended"]
+
+
+def test_config_host_auto_means_discovery(tmp_path):
+    (tmp_path / ".flashcfg.json").write_text(json.dumps({"remote": [{"name": "x", "host": "auto"}]}))
+    cfg = lib.Config.load(env={}, cwd=tmp_path, user_config=tmp_path / "no.json", device="x")
+    assert cfg.host is None and cfg.discovery
+    assert not lib.Config.load(host="pi", env={}, cwd=tmp_path, user_config=tmp_path / "no.json").discovery

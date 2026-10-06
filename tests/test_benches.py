@@ -155,6 +155,77 @@ def test_resolve_ambiguous_across_benches():
         benches.resolve("medidor-a", [_bench("pi1", DEV_A), _bench("pi2", DEV_A)])
 
 
+@pytest.mark.parametrize("key", ["medidor-a@pi2", "SN0001@pi2", "1cc3ab0161d4@pi2", "esp-slot1@pi2", "esp-slot1"])
+def test_resolve_with_bench_suffix_and_tty(key):
+    bs = [_bench("pi1", DEV_B), _bench("pi2", DEV_A)]
+    assert benches.resolve(key, bs) == (bs[1], DEV_A)
+
+
+def test_resolve_bench_suffix_disambiguates_and_wrong_bench_is_not_found():
+    bs = [_bench("pi1", DEV_A), _bench("pi2", DEV_A)]
+    assert benches.resolve("medidor-a@pi1", bs)[0].name == "pi1"
+    with pytest.raises(benches.ResolveError) as e:
+        benches.resolve("medidor-a@pi3", bs)
+    assert e.value.kind == "not_found"
+    with pytest.raises(benches.ResolveError) as e:
+        benches.resolve("medidor-a", bs)
+    assert e.value.kind == "ambiguous" and [b.name for b, _ in e.value.hits] == ["pi1", "pi2"]
+    assert "@" in str(e.value)
+
+
+def test_device_key_with_at_sign_still_matches():
+    d = {**DEV_A, "device_key": "alejo@lab"}
+    assert benches.resolve("alejo@lab", [_bench("pi1", d)])[1] is d
+
+
+def test_probe_marks_legacy_and_auth():
+    c = Candidate("100.124.234.106", label="sensipi03", source="tailscale")
+    old = benches.probe(c, 1, fake_net({c.url + "/api/version": {"version": "0.6.0"}}))
+    assert old.legacy and old.auth is None
+    new = benches.probe(c, 1, fake_net({c.url + "/api/version": {"app": "espbench", "version": "0.34.0",
+                                                                  "name": "bench-chile", "auth": True}}))
+    assert not new.legacy and new.auth is True
+
+
+def test_scan_cached_reuses_the_bench_list_but_refetches_devices(tmp_path):
+    """La lista de benches sale de la cache por ttl_s; los devices, siempre del bench.
+    Candidatos de un `tailscale status --json` falso."""
+    ts = "http://100.75.179.122:8080"
+    calls = []
+    devices = [[DEV_A], [DEV_A, DEV_B]]
+
+    def net(url, timeout):
+        calls.append(url)
+        if url == ts + "/api/version":
+            return {"app": "espbench", "version": "1", "name": "lab", "auth": False}
+        if url == ts + "/api/devices":
+            return devices.pop(0)
+        raise ConnectionRefusedError(url)
+
+    cache = tmp_path / "benches.json"
+    clock = [1000.0]
+    kw = dict(cfg={"tailscale": True, "hosts": []}, status=TS_STATUS, get_json=net, now=lambda: clock[0])
+    found, cached = benches.scan_cached(cache, ttl_s=30, **kw)
+    assert not cached and [b.name for b in found] == ["lab"] and found[0].devices == [DEV_A]
+    probes = sum(u.endswith("/api/version") for u in calls)
+    clock[0] += 10
+    found, cached = benches.scan_cached(cache, ttl_s=30, **kw)
+    assert cached and found[0].devices == [DEV_A, DEV_B] and found[0].auth is False
+    assert sum(u.endswith("/api/version") for u in calls) == probes       # no volvió a sondear la tailnet
+    clock[0] += 31
+    devices.append([DEV_A])
+    assert benches.scan_cached(cache, ttl_s=30, **kw)[1] is False             # vencida: escanea
+    devices.append([DEV_A])
+    assert benches.scan_cached(cache, ttl_s=30, fresh=True, **kw)[1] is False
+
+
+def test_scan_cached_survives_a_broken_cache(tmp_path):
+    cache = tmp_path / "benches.json"
+    cache.write_text("{no json")
+    found, cached = benches.scan_cached(cache, cfg={"tailscale": False, "hosts": []}, get_json=fake_net({}))
+    assert found == [] and not cached and benches.scan_cached(cache, cfg={"tailscale": False, "hosts": []})[1]
+
+
 def test_device_without_key_or_mac_never_matches_empty():
     assert not benches.device_matches("", "pi", {"tty_name": "ttyUSB0"})
     assert not benches.device_matches("x", "pi", {"tty_name": "ttyUSB0", "mac": None, "sn": None})

@@ -552,7 +552,16 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
 - **Reserva**: el cliente que reservó guarda un registro local por MAC (`~/.cache/espbench/reservations.json`) y desde ahí
   sus escrituras van con `require_reservation` → `reservation_lost` si venció o la soltó otro. `expect_mac` en
   todas las escrituras. `force` nunca.
-- **Config**: flags > env > `~/.config/espbench.json` (perfiles) > `.flashcfg.json`.
+- **Config**: flags > env > `~/.config/espbench.json` (perfiles) > `.flashcfg.json` > **discovery**.
+- **Discovery** (sin host, o `host: "auto"`; `--bench <n>` lo fuerza aunque haya `ESPBENCH_HOST`): los benches de
+  `client/benches.py` (§12). `ls` y `events --all` van a todos (cada placa con `bench`; un bench que no contesta va
+  en `errors`, no frena al resto); un comando con `<dev>` busca la placa en todos (`benches.resolve`: device_key,
+  SN, MAC, tty, `<dev>@<bench>`, `<bench>/<tty>`) y sigue contra ese bench, con `bench` en la respuesta. Ambigua →
+  `ambiguous` (exit 7, `matches` con dónde está); no está → `not_found`. Los benches viejos (sin `app: espbench`)
+  se ignoran. **Costo**: el scan sondea `/api/version` de cada peer online de la tailnet (en paralelo, hasta
+  `timeout_s` = 2 s por peer que no contesta); la lista de benches se cachea 30 s en
+  `$ESPBENCH_STATE_DIR/benches.json` y los devices se piden en cada comando. Si la placa no está en los benches de
+  la cache, se escanea de nuevo una vez. `espbench benches` siempre escanea.
 - **`ls`/`status`**: `available` = `monitoring` y sin lock, o con lock propio (un lock ajeno, aunque sea el
   permanente de un flash, no deja flashear ni reservar).
 - `fcntl` es opcional (Windows): sin él, el registro local de reservas va sin `flock`.
@@ -570,6 +579,7 @@ centraliza todos, y corre **en la máquina del dev**, no en un bench.
 client/benches.py ── tailscale status --json (peers online) + ~/.config/espbench-benches.json
       │                 └─ GET :8080/api/version → {app: "espbench", name}  ¿es bench? ¿cómo se llama?
       ├─ deploy.py      remote sin host / host "auto" → resolve(key) → bench + puerto TCP
+      ├─ espbench (CLI) sin host → scan_cached (lista de benches 30 s) → ls de todos / resolve(<dev>) (§11)
       └─ master/app.py  poll cada 5 s → BenchCache
                           ├─ /api/benches, /api/devices, /api/resolve/{key}
                           └─ /bench/<nombre>/... → proxy HTTP + WS al dashboard de ese bench
@@ -580,8 +590,8 @@ client/benches.py ── tailscale status --json (peers online) + ~/.config/espb
   (`/api/version` solo con `version`, o `version` + `auth`) se acepta con el nombre de la fuente.
 - **Tailscale**: se prueban todos los peers online (sin patrón de nombre: un bench puede no llamarse `sensipi*`).
   Los offline no se prueban (sería un timeout por cada uno).
-- **Resolve**: device_key, SN, MAC o `<bench>/<tty>`. Si la key está en dos benches, error con los dos: no se elige
-  uno al azar para flashear.
+- **Resolve**: device_key, SN, MAC, tty, `<dev>@<bench>` o `<bench>/<tty>`. Si la key está en dos benches, error
+  con los dos (`ResolveError.kind == "ambiguous"`, `hits`): no se elige uno al azar para flashear.
 - **Offline**: el bench queda en la lista con el último snapshot de sus devices (en memoria).
 - **Proxy**: sirve el frontend del propio bench (consistente con su API) bajo `/bench/<nombre>/`; por eso el
   frontend usa URLs relativas (§8).

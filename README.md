@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.33.3
+**Version:** 0.34.0
 
 ---
 
@@ -174,7 +174,8 @@ exit codes por causa. Spec: [docs/specs/agents-cli.md](docs/specs/agents-cli.md)
 ```bash
 cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_BIN_DIR para otro lugar)
 
-espbench ls --json
+espbench benches --json                  # benches encontrados (Tailscale + ~/.config/espbench-benches.json)
+espbench ls --json                       # sin host: las placas de todos los benches, con `bench`
 espbench reserve mi-board --ttl 30m --json
 idf.py build && espbench flash mi-board --verify --json        # flash + primer boot + 10 s sin crash
 espbench send mi-board "status" --until "OK" --json
@@ -192,7 +193,7 @@ espbench release mi-board --json
 | 4 | `timeout` |
 | 5 | `busy` |
 | 6 | `locked` / `reservation_lost` / `token_mismatch` |
-| 7 | `not_found` / `device_changed` / `session_down` |
+| 7 | `not_found` / `ambiguous` / `device_changed` / `session_down` |
 | 8 | `bad_anchor` / `cursor_expired` |
 | 9 | `session_ended` |
 | 10 | `network` / `auth` / `auth_config` |
@@ -208,6 +209,12 @@ lock_user, lock_token; chip, `flash_baud` y `encrypt` también salen de ahí).
 
 `host` acepta `host`, `host:puerto` (default 8080, el dashboard) o una URL. El flash va por TCP al puerto de la
 placa, que el CLI saca de `/api/devices`.
+
+**Sin host** (o `"host": "auto"`) el CLI encuentra los benches solo, como `deploy.py` y bench-master: peers online de
+Tailscale + `~/.config/espbench-benches.json`. `ls` lista las placas de todos (`--bench <nombre>` para uno) y cada
+comando busca `<dev>` en todos; si está en dos, `ambiguous` con dónde: `<dev>@<bench>` o `--bench` para elegir.
+La lista de benches se cachea 30 s (`~/.cache/espbench/benches.json`); los benches viejos (sin `app: espbench`) se
+ignoran.
 
 **Skill para Claude Code** (`client/agent/SKILL.md`: cuándo usar `espbench`, el ciclo, qué hacer con cada `error`,
 cómo no llenar el contexto de log):

@@ -52,7 +52,7 @@ def cli(bench, tmp_path, monkeypatch, capsys):
         monkeypatch.delenv(k, raising=False)
 
     def run(*args, as_json=True, user="agent", host=None):
-        env = {"HOME": str(tmp_path), "ESPBENCH_HOST": host or bench.host, "ESPBENCH_USER": user,
+        env = {"HOME": str(tmp_path), "ESPBENCH_HOST": bench.host if host is None else host, "ESPBENCH_USER": user,
                "ESPBENCH_LOCK_TOKEN": "t0k", "ESPBENCH_CONFIG": str(tmp_path / "no-config.json"),
                "ESPBENCH_STATE_DIR": str(tmp_path / f"state-{user}")}
         for k, v in env.items():
@@ -65,6 +65,67 @@ def cli(bench, tmp_path, monkeypatch, capsys):
         lines = out.strip().splitlines()
         assert len(lines) == 1, (out, err)          # un objeto JSON por comando
         return code, json.loads(lines[0])
+    return run
+
+
+class _FakeBench:
+    """Un bench por HTTP que solo contesta /api/version y /api/devices (para el discovery)."""
+
+    def __init__(self, version: dict, devices: list):
+        import http.server
+        import threading
+        fake = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = {"/api/version": fake.version, "/api/devices": fake.devices}.get(self.path)
+                data = json.dumps(body if body is not None else {"detail": "Not Found"}).encode()
+                self.send_response(200 if body is not None else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        self.version, self.devices = version, devices
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
+        self.host = f"127.0.0.1:{self.srv.server_address[1]}"
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+OTHER = {"tty_name": "ttyUSB3", "tty": "/dev/ttyUSB3", "port_tcp": 5003, "mac": "AA:BB:CC:DD:EE:99",
+         "sn": "SFY00099", "device_key": "otra-placa", "state": "monitoring", "status": "RUNNING",
+         "lock_user": None}
+
+
+@pytest.fixture
+def benches_net(bench, tmp_path, monkeypatch):
+    """Discovery sin red real: el bench simulado ("bench-sim"), otro bench que solo lista
+    placas ("bench-b") y uno viejo (solo {"version"}), por ESPBENCH_BENCHES_CONFIG."""
+    from server import paths
+    paths.bench_name_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.bench_name_file().write_text("bench-sim\n")
+    b = _FakeBench({"app": "espbench", "version": "0.34.0", "name": "bench-b", "auth": True}, [dict(OTHER)])
+    old = _FakeBench({"version": "0.6.0"}, [dict(OTHER, device_key="vieja")])
+    cfg = tmp_path / "benches.json"
+    cfg.write_text(json.dumps({"tailscale": False, "hosts": [bench.host, b.host, old.host], "timeout_s": 2}))
+    monkeypatch.setenv("ESPBENCH_BENCHES_CONFIG", str(cfg))
+    yield {"b": b, "old": old}
+    b.close()
+    old.close()
+
+
+@pytest.fixture
+def disc(cli, benches_net):
+    """El CLI sin host (ESPBENCH_HOST vacío: discovery)."""
+    def run(*args, **kw):
+        return cli(*args, host="", **kw)
     return run
 
 
@@ -324,3 +385,100 @@ def test_install_script_puts_espbench_in_bin(tmp_path):
     assert os.access(wrapper, os.X_OK)
     p = subprocess.run([str(wrapper), "--help"], capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
     assert p.returncode == 0 and "restart-session" in p.stdout
+
+
+# ---------- discovery: sin host, los benches se encuentran solos ----------
+
+def test_benches_lists_found_benches(disc, board):
+    code, r = disc("benches")
+    assert code == 0
+    by = {b["name"]: b for b in r["benches"]}
+    assert set(by) == {"bench-sim", "bench-b", "127.0.0.1"}
+    assert (by["bench-sim"]["boards"], by["bench-sim"]["available"], by["bench-sim"]["supported"]) == (1, 1, True)
+    assert by["bench-b"]["auth"] is True and by["bench-b"]["version"] == "0.34.0"
+    old = by["127.0.0.1"]
+    assert old["supported"] is False and old["version"] == "0.6.0"
+
+
+def test_ls_without_host_lists_every_bench_and_ignores_old_ones(disc, board):
+    code, r = disc("ls")
+    assert code == 0
+    assert sorted((d["bench"], d["key"]) for d in r["devices"]) == [("bench-b", "otra-placa"),
+                                                                    ("bench-sim", "sim-board")]
+    code, r = disc("ls", "--bench", "bench-b")
+    assert [d["key"] for d in r["devices"]] == ["otra-placa"]
+    code, r = disc("ls", "--bench", "nada")
+    assert code == 7 and r["error"] == "not_found" and "bench-sim" in r["message"]
+
+
+def test_ls_with_host_is_one_bench_as_before(cli, benches_net, board):
+    code, r = cli("ls")
+    assert code == 0 and [d["key"] for d in r["devices"]] == ["sim-board"] and "bench" not in r["devices"][0]
+
+
+def test_dev_commands_find_the_bench_of_the_board(disc, board):
+    code, r = disc("status", "sim-board")
+    assert code == 0 and r["board"] == "sim-board" and r["bench"] == "bench-sim" and r["state"] == "monitoring"
+    code, r = disc("who", "sim-board@bench-sim")
+    assert code == 0 and r["bench"] == "bench-sim" and r["lock_user"] is None
+    code, r = disc("reserve", "sim-board", "--ttl", "1m")
+    assert code == 0 and r["bench"] == "bench-sim"
+    code, r = disc("send", "sim-board", "status", "--until", "OK", "--timeout", "5s")
+    assert code == 0 and "OK" in r["match"]
+    assert disc("release", "sim-board")[0] == 0
+
+
+def test_dev_not_found_and_ambiguous(disc, benches_net, board):
+    code, r = disc("status", "nada")
+    assert code == 7 and r["error"] == "not_found"
+    benches_net["b"].devices.append(dict(OTHER, device_key="sim-board", mac="AA:BB:CC:DD:EE:98"))
+    code, r = disc("status", "sim-board")
+    assert code == 7 and r["error"] == "ambiguous"
+    assert sorted(m["bench"] for m in r["matches"]) == ["bench-b", "bench-sim"]
+    code, r = disc("status", "sim-board@bench-sim")
+    assert code == 0 and r["bench"] == "bench-sim"
+    code, r = disc("status", "sim-board", "--bench", "bench-sim")
+    assert code == 0 and r["bench"] == "bench-sim"
+
+
+def test_discovery_cache_and_new_bench(disc, benches_net, board, tmp_path):
+    """La lista de benches se cachea; una placa que no está en la cache fuerza un scan nuevo."""
+    assert disc("ls")[0] == 0
+    cache = tmp_path / "state-agent" / "benches.json"
+    assert sorted(b["name"] for b in json.loads(cache.read_text())["benches"]) == ["127.0.0.1", "bench-b",
+                                                                                     "bench-sim"]
+    late = _FakeBench({"app": "espbench", "version": "0.34.0", "name": "bench-late"},
+                      [dict(OTHER, device_key="nueva", mac="AA:BB:CC:DD:EE:77")])
+    try:
+        cfg = json.loads(pathlib.Path(os.environ["ESPBENCH_BENCHES_CONFIG"]).read_text())
+        cfg["hosts"].append(late.host)
+        pathlib.Path(os.environ["ESPBENCH_BENCHES_CONFIG"]).write_text(json.dumps(cfg))
+        code, r = disc("ls")
+        assert "bench-late" not in {d["bench"] for d in r["devices"]}       # de la cache
+        code, r = disc("who", "nueva")                                        # no está: escanea de nuevo
+        assert code == 0 and r["bench"] == "bench-late"
+    finally:
+        late.close()
+
+
+def test_host_and_bench_together_is_bad_request(cli, benches_net):
+    code, r = cli("ls", "--bench", "bench-sim", "--host", "127.0.0.1:1")
+    assert code == 1 and r["error"] == "bad_request"
+
+
+def test_bench_flag_overrides_env_host(cli, benches_net, board):
+    code, r = cli("ls", "--bench", "bench-sim", host="127.0.0.1:1")
+    assert code == 0 and [d["bench"] for d in r["devices"]] == ["bench-sim"]
+
+
+def test_events_all_without_host(disc, board):
+    disc("send", "sim-board", "hola", "--no-enter")
+    code, r = disc("events", "--all", "--type", "send")
+    assert code == 0 and r["events"] and all(e["bench"] == "bench-sim" for e in r["events"])
+
+
+def test_human_ls_and_benches_without_host(disc, board):
+    code, out, err = disc("ls", as_json=False)
+    assert code == 0 and out.splitlines()[0].split()[0] == "BENCH" and "sim-board" in out
+    code, out, err = disc("benches", as_json=False)
+    assert code == 0 and "viejo: ignorado" in out

@@ -22,6 +22,9 @@ Spec del CLI y de la lib: `docs/specs/agents-cli.md` §8 y §12.2 (decisiones de
 - **Flash**: `collect_artifact` (solo `flasher_args.json` del build dir) + `flash_one` (protocolo TCP) viven acá; `deploy.py` los importa (con sus prints) y mantiene aparte solo el modo custom.
 - **Verify**: primer `boot` después del cursor del flash/reset (si la sesión termina, sigue en la nueva: S3/C3), ventana de asentamiento sin reinicio (por la línea `rst:`, `_settle`), `panic` ni `boot_loop`, y `until` opcional. Un `boot_loop` que empieza en el boot encontrado (su cursor = `match_cursor`) es informativo: `boot_loop: true`.
 - **`ls`/`status`**: `available` (monitoring y sin lock, o con lock propio).
+- **Discovery** (`Benches`, sin host / `host: "auto"` / `--bench`): `ls` y `events --all` de todos los benches; `<dev>`
+  se resuelve con `benches.resolve` y el CLI sigue contra ese bench con la MAC (`out.extra["bench"]`). Cache de la
+  lista de benches en `ESPBENCH_STATE_DIR/benches.json` (30 s); si la placa no está, un scan nuevo. Ver ARCHITECTURE §11.
 - **Windows**: `fcntl` es opcional (import con fallback): sin él, el registro local de reservas va sin `flock`. `deploy.py` necesita `client/espbench_lib.py` y `common.py` al lado (no se copia suelto).
 
 ## Tests
@@ -48,13 +51,15 @@ Spec del CLI y de la lib: `docs/specs/agents-cli.md` §8 y §12.2 (decisiones de
 ## Benches (`benches.py`)
 
 Encuentra los benches (hosts con el dashboard de espbench en :8080, Pi u otra máquina) y en cuál está cada placa.
-Solo stdlib: lo usan `deploy.py` y bench-master (`master/`). El CLI `espbench` todavía no: sigue pidiendo `--host`.
+Solo stdlib: lo usan `deploy.py`, bench-master (`master/`) y el CLI `espbench` sin host (`espbench_lib.Benches`).
 
 - Candidatos: peers **online** de `tailscale status --json` + `hosts` de `~/.config/espbench-benches.json`
   (`ESPBENCH_BENCHES_CONFIG` para otra ruta): `{"tailscale": true, "hosts": ["10.0.0.5", "lab:8080"], "timeout_s": 2}`.
-- Es bench si `GET /api/version` devuelve `app: "espbench"` (o solo `{"version"}`, benches sin actualizar).
-  El nombre lo declara el bench (`name`); dos caminos al mismo bench cuentan una vez.
-- `resolve(key)`: key = device_key, SN, MAC o `<bench>/<tty>`. `ResolveError` si no está o si está en más de un bench.
+- Es bench si `GET /api/version` devuelve `app: "espbench"` (o solo `{"version"}`, benches sin actualizar: `legacy`,
+  el CLI los ignora). El nombre lo declara el bench (`name`); dos caminos al mismo bench cuentan una vez.
+- `resolve(key)`: key = device_key, SN, MAC, tty, `<dev>@<bench>` o `<bench>/<tty>`. `ResolveError` (`kind`:
+  `not_found` / `ambiguous`, con `hits`) si no está o si está en más de un bench.
+- `scan_cached(path, ttl_s)`: la lista de benches (no sus devices) se reusa `ttl_s` (30 s); los devices se piden siempre.
 
 En `.flashcfg.json`, un remote de `deploy.py` **sin `host`** (o `"host": "auto"`) se resuelve así: `{"name": "medidor-a", "lock_user": ..., "lock_token": ...}`.
 Un solo scan por corrida (`_benches_cache`).

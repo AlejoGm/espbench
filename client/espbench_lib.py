@@ -38,6 +38,7 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from common import recv_msg, send_msg, sha256_file  # noqa: E402
+from client import benches as bench_discovery  # noqa: E402
 
 try:                    # Windows no tiene fcntl: deploy.py y el CLI andan igual, sin el flock del registro local
     import fcntl
@@ -52,6 +53,7 @@ VERIFY_WINDOW_S = 10.0           # ventana de asentamiento de --verify
 VERIFY_TIMEOUT_S = 60.0          # hasta el primer boot después del flash/reset
 READY_TIMEOUT_S = 10.0           # state == monitoring después del flash
 DEFAULT_MAX_LINES = 200
+BENCHES_TTL_S = 30.0             # cache de la lista de benches del discovery
 HEAD_LINES = 50
 CRASH_TYPES = ("panic", "boot_loop")
 
@@ -63,7 +65,7 @@ EXIT_CODES = {
     "timeout": 4,
     "busy": 5,
     "locked": 6, "reservation_lost": 6, "token_mismatch": 6,
-    "not_found": 7, "device_changed": 7, "session_down": 7,
+    "not_found": 7, "device_changed": 7, "session_down": 7, "ambiguous": 7,
     "bad_anchor": 8, "cursor_expired": 8,
     "session_ended": 9,
     "network": 10, "auth": 10, "auth_config": 10,
@@ -217,7 +219,15 @@ class Config:
                     setattr(out, field, str(value).strip())
                     out.sources[field] = source
                     break
+        if (out.host or "").lower() == "auto":      # "host": "auto" = buscar la placa en los benches
+            out.host = None
+            out.sources["host"] = "auto"
         return out
+
+    @property
+    def discovery(self) -> bool:
+        """Sin host configurado: los benches se encuentran solos (Tailscale + config)."""
+        return not self.host
 
     @property
     def base_url(self) -> str:
@@ -310,6 +320,84 @@ def _match_device(name: str, d: dict) -> bool:
     tty = d.get("tty_name")
     return (name in (d.get("device_key"), d.get("sn"), tty, d.get("tty"), f"/dev/{tty}")
             or (bool(d.get("mac")) and bare_mac(d.get("mac")) == bare))
+
+
+# ---------- benches (discovery: client/benches.py) ----------
+
+def default_state_dir() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("ESPBENCH_STATE_DIR") or pathlib.Path.home() / ".cache" / "espbench")
+
+
+class Benches:
+    """Los benches que encuentra client/benches.py, para el CLI sin host. La lista
+    de benches se cachea BENCHES_TTL_S en state_dir/benches.json (escanear la
+    tailnet sondea cada peer); los devices se piden en cada comando. Los benches
+    viejos (sin `app: espbench`) se ignoran. `only`: solo el bench con ese nombre."""
+
+    def __init__(self, state_dir: Optional[pathlib.Path] = None, only: Optional[str] = None,
+                 scan: Optional[Callable] = None, ttl_s: Optional[float] = None):
+        self.cache_path = pathlib.Path(state_dir or default_state_dir()) / "benches.json"
+        self.only = only
+        self._scan = scan or bench_discovery.scan_cached
+        self.ttl_s = BENCHES_TTL_S if ttl_s is None else ttl_s
+        self.found: list = []
+        self.cached = False
+
+    def load(self, fresh: bool = False) -> list:
+        self.found, self.cached = self._scan(self.cache_path, ttl_s=self.ttl_s, fresh=fresh)
+        return self.found
+
+    def usable(self) -> list:
+        out = [b for b in self.found if not b.legacy and (self.only is None or b.name == self.only)]
+        if self.only is not None and not out:
+            names = ", ".join(b.name for b in self.found if not b.legacy) or "ninguno"
+            raise EspbenchError("not_found", f"no hay bench '{self.only}' (benches encontrados: {names})")
+        return out
+
+    def list(self, fresh: bool = False) -> list:
+        """Benches usables con sus devices. Si la cache no tiene el bench pedido, escanea de nuevo."""
+        self.load(fresh)
+        try:
+            return self.usable()
+        except EspbenchError:
+            if self.cached:
+                self.load(True)
+                return self.usable()
+            raise
+
+    def locate(self, dev: str):
+        """(Bench, device) de la placa entre todos los benches. Si la lista de benches
+        salió de la cache y la placa no está, escanea de nuevo una vez (puede haber
+        un bench nuevo). Errores: not_found, ambiguous (con `matches`)."""
+        dev = (dev or "").strip()
+        if not dev:
+            raise EspbenchError("bad_request", "falta la placa (device_key, SN, MAC o tty)")
+        found = self.list()
+        try:
+            return bench_discovery.resolve(dev, found)
+        except bench_discovery.ResolveError as e:
+            if e.kind != "not_found" or not self.cached:
+                raise _resolve_error(e)
+        try:
+            return bench_discovery.resolve(dev, self.list(fresh=True))
+        except bench_discovery.ResolveError as e:
+            raise _resolve_error(e)
+
+
+def _resolve_error(e) -> "EspbenchError":
+    if e.kind == "ambiguous":
+        matches = [{"bench": b.name, "tty": d.get("tty_name"), "key": d.get("device_key") or d.get("sn"),
+                    "mac": d.get("mac")} for b, d in e.hits]
+        return EspbenchError("ambiguous", str(e), data={"matches": matches})
+    return EspbenchError("not_found", str(e))
+
+
+def bench_summary(b, me: Optional[str] = None) -> dict:
+    """Lo que `espbench benches` muestra de un bench."""
+    devs = [d for d in b.devices if d.get("mac")]
+    return {"name": b.name, "url": b.url, "host": f"{b.address}:{b.port}", "version": b.version, "auth": b.auth,
+            "supported": not b.legacy, "ok": b.ok, "error": b.error, "boards": len(devs),
+            "available": sum(1 for d in devs if summarize_device(d, me)["available"])}
 
 
 # ---------- artefacto y flash por TCP (antes en deploy.py) ----------
@@ -573,8 +661,7 @@ class Client:
         self.poll_s = poll_s
         self.log = log or (lambda msg: None)
         self.http_timeout = http_timeout
-        self.state_dir = pathlib.Path(state_dir or os.environ.get("ESPBENCH_STATE_DIR")
-                                      or pathlib.Path.home() / ".cache" / "espbench")
+        self.state_dir = pathlib.Path(state_dir or default_state_dir())
         self._clock = clock
         self._sleep = sleep
 
