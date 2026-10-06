@@ -71,7 +71,7 @@ KILL_TIMEOUT="${DEVREMOTE_KILL_TIMEOUT:-5}"   # segundos que se espera a que mue
 # pids vivos (no zombies) de la lista
 alive_pids() {
   local live p
-  live=" $(ps -ww -eo pid=,ppid=,stat=,args= 2>/dev/null | awk '$3 !~ /^Z/ {print $1}' | tr '\n' ' ') "
+  live=" $({ ps -ww -eo pid=,ppid=,stat=,args= 2>/dev/null || true; } | awk '$3 !~ /^Z/ {print $1}' | tr '\n' ' ') "
   for p in "$@"; do
     if [[ "$live" == *" $p "* ]]; then echo "$p"; fi
   done

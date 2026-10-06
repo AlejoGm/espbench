@@ -17,7 +17,7 @@ if [ "${1:-}" = "--roots" ]; then
 fi
 tty="${1:-}"
 
-ps -ww -eo pid=,ppid=,stat=,args= 2>/dev/null | awk -v tty="$tty" -v roots="$roots" '
+{ ps -ww -eo pid=,ppid=,stat=,args= 2>/dev/null || true; } | awk -v tty="$tty" -v roots="$roots" '
     $3 ~ /^Z/ { next }
     {
         pid = $1; ppid = $2
