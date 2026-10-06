@@ -67,6 +67,17 @@ BOOT_LOOP_COUNT = 3
 BOOT_LOOP_WINDOW = 120.0  # segundos
 
 
+def line_kind(line: str) -> Optional[str]:
+    """"boot" (línea rst:) o "panic" para una línea ya limpia (sin ANSI, \r
+    aplicado); None si no es ninguna. La misma detección que on_line: la usa
+    logrange para buscar `--until boot|panic` en el log."""
+    if _RESET_RE.search(line):
+        return "boot"
+    if any(rx.search(line) for rx, _ in _PANIC_RES):
+        return "panic"
+    return None
+
+
 def _now_iso(clock: Callable[[], float]) -> str:
     return dt.datetime.fromtimestamp(clock()).isoformat(timespec="seconds")
 

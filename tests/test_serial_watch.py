@@ -262,3 +262,14 @@ def test_event_errors_are_logged_not_swallowed():
     finally:
         taglog.reset_default_sinks()
     assert any(level == "DEBUG" and "disco lleno" in msg for level, msg in seen)
+
+
+def test_line_kind_matches_on_line_detection():
+    """logrange busca --until boot|panic con line_kind: misma detección que on_line."""
+    from server.serial_watch import line_kind
+    assert line_kind("rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)") == "boot"
+    for line in ("Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.",
+                 "abort() was called at PC 0x400d1234", "Brownout detector was triggered",
+                 "E (1234) task_wdt: Task watchdog got triggered.", "assert failed: app_main main.c:10 (x)"):
+        assert line_kind(line) == "panic", line
+    assert line_kind("I (10) app: todo bien") is None

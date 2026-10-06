@@ -16,6 +16,7 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 | `erase.py` | device | Modo Erase Region (Ctrl-E) |
 | `partition_table.py` | device | Parseo de la tabla de particiones que imprime el bootloader |
 | `flash.py` | device | esptool: buscarlo, armar comandos, correrlos (`run_cmd`), leer MAC |
+| `logrange.py` | dashboard | Rangos del log de una placa para `/api/board/{key}/log` y `/events`: anchors, `until`, `around`, filtros, truncado. Solo lee disco |
 | `api.py` | dashboard | FastAPI: REST + WebSocket + estáticos. Antes `dashboard.py` |
 | `device_registry.py` | dashboard (+ device) | `DeviceRegistry` (vista de lectura de los devices), `DevicesFile` (`devices.json`, con `flock`) |
 | `history.py` | dashboard | Historial por device: jobs (`result.json`, `job.log`) y sesiones de log rotadas; valida nombres que llegan por URL |

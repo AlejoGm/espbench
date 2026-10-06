@@ -60,9 +60,16 @@ def read_session_id(log_path) -> Optional[str]:
     """session_id del header de un output.log, o None (log viejo o vacío)."""
     try:
         with open(log_path, "rb") as f:
-            return _session_from_header(f.readline(1024))
+            return read_session_id_from(f)
     except OSError:
         return None
+
+
+def read_session_id_from(f) -> Optional[str]:
+    """Lo mismo desde un archivo binario ya abierto (lee desde el inicio): así
+    el header y lo que se lea después son del mismo archivo aunque rote."""
+    f.seek(0)
+    return _session_from_header(f.readline(1024))
 
 
 def log_end_cursor(log_path) -> Optional[str]:
