@@ -29,6 +29,7 @@
         <input id="filter" class="filter-input" type="search" placeholder="Filtrar líneas…  ( / )" autocomplete="off">
         <button class="tool-btn" id="btn-problems" title="Mostrar solo panics, resets, errores y warnings">⚠ Solo problemas</button>
         <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic">⤒ Último panic</button>
+        <button class="tool-btn" id="btn-ts" title="Mostrar la hora de cada línea (la pone la Pi al recibirla)">🕑 Hora</button>
         <span class="tool-sep"></span>
         <span class="line-count" id="line-count"></span>
         <button class="tool-btn" id="btn-follow" title="Seguir el final del log (End)">⏸ Pausar</button>
@@ -96,13 +97,20 @@
         var filterText = '';
         var onlyProblems = false;
         var lastPanicEl = null;
+        var showTs = true;
+        try { showTs = localStorage.getItem('eb.showTs') !== '0'; } catch (e) {}
 
+        // Cada línea del archivo trae "YYYY-MM-DD HH:MM:SS.mmm <origen> " (DeviceLog).
+        // La hora va en su propio span (toggle "Hora"); clase, filtro y colores
+        // miran el cuerpo. Los logs viejos no tienen prefijo y se ven como antes.
         function makeLine(text, el) {
             el = el || document.createElement('div');
-            var plain = EB.stripAnsi(text);
-            var cls = EB.lineClass(plain);
-            el.className = 'ln' + (cls ? ' ' + cls : '');
-            el.innerHTML = EB.ansiLineToHtml(text) || '​';
+            var p = EB.splitPrefix(text);
+            var plain = EB.stripAnsi(p.body);
+            var cls = EB.lineClass(EB.stripAnsi(text));
+            el.className = 'ln' + (cls ? ' ' + cls : '') + (p.origin === '\u21aa' ? ' ln-cont' : '');
+            var ts = p.time ? '<span class="ln-ts" title="' + p.date + ' ' + p.time + '">' + p.time + '</span>' : '';
+            el.innerHTML = ts + '<span class="ln-body">' + (EB.ansiLineToHtml(p.body) || '\u200b') + '</span>';
             el._plain = plain.toLowerCase();
             el._cls = cls;
             applyFilterTo(el);
@@ -447,6 +455,16 @@
                 refilter();
             };
             $('btn-panic').onclick = jumpToPanic;
+            function applyTs() {
+                document.body.classList.toggle('hide-ts', !showTs);
+                $('btn-ts').classList.toggle('active', showTs);
+            }
+            $('btn-ts').onclick = function() {
+                showTs = !showTs;
+                try { localStorage.setItem('eb.showTs', showTs ? '1' : '0'); } catch (e) {}
+                applyTs();
+            };
+            applyTs();
             $('btn-follow').onclick = function() { setFollow(!follow); };
             $('new-lines').onclick = function() { setFollow(true); };
             $('btn-clear').onclick = clearView;

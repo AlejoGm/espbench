@@ -723,7 +723,11 @@ a:hover {
 .terminal .ln-tl { color: #7d8590; }
 .terminal .ln-tl-warn  { color: #d29922; }
 .terminal .ln-tl-error { color: #ff7b72; }
-.terminal .ln-tl::before { content: '▸ '; color: #4f52c8; }
+.terminal .ln-tl .ln-body::before { content: '▸ '; color: #4f52c8; }
+/* Hora de cada línea (prefijo del DeviceLog) y continuación de una línea serial partida */
+.terminal .ln-ts { color: #545d68; margin-right: 0.8em; user-select: none; }
+body.hide-ts .terminal .ln-ts { display: none; }
+.terminal .ln-cont .ln-body::before { content: '↪ '; color: #545d68; }
 .terminal .ln-panic {
     background: rgba(248,81,73,0.12);
     box-shadow: inset 3px 0 0 #f85149;

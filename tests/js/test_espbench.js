@@ -79,3 +79,45 @@ test('LineBuffer: chunks partidos, CRLF partido y overwrite', () => {
     assert.equal(lb.partialView(), 'progreso 10%');
     assert.deepEqual(lb.push('progreso 90%\n'), ['progreso 90%']);
 });
+
+// ── Prefijo del DeviceLog ("YYYY-MM-DD HH:MM:SS.mmm <origen> ") ─────────
+
+test('splitPrefix: serial, taglog, continuación y línea vieja', () => {
+    assert.deepEqual(EB.splitPrefix('2026-10-05 16:02:03.123 > I (1) app: hola'),
+        {date: '2026-10-05', time: '16:02:03.123', origin: '>', prefix: '2026-10-05 16:02:03.123 > ',
+         body: 'I (1) app: hola'});
+    assert.equal(EB.splitPrefix('2026-10-05 16:02:03.123 | INFO  | x | y').origin, '|');
+    assert.equal(EB.splitPrefix('2026-10-05 16:02:03.123 ↪ resto').body, 'resto');
+    const old = EB.splitPrefix('I (1) app: sin prefijo');
+    assert.equal(old.time, null);
+    assert.equal(old.body, 'I (1) app: sin prefijo');
+    // taglog viejo: tiene hora pero no milisegundos ni origen → no es prefijo
+    assert.equal(EB.splitPrefix('2026-10-05 16:00:00 | WARN  | protocol       | algo').origin, null);
+});
+
+test('lineClass con prefijo: las regex ancladas miran el cuerpo', () => {
+    const P = '2026-10-05 16:02:03.123 ';
+    assert.equal(EB.lineClass(P + '| WARN  | protocol       | algo'), 'ln-tl ln-tl-warn');
+    assert.equal(EB.lineClass(P + '| ERROR | flash          | x'), 'ln-tl ln-tl-error');
+    assert.equal(EB.lineClass(P + '| INFO  | device         | a -> b'), 'ln-tl ln-tl-info');
+    assert.equal(EB.lineClass(P + '> rst:0x1 (POWERON_RESET),boot:0x13'), 'ln-reset');
+    assert.equal(EB.lineClass(P + '> rst:0x8 (TG1WDT_SYS_RESET),boot:0x13'), 'ln-panic');
+    assert.equal(EB.lineClass(P + '> Backtrace: 0x400d1234:0x3ffb0000'), 'ln-panic');
+    assert.equal(EB.lineClass(P + '> E (123) wifi: fallo'), 'ln-esp-e');
+    assert.equal(EB.lineClass(P + '↪ W (123) wifi: ojo'), 'ln-esp-w');
+    assert.equal(EB.lineClass(P + '> I (123) app: hola'), '');
+    // una línea serial que parece taglog no es taglog
+    assert.equal(EB.lineClass(P + '> INFO  | x | y'), '');
+});
+
+test('overwrite conserva el prefijo', () => {
+    assert.equal(EB.overwrite('2026-10-05 16:02:03.123 > 10%\r50%\r100%'), '2026-10-05 16:02:03.123 > 100%');
+    assert.equal(EB.overwrite('10%\r100%'), '100%');
+    assert.equal(EB.overwrite('2026-10-05 16:02:03.123 > sin cr'), '2026-10-05 16:02:03.123 > sin cr');
+});
+
+test('LineBuffer con líneas prefijadas', () => {
+    const lb = new EB.LineBuffer();
+    const out = lb.push('2026-10-05 16:02:03.123 > a 10%\r90%\n2026-10-05 16:02:03.200 | INFO  | x              | y\n');
+    assert.deepEqual(out, ['2026-10-05 16:02:03.123 > 90%', '2026-10-05 16:02:03.200 | INFO  | x              | y']);
+});

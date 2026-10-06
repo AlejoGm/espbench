@@ -93,7 +93,21 @@
 
     function stripAnsi(s) { return s.replace(ANSI_RE, ''); }
 
-    // taglog.format_line: "2026-10-05 16:00:00 | WARN  | protocol       | msg"
+    // Prefijo que pone DeviceLog a cada línea del archivo:
+    // "2026-10-05 16:02:03.123 > " — origen: > serial, | taglog, ↪ continuación
+    // de una línea serial que salió partida. Los logs viejos no lo tienen.
+    var PREFIX_RE = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3}) ([>|\u21aa]) /;
+
+    // {date, time, origin, prefix, body}. Sin prefijo: date/time/origin null, body = línea.
+    function splitPrefix(line) {
+        var m = PREFIX_RE.exec(line);
+        if (!m) return {date: null, time: null, origin: null, prefix: '', body: line};
+        return {date: m[1], time: m[2], origin: m[3], prefix: m[0], body: line.slice(m[0].length)};
+    }
+
+    // Taglog con prefijo: el cuerpo es "WARN  | protocol       | msg".
+    var TAGLOG_BODY_RE = /^(INFO|WARN|ERROR|DEBUG)\s*\| /;
+    // Taglog de un log viejo (taglog.format_line): "2026-10-05 16:00:00 | WARN  | protocol       | msg"
     var TAGLOG_RE = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| (INFO|WARN|ERROR|DEBUG)\s*\| /;
     var PANIC_RE = new RegExp([
         'Guru Meditation Error', 'abort\\(\\) was called', 'Brownout detector was triggered',
@@ -103,13 +117,16 @@
     var RESET_RE = /^rst:0x[0-9a-f]+ \(/;
     var ESP_LEVEL_RE = /^([EW]) \(\d+\) /;   // ESP_LOGE / ESP_LOGW
 
-    // Clase CSS de una línea (ya sin ANSI), o '' si no lleva.
+    // Clase CSS de una línea (ya sin ANSI, con o sin prefijo), o '' si no lleva.
+    // Las regex de abajo están ancladas con ^: se aplican al cuerpo.
     function lineClass(plain) {
-        var m = TAGLOG_RE.exec(plain);
+        var p = splitPrefix(plain);
+        var body = p.body;
+        var m = p.origin === '|' ? TAGLOG_BODY_RE.exec(body) : p.origin === null ? TAGLOG_RE.exec(body) : null;
         if (m) return 'ln-tl ln-tl-' + m[1].toLowerCase();
-        if (PANIC_RE.test(plain)) return 'ln-panic';
-        if (RESET_RE.test(plain)) return 'ln-reset';
-        var e = ESP_LEVEL_RE.exec(plain);
+        if (PANIC_RE.test(body)) return 'ln-panic';
+        if (RESET_RE.test(body)) return 'ln-reset';
+        var e = ESP_LEVEL_RE.exec(body);
         if (e) return e[1] === 'E' ? 'ln-esp-e' : 'ln-esp-w';
         return '';
     }
@@ -151,9 +168,11 @@
     }
 
     // \r suelto = sobrescribir la línea (barras de progreso): queda lo último.
+    // Se aplica al cuerpo: el prefijo de la línea se conserva.
     function overwrite(line) {
-        var i = line.lastIndexOf('\r');
-        return i >= 0 ? line.slice(i + 1) : line;
+        var p = splitPrefix(line);
+        var i = p.body.lastIndexOf('\r');
+        return i >= 0 ? p.prefix + p.body.slice(i + 1) : line;
     }
 
     /*
@@ -188,7 +207,7 @@
     return {
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         healthBadges: healthBadges, healthLevel: healthLevel,
-        stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem, ansiLineToHtml: ansiLineToHtml,
-        LineBuffer: LineBuffer
+        splitPrefix: splitPrefix, stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem,
+        ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer
     };
 });
