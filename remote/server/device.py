@@ -45,6 +45,11 @@ from server.serial_watch import SerialWatch
 
 TAG = "device"
 
+# Menú de esp_idf_monitor: Ctrl-T y después Ctrl-R (reset por RTS) o Ctrl-P
+# (reset a modo download). Son las teclas que manda api.py en /command.
+MENU_KEY = 0x14
+_RESET_KEYS = {0x12: "reset", 0x10: "bootloader"}
+
 
 class DeviceState(enum.Enum):
     DISCOVERING = "discovering"    # arrancó el proceso, leyendo MAC
@@ -255,11 +260,30 @@ class DeviceManager:
         self.device = Device(self.tty_port, log, state_sink=state_sink, watch=self.watch)
         self.watch._on_change = self.device.publish
         self._mac_reader = mac_reader
+        self._menu_key = False
 
     def on_serial(self, data: bytes) -> None:
         """Sink del EspMonitor: el serial va al log del device, que le pasa cada
         línea completa al SerialWatch."""
         self.device.device_log.write_serial(data)
+
+    def on_keys(self, data: bytes) -> None:
+        """Teclas de la sesión tmux hacia esp_idf_monitor: las del api (`tmux
+        send-keys`: `command/reset|bootloader`, `send`) y las de alguien
+        enganchado con `devremote <dev>`. Ctrl-T Ctrl-R (reset) y Ctrl-T Ctrl-P
+        (bootloader) reinician el chip a propósito: como el flash, los contadores
+        de SerialWatch vuelven a cero (si no, unos resets seguidos eran un boot
+        loop). Las teclas pasan por acá antes de llegar al monitor, así que el
+        reset es posterior. Ctrl-T Ctrl-T manda un Ctrl-T literal."""
+        for b in data:
+            if self._menu_key and b in _RESET_KEYS:
+                self.expected_reset(_RESET_KEYS[b])
+            self._menu_key = b == MENU_KEY and not self._menu_key
+
+    def expected_reset(self, why: str) -> None:
+        taglog.info(TAG, f"{self.device.tty_name}: {why} pedido al monitor, contadores de salud en cero")
+        self.watch.reset_counters()
+        self.device.publish()
 
     def tick(self) -> None:
         """Cada segundo, desde el loop principal: cierra un boot loop vencido

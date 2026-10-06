@@ -63,8 +63,13 @@ _PANIC_RES = [
 _ABNORMAL_RESET = ("WDT", "BROWNOUT", "PANIC")
 
 MAX_LINE = 4096
-BOOT_LOOP_COUNT = 3
-BOOT_LOOP_WINDOW = 120.0  # segundos
+# Boot loop: BOOT_LOOP_COUNT arranques en BOOT_LOOP_WINDOW segundos. Un firmware
+# en loop reinicia cada 1-10 s; 5 en 60 s lo agarra y deja lugar a unos resets
+# a mano. Antes era 3 en 120 s: flash + dos `reset --verify` ya era un "loop".
+# Igual, los resets intencionales (flash, erase, Ctrl-T Ctrl-R/P del monitor:
+# los `command` del api) ponen los contadores en cero (reset_counters).
+BOOT_LOOP_COUNT = 5
+BOOT_LOOP_WINDOW = 60.0   # segundos
 
 
 def line_kind(line: str) -> Optional[str]:
@@ -111,8 +116,9 @@ class SerialWatch:
         self.since = _now_iso(clock)
 
     def reset_counters(self) -> None:
-        """Antes de un flash o un erase: los dos reinician el chip a propósito, y
-        no tienen que contar como problema. La info de firmware se conserva. Un
+        """Antes de un flash, un erase o un reset pedido al monitor (Ctrl-T
+        Ctrl-R/P): reinician el chip a propósito, y no tienen que contar como
+        problema. La info de firmware se conserva. Un
         boot loop en curso se da por terminado."""
         evs = []
         with self._lock:

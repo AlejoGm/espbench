@@ -224,6 +224,22 @@ def test_reset_verify(cli, bench, tmp_path):
     assert code == 0 and r["command"] == "reset" and "RTCWDT_RTC_RESET" in r["verify"]["boot"]
 
 
+def test_flash_then_reset_verify_many_times_is_not_a_boot_loop(cli, bench, board, tmp_path):
+    """C1: flash --verify y después varios `reset --verify` seguidos. Antes (3
+    boots en 120 s = boot loop, y solo el flash ponía los contadores en cero) el
+    segundo reset daba exit 3 `crashed` (boot_loop). Ahora un reset pedido al
+    monitor (Ctrl-T Ctrl-R) también los pone en cero: 6 boots en ~10 s andan."""
+    write_project(tmp_path)
+    code, r = cli("flash", "sim-board", "--verify=0.3s")
+    assert code == 0, r
+    for i in range(5):
+        code, r = cli("reset", "sim-board", "--verify=0.3s")
+        assert code == 0 and r["verify"]["ok"], (i, r)
+        assert "boot_loop" not in r["verify"]
+    health = board.manager.watch.health()
+    assert health["boots"] == 1 and not health["boot_loop"]
+
+
 def test_human_output(cli, bench, tmp_path):
     code, out, err = cli("ls", as_json=False)
     assert code == 0 and out.splitlines()[0].split()[:3] == ["KEY", "SN", "MAC"] and "sim-board" in out

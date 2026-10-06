@@ -126,7 +126,8 @@ def main(argv=None):
     mon = EspMonitor(args.port_tty, args.serial_baud,
                      output_sink=manager.on_serial,
                      elf_path=lambda: elf_for(device),
-                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg, device))
+                     on_ctrl_e=lambda: erase_region_interactive(mon, cfg, device),
+                     input_sink=manager.on_keys)
     mon.start()
 
     if device.mac is None:

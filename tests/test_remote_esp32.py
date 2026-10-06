@@ -24,8 +24,9 @@ MAC = "AA:BB:CC:DD:EE:FF"
 class FakeMon:
     instances = []
 
-    def __init__(self, tty_path, baud, output_sink=None, elf_path=None, on_ctrl_e=None):
+    def __init__(self, tty_path, baud, output_sink=None, elf_path=None, on_ctrl_e=None, input_sink=None):
         self.output_sink = output_sink
+        self.input_sink = input_sink
         self.elf_path = elf_path
         self.on_ctrl_e = on_ctrl_e
         self.output = ""

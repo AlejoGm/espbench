@@ -161,3 +161,39 @@ def test_espmonitor_resolves_elf_on_each_start(tmp_path):
     assert mon._resolve_elf() is None       # todavía no hubo flash
     elf.write_bytes(b"ELF")
     assert mon._resolve_elf() == elf
+
+
+def test_espmonitor_keys_go_through_input_sink_before_the_monitor():
+    """El teclado de la sesión (tmux send-keys del api) pasa por input_sink
+    (DeviceManager.on_keys) antes de llegar a esp_idf_monitor."""
+    import os
+    import socket
+    import threading
+    import time
+    got = []
+    mon = EspMonitor("/dev/ttyUSB0", 115200, input_sink=got.append)
+    master, monitor_side = socket.socketpair()
+    r, w = os.pipe()
+    mon.master_fd, mon._stdin_fd = master.fileno(), r
+    t = threading.Thread(target=mon._pump, daemon=True)
+    t.start()
+    try:
+        os.write(w, b"\x14")
+        os.write(w, b"\x12")
+        monitor_side.settimeout(2)
+        data = b""
+        while len(data) < 2:
+            data += monitor_side.recv(16)
+        assert data == b"\x14\x12"
+        deadline = time.monotonic() + 2
+        while b"".join(got) != b"\x14\x12" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert b"".join(got) == b"\x14\x12"
+    finally:
+        mon.stop_flag.set()
+        t.join(timeout=2)
+        mon.master_fd = mon._stdin_fd = None
+        for fd in (r, w):
+            os.close(fd)
+        master.close()
+        monitor_side.close()

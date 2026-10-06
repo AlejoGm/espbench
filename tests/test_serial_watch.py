@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
 from server.device_log import DeviceLog
-from server.serial_watch import SerialWatch
+from server.serial_watch import BOOT_LOOP_COUNT, BOOT_LOOP_WINDOW, SerialWatch
 
 BOOT = (
     "ets Jun  8 2016 00:22:57\r\n\r\n"
@@ -96,12 +96,28 @@ def test_watchdog_and_brownout_resets_are_abnormal():
 def test_boot_loop_within_window_and_expiry():
     clock = Clock()
     w = SerialWatch(clock=clock)
-    for _ in range(3):
+    for _ in range(BOOT_LOOP_COUNT):
         feed(w, RST)
         clock.t += 10
     assert w.boot_loop
     clock.t += 300                      # el device se estabilizó
     assert not w.boot_loop
+
+
+def test_boot_loop_threshold_is_five_boots_in_a_minute():
+    """3 en 2 min era un "loop" con un flash y dos resets a mano; ahora 5 en 60 s."""
+    assert (BOOT_LOOP_COUNT, BOOT_LOOP_WINDOW) == (5, 60.0)
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock)
+    for i in range(4):                  # 4 en 30 s: no
+        feed(w, RST, start=i)
+        clock.t += 10
+    assert not w.boot_loop and [e[0] for e in evs] == ["boot"] * 4
+    clock.t += 21                       # t+61: el primero salió de la ventana
+    feed(w, RST, start=10)
+    assert not w.boot_loop
+    feed(w, RST, start=11)              # 5 en 60 s
+    assert w.boot_loop and evs[-1][0] == "boot_loop"
 
 
 def test_carriage_return_keeps_last_segment_and_strips_ansi():
@@ -200,8 +216,9 @@ def test_boot_loop_groups_boots_into_start_and_end():
         feed(w, RST, start=i)
         clock.t += 5
     types = [e[0] for e in evs]
-    assert types == ["boot", "boot", "boot_loop"]
-    assert evs[2][1] == {"phase": "start", "boots": 3}
+    n = BOOT_LOOP_COUNT
+    assert types == ["boot"] * (n - 1) + ["boot_loop"]
+    assert evs[n - 1][1] == {"phase": "start", "boots": n}
     clock.t += 300                                        # se estabilizó
     feed(w, "I (100) app: andando\r\n", start=50)
     assert evs[-1][0] == "boot_loop"
@@ -214,7 +231,7 @@ def test_boot_loop_groups_boots_into_start_and_end():
 def test_flash_ends_an_active_boot_loop():
     clock = Clock()
     w, evs = watch_with_events(clock=clock)
-    for i in range(3):
+    for i in range(BOOT_LOOP_COUNT):
         feed(w, RST, start=i)
     w.reset_counters()
     assert evs[-1][0] == "boot_loop" and evs[-1][1]["phase"] == "end" and evs[-1][2] is None
@@ -227,9 +244,9 @@ def test_boot_loop_end_has_real_end_time_and_last_boot():
     from server import events
     clock = Clock()
     w, evs = watch_with_events(clock=clock, boot_loop_window=120)
-    for i in range(4):
+    for i in range(BOOT_LOOP_COUNT + 1):
         feed(w, RST, start=i)
-        if i < 3:
+        if i < BOOT_LOOP_COUNT:
             clock.t += 5
     last_boot_t = clock.t
     clock.t += 600                                        # diez minutos después llega una línea
@@ -237,13 +254,14 @@ def test_boot_loop_end_has_real_end_time_and_last_boot():
     end = evs[-1]
     assert end[0] == "boot_loop" and end[1]["phase"] == "end"
     assert end[3] == last_boot_t + 120
-    assert end[1]["last_boot"] == {"ts": events.iso_ms(1003.0), "cursor": "c:20261005_160000_1:3"}
+    n = BOOT_LOOP_COUNT
+    assert end[1]["last_boot"] == {"ts": events.iso_ms(1000.0 + n), "cursor": f"c:20261005_160000_1:{n}"}
 
 
 def test_poll_closes_boot_loop_of_a_silent_board():
     clock = Clock()
     w, evs = watch_with_events(clock=clock)
-    for i in range(3):
+    for i in range(BOOT_LOOP_COUNT):
         feed(w, RST, start=i)
     assert not w.poll()                                   # sigue en loop
     clock.t += 300                                        # la placa quedó muda

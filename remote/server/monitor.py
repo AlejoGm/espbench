@@ -11,7 +11,8 @@ particiones para el erase, MAC por serial).
 
 Teclas propias: Ctrl-C termina el proceso; Ctrl-E llama a on_ctrl_e (modo
 Erase Region, inyectado desde afuera — el monitor no sabe de esptool ni de
-la FSM del device).
+la FSM del device). El resto va al monitor, pasando antes por input_sink
+(DeviceManager.on_keys: un Ctrl-T Ctrl-R es un reset a propósito).
 """
 import os
 import pathlib
@@ -50,7 +51,8 @@ class EspMonitor:
     def __init__(self, tty_path: str, baud: int,
                  output_sink: Optional[Callable[[bytes], None]] = None,
                  elf_path: ElfPath = None,
-                 on_ctrl_e: Optional[Callable[[], None]] = None):
+                 on_ctrl_e: Optional[Callable[[], None]] = None,
+                 input_sink: Optional[Callable[[bytes], None]] = None):
         """elf_path puede ser un path o una función que lo devuelva: se resuelve
         en cada start(), porque el .elf cambia con cada flash y su ubicación
         depende de si ya se conoce la MAC del device."""
@@ -59,6 +61,7 @@ class EspMonitor:
         self._output_sink = output_sink
         self._elf_path = elf_path
         self._on_ctrl_e = on_ctrl_e
+        self._input_sink = input_sink
         self.proc: Optional[subprocess.Popen] = None
         self.thread: Optional[threading.Thread] = None
         self.stop_flag = threading.Event()
@@ -223,6 +226,11 @@ class EspMonitor:
                     else:
                         threading.Thread(target=self._run_ctrl_e, daemon=True).start()
                     continue
+                if self._input_sink is not None:
+                    try:
+                        self._input_sink(data)
+                    except Exception as e:
+                        taglog.debug(TAG, f"input_sink: {e}")
                 if self.master_fd is not None:
                     try:
                         os.write(self.master_fd, data)

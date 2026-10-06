@@ -8,7 +8,8 @@ Todo real salvo los bordes:
   panic.
 - tmux falso: el subprocess.run de api.py → send-keys le escribe a la SimBoard (eco +
   respuesta), C-t C-r la resetea, devremote --reset la "re-enchufa" (sesión
-  nueva).
+  nueva). Las teclas pasan por DeviceManager.on_keys, como en la Pi
+  (EspMonitor.input_sink): un reset pedido pone en cero los contadores.
 - Flash: protocol.serve_connection real en un socket TCP, con esptool falso.
 - API: server.api real, servida por un adaptador http.server que llama a los
   handlers (no hace falta uvicorn) o por uvicorn si está instalado.
@@ -180,11 +181,15 @@ class SimBoard:
 
     # ----- tmux falso -----
 
+    _KEY_BYTES = {"C-t": b"\x14", "C-r": b"\x12", "C-p": b"\x10", "Enter": b"\r"}
+
     def keys(self, text: str) -> None:
+        self.manager.on_keys(text.encode("utf-8"))      # como EspMonitor.input_sink
         self._typed = getattr(self, "_typed", "") + text
         self.serial(text)                       # eco de esp_console
 
     def enter(self) -> None:
+        self.manager.on_keys(self._KEY_BYTES["Enter"])
         cmd, self._typed = getattr(self, "_typed", "").strip(), ""
         self.serial("\r\n")
         self.later(self.reply_delay, self._reply, cmd)
@@ -201,6 +206,7 @@ class SimBoard:
         self.serial(PROMPT)
 
     def key(self, key: str) -> None:
+        self.manager.on_keys(self._KEY_BYTES.get(key, b""))
         if key == "C-t":
             self._ctrl_t = True
             return

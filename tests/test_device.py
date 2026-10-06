@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "remote"))
 
+from server.serial_watch import BOOT_LOOP_COUNT
 from server.device import Device, DeviceManager, DeviceState, InvalidTransition, TtyPort
 from server.device_log import DeviceLog
 
@@ -422,6 +423,29 @@ def test_flash_resets_health_counters_but_keeps_fw(monkeypatch, tmp_path):
     assert manager.device.snapshot()["fw"]["version"] == "v1.2.3"
 
 
+def test_reset_keys_to_the_monitor_reset_health_counters(monkeypatch, tmp_path):
+    """Ctrl-T Ctrl-R / Ctrl-T Ctrl-P (lo que manda /command, o alguien enganchado
+    con devremote) reinician el chip a propósito: como el flash, los contadores
+    vuelven a cero. Antes, flash + dos `reset --verify` daban un boot loop."""
+    monkeypatch.setenv("ESP_BASE", str(tmp_path))
+    manager = DeviceManager("/dev/ttyUSB0", mac_reader=lambda: MAC, tcp_port=5000)
+    manager.discover()
+    manager.on_serial(BOOT + PANIC)
+    manager.on_keys(b"status\r")                      # texto: nada
+    manager.on_keys(b"\x12")                          # Ctrl-R sin el Ctrl-T: nada
+    assert manager.watch.health()["boots"] == 1
+    manager.on_keys(b"\x14")                          # tmux manda cada tecla aparte
+    manager.on_keys(b"\x12")
+    health = json.loads((tmp_path / "run" / "ttyUSB0.json").read_text())["health"]
+    assert health["boots"] == 0 and health["panics"] == 0     # y se republicó
+    manager.on_serial(BOOT)
+    manager.on_keys(b"\x14\x10")                      # bootloader, en un solo read
+    assert manager.watch.health()["boots"] == 0
+    manager.on_serial(BOOT)
+    manager.on_keys(b"\x14\x14\x12")                  # Ctrl-T Ctrl-T = Ctrl-T literal: no es el menú
+    assert manager.watch.health()["boots"] == 1
+
+
 def test_device_without_watch_has_no_health(monkeypatch, tmp_path):
     device = make_device(monkeypatch, tmp_path)
     assert "health" not in device.snapshot()
@@ -531,7 +555,7 @@ def test_tick_closes_boot_loop_and_republishes(monkeypatch, tmp_path):
     manager.discover()
     clock = [1_800_000_000.0]
     manager.watch._clock = lambda: clock[0]
-    for _ in range(3):
+    for _ in range(BOOT_LOOP_COUNT):
         manager.on_serial(b"rst:0xc (SW_CPU_RESET),boot:0x13\r\n")
     assert seen[-1]["health"]["boot_loop"]
     manager.tick()
