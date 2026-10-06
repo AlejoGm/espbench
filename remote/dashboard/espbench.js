@@ -1275,6 +1275,50 @@
         return {ok: true, text: t, error: null};
     }
 
+    // ── Monitor (device.html): nota y propiedades en el header ──
+
+    /*
+     * ¿El bench guarda nota y propiedades? false si /api/properties dio 404 (catalogStatus) o si
+     * el device no trae `props` ni `note` (un server anterior); null si todavía no se sabe.
+     */
+    function metaSupported(d, catalogStatus) {
+        if (catalogStatus === 404) return false;
+        if (d && d.mac && !('props' in d) && !('note' in d)) return false;
+        return catalogStatus ? true : null;
+    }
+
+    var META_OFF_TITLE = 'Este bench no soporta notas ni propiedades: actualizalo';
+
+    /*
+     * Nota y propiedades en el header del monitor, compactas: los chips (mismo orden y roles que la
+     * card), la nota resumida (texto completo en el tooltip; click: editarla) y los botones de editar.
+     * Sin nada: un solo botón (+) que abre el menú. supported === false: un ícono deshabilitado.
+     * Los botones llevan data-act="add|props|note" (la página abre el popover).
+     */
+    function monitorMetaHtml(d, catalog, supported, now) {
+        if (!d || !d.mac) return '';
+        if (supported === false) {
+            return '<span class="meta-btn icon meta-off" role="img" title="' + META_OFF_TITLE + '" aria-label="' + META_OFF_TITLE + '">' +
+                   '<i class="ti ti-tag-off" aria-hidden="true"></i></span>';
+        }
+        var n = noteInfo(d, now);
+        var cp = cardProps(d.props, catalog);
+        var hard = cp.estado.filter(function (p) { return p.warn; });
+        var soft = cp.estado.filter(function (p) { return !p.warn; });
+        var chips = hard.concat(cp.spec, cp.tag, soft);
+        if (!n && !chips.length) {
+            return '<button class="meta-btn icon" data-act="add" title="Agregar propiedades (chip, conectividad, uso, estado) o una nota" ' +
+                   'aria-label="Agregar propiedades o una nota"><i class="ti ti-plus" aria-hidden="true"></i></button>';
+        }
+        return chips.map(cardPropHtml).join('') +
+            (n ? '<button class="note-chip" data-act="note" title="' + escapeHtml(n.title + '\n(click: editar)') + '">' +
+                 '<i class="ti ti-note" aria-hidden="true"></i><span class="note-chip-text">' + escapeHtml(n.text) + '</span></button>' : '') +
+            '<button class="meta-btn icon" data-act="props" title="' + (chips.length ? 'Editar las propiedades' : 'Agregar propiedades') +
+                '" aria-label="Propiedades"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button>' +
+            (n ? '' : '<button class="meta-btn icon" data-act="note" title="Agregar una nota" aria-label="Agregar una nota">' +
+                      '<i class="ti ti-note" aria-hidden="true"></i></button>');
+    }
+
     // Gráfico de área (SVG) para una serie: curva suave, relleno, marcas en los índices de `marks`.
     function areaChartSvg(values, marks, w, h, opts) {
         opts = opts || {};
@@ -1323,6 +1367,8 @@
         cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
         groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,
         boardFree: boardFree, locationCheck: locationCheck, locationView: locationView, LOCATION_MAX: LOCATION_MAX,
+        metaSupported: metaSupported,
+        monitorMetaHtml: monitorMetaHtml, META_OFF_TITLE: META_OFF_TITLE,
         areaChartSvg: areaChartSvg
     };
 });

@@ -181,7 +181,9 @@
         document.getElementById('boards').innerHTML = EB.groupBoards(shown, groupBy, catalog).map(function(g) {
             return (groupBy ? EB.groupHeaderHtml(g, groupBy) : '') + g.items.map(function(d) {
                 var a = activity[d.tty_name];
-                return EB.boardCardHtml(d, {buckets: a && a.buckets, rename: true, meta: true, catalog: catalog});
+                // bench viejo (sin /api/properties): sin botones de nota ni propiedades
+                var meta = EB.metaSupported(d, EBMeta.catalogStatus()) !== false;
+                return EB.boardCardHtml(d, {buckets: a && a.buckets, rename: true, meta: meta, catalog: catalog});
             }).join('');
         }).join('');
         document.getElementById('empty').classList.toggle('hidden', devices.length > 0);
