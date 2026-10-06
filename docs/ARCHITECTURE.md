@@ -112,10 +112,15 @@ leen el dashboard (`DeviceRegistry`, `LogStreamer`), `esp32_tmux.sh` y
 
 `health` y `fw` los arma `SerialWatch` (`serial_watch.py`) leyendo las mismas
 líneas que van al log (se las pasa `DeviceLog`, §4): cuenta reinicios y panics,
-detecta boot loop (3 boots en 2 min) y toma nombre/versión del firmware de lo que
+detecta boot loop (**5 boots en 60 s**; un firmware en loop reinicia cada 1-10 s, y
+deja lugar a unos resets a mano) y toma nombre/versión del firmware de lo que
 imprime `app_init`. Lo mismo queda como eventos en `events.jsonl` (§4). Cuando cambian, el
-`Device` republica sin transición (`publish()`). Al empezar un flash o un erase los
-contadores vuelven a cero: esos reinicios son a propósito.
+`Device` republica sin transición (`publish()`). Los contadores vuelven a cero con los
+reinicios a propósito: al empezar un flash o un erase, y con un reset pedido al
+monitor (Ctrl-T Ctrl-R / Ctrl-T Ctrl-P: lo que manda `POST /command/reset|bootloader`, o
+alguien enganchado con `devremote <dev>`). Las teclas de la sesión tmux pasan por
+`DeviceManager.on_keys` (`EspMonitor.input_sink`) antes de llegar al monitor.
+`restart-session` arranca otro proceso, con un `SerialWatch` nuevo.
 
 **Es por tty y no por MAC** porque es el estado del *proceso*, y antes de leer la
 MAC no hay otra clave posible. Los datos que tienen que seguir a la placa (log,
@@ -191,7 +196,7 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 
 ```json
 {"ts":"2026-10-05T16:02:03.123","type":"panic","cursor":"c:20261005_155000_812:48213",
- "detail":{"kind":"panic","reason":"LoadProhibited","line":"Guru Meditation Error: ..."},"by":"device"}
+ "detail":{"kind":"guru","reason":"LoadProhibited","line":"Guru Meditation Error: ..."},"by":"device"}
 ```
 
 | type | Lo escribe | detail |
@@ -199,16 +204,17 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `session` | `DeviceLog`, al abrir el archivo (cursor = offset 0) | tty, tcp_port, pid |
 | `boot` | `SerialWatch`, en cada línea `rst:` | reason, abnormal |
 | `fw` | `SerialWatch`: el primero de cada sesión y cada vez que cambia (al ver la línea `ESP-IDF:`, o en el siguiente `rst:`) | project, version, idf |
-| `panic` | `SerialWatch` | kind, reason, line |
-| `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor} |
+| `panic` | `SerialWatch`, fuera de un boot loop | kind, reason, line |
+| `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor}, `panics` (los del loop) y `first_panic`/`last_panic` (kind) |
 | `state` | `Device` (FSM), en cada transición; evento y línea taglog bajo el lock del `DeviceLog` (`atomic()`) | from, to |
 | `flash` | `protocol.py`, con la respuesta final y antes de reanudar el monitor (§5) | job_id, ok, status, error, user |
 | `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user, forced? |
 | `command` | api, en cada `POST /command` exitoso | command (reset/bootloader), user, forced? |
-| `reserve` / `release` | api | user, expires |
+| `reserve` / `release` | api (`release` también `devremote --unlock`, forzado) | user, expires (con zona) |
 
-- **Boot loop**: mientras está activo no se registran los `boot` sueltos (solo
-  `start` con el conteo y `end`). El `end` se registra con la primera línea que
+- **Boot loop**: mientras está activo no se registran los `boot` ni los `panic`
+  sueltos (solo `start` con el conteo y `end` con los panics): un firmware que
+  crashea al arrancar escribía miles de eventos por hora. El `end` se registra con la primera línea que
   llega después de que el loop venció, con el tick de cada segundo del proceso
   (`DeviceManager.tick` → `SerialWatch.poll`, así una placa muda también lo
   cierra y se republica la salud) o al empezar un flash/erase.
@@ -219,7 +225,8 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
   recalculan al volcarlo. En la migración `unknown-<tty>` → MAC pasan **solo los
   eventos de la sesión actual** (el provisorio puede tener sesiones de otra placa).
 - **Escritura**: `O_APPEND` y un solo `os.write()` por línea (< 4 KB), atómico en
-  Linux entre procesos. Sin `flock`, sin ids, sin rotación. El archivo se crea con
+  Linux entre procesos. Sin `flock`, sin ids, sin rotación (sin tope: por eso la
+  lectura va de atrás para adelante, ver "Rangos del log"). El archivo se crea con
   modo 666: el proceso del api (sfypi) también va a escribir.
 - El proceso del api escribe con `events.record(log_path, type, detail)`: cursor =
   fin de la última línea completa del `output.log` en ese momento.
@@ -346,10 +353,10 @@ boot ─────► devremote.service ────────────�
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
 | `POST /api/device/{tty}/unlock` `{lock_user, lock_token}` o `{force: true}` | Liberar lock con el par, como `release`; `force: true` (el dashboard, después de confirmar) lo suelta sin el par y **exige** token de la API (sin `/opt/esp/api_token` → 403 `force_disabled`). Evento `release` con el dueño anterior y, si se forzó, `by_user`/`by_host` |
-| `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
+| `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5): `ttl_s` default 1800, **máximo 24 h** (más → 400); `expires` con la zona de la Pi; 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
 | `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
 | `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`; 409 `busy` si flashea/borra, 502 si tmux falla; evento `command`. Body opcional: `expect_mac`, par del lock, `force`, `require_reservation` |
-| `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>`; mismas reglas de reserva que `command` (423 `locked`, `force`, `require_reservation`, `expect_mac`); evento `command` con `command: restart-session` |
+| `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>`; mismas reglas de reserva que `command` (423 `locked`, `force`, `require_reservation`, `expect_mac`); evento `command` con `command: restart-session`. `tmux` y `devremote` corren en un thread (`asyncio.to_thread`): no frenan el event loop |
 | `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
@@ -394,7 +401,7 @@ boot ─────► devremote.service ────────────�
 
 - **Anchors** (`since`, `around`): `now`, `session`, un tipo de evento con ordinal
   (`boot`, `panic~1`: en la sesión actual, ordenados por offset, no por orden en
-  el archivo), tiempo (`5m`, `16:02`, `2026-10-05T16:02`, zona de la Pi; una hora
+  el archivo), tiempo (`500ms`, `5m`, `16:02`, `2026-10-05T16:02`, zona de la Pi; una hora
   posterior a ahora es de ayer) y cursores `c:<sesión>:<offset>` (a mitad de línea
   → inicio de la línea; sesión que ya no está → `cursor_expired`). `since` default:
   `session`.
@@ -409,7 +416,17 @@ boot ─────► devremote.service ────────────�
   (`re:<regex>` o substring) se evalúa sobre el texto sin prefijo ni ANSI, con el
   `\r` aplicado y sobre la línea lógica (`>` + sus `↪`, aunque haya taglog en el
   medio). `echo=<texto>`: la primera línea lógica que termina con él (el eco de
-  `send`) no cuenta. Sin match: `until_found: false`, `end` = fin del log.
+  `send`) no cuenta. Sin match: `until_found: false`, `end` = fin del log. Con match,
+  `match_cursor` = inicio de la línea lógica del match (`--verify` lo compara con el
+  cursor de un `boot_loop`).
+- **`events.jsonl` sin tope**: se lee **una vez por pedido** (`_Events`, después de
+  fijar el tamaño del log) y, para la sesión actual, **de atrás para adelante**
+  hasta 64 eventos seguidos fuera del rango (`EVENT_SLACK`: device y api escriben en
+  paralelo y el orden del archivo no es exactamente el del log). Las líneas de otra
+  sesión o de otro tipo no se parsean (el cursor y el tipo se miran en los bytes). Un
+  cursor de una sesión anterior lee el archivo entero (raro). `/events` sin `since`
+  (los últimos N) también lee la cola; `counts=1` cuenta todo el archivo de forma
+  incremental (solo crece; un inode distinto arranca de cero).
 - **Patrones del usuario** (`grep`, `until=re:`; las lecturas no piden token):
   hasta 256 caracteres, se evalúan los primeros 4096 de cada línea, y con el
   módulo `regex` cada búsqueda tiene timeout de 0,1 s y el pedido 2 s en total
@@ -471,7 +488,8 @@ boot ─────► devremote.service ────────────�
 ```
 
 `devremote --cleanup` borra jobs y sesiones de log viejas. La sesión actual
-nunca se toca.
+nunca se toca. `events.jsonl` no se limpia: los eventos de una sesión borrada
+quedan, y pedir su contexto (`--around <cursor>`) da `cursor_expired` (esperado).
 
 ---
 
@@ -488,27 +506,15 @@ así que ningún test toca el `/opt/esp` real.
 | Scripts de infra | los scripts reales con `tmux`/`udevadm`/`pkill` falsos (`test_infra.py`) |
 | Dashboard | `DeviceRegistry`, `LogStreamer` (rotación, `log_path` por estado runtime), `history`, endpoints de `api.py` llamados directo (`test_api.py`) |
 | Frontend | lógica de `remote/dashboard/espbench.js` con `node --test` (`tests/js/`, lo corre `test_dashboard_js.py`) |
+| Contratos duplicados (Python ↔ JS, server ↔ cliente) | prefijo de línea, cursor, nombre de sesión (`test_contract_parity.py`) y marcas de panic/boot (`test_linemark_parity.py`) sobre los mismos casos |
+| Cliente | `espbench_lib` y el CLI contra `tests/benchsim.py` (API real + `DeviceManager`/`DeviceLog` reales, tmux y esptool falsos) |
 
-**Solo se verifica en la Pi**: la regla udev de slots, el hotplug vía systemd, y
-el comportamiento real de `esp_idf_monitor`/esptool con hardware (flash, erase,
-MAC por serial, desconexión física). Del dashboard: que `SerialWatch` cuente un
-panic real (y vuelva a cero al flashear), y que la consola serie (`tmux send-keys`)
-le llegue al firmware a través de `esp_idf_monitor`. Del log y los eventos: que
-los offsets de los cursores caigan en la línea correcta con `esp_idf_monitor` real
-(sus `\r\n`, colores y líneas decodificadas de backtrace), que el prompt de
-`esp_console` salga a los 150 ms y el eco con `↪`, que el `boot` coincida con cada
-reset real, y que tras un reboot sin red `devremote.service` arranque igual
-(drop-in de 90 s a `systemd-time-wait-sync`) y con red espere a NTP. De la API
-(fase 2): que la concurrencia de eventos device + api deje líneas válidas en
-`events.jsonl` (sfypi escribiendo un archivo creado por root), que una reserva
-sobreviva un replug real (y se borre si en el puerto quedó otra placa), que el
-`send` con `until` vea la respuesta y no el eco de `esp_console`, que el
-`--since flash --until boot` encuentre el primer `rst:` del firmware nuevo, y que
-el dashboard pida el token y siga escribiendo con `/opt/esp/api_token` creado. Del cliente (fase 3): que
-`send --until` vea la respuesta de `esp_console` real y no el eco, que `flash --verify` siga a la sesión nueva
-en una S3/C3 (tiempo de re-enumeración, tty que cambia) y encuentre su boot, que un panic real (con el
-backtrace decodificado por `esp_idf_monitor`) corte la espera con `crashed`, y la carga de los polls (hasta dos
-pedidos por poll con actividad) con varios agentes contra la misma Pi.
+**Solo se verifica en la Pi**: la regla udev de slots, el hotplug vía systemd, el
+reloj al boot (NTP / sin red) y todo lo que depende de `esp_idf_monitor`/esptool con
+hardware real (offsets con sus `\r\n` y backtraces, eco y prompt de `esp_console`,
+re-enumeración USB de S3/C3, panics reales, resets por RTS), más la concurrencia y la
+carga con varios agentes. La lista priorizada (P0 despliegue → P3 infra), para
+correr después de cada update grande: **[docs/PI_CHECKLIST.md](PI_CHECKLIST.md)**.
 
 ---
 
@@ -537,10 +543,16 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
 - **`idle:`** en `send`: el eco no es la respuesta; el silencio cuenta desde la primera línea después del eco.
 - **Verify** (`flash`/`reset --verify`): el primer `boot` desde el cursor del flash/command; si la sesión termina
   sin boot (S3/C3: el reset re-enumera el USB y arranca otro proceso), espera la sesión nueva (`/events` →
-  `session`) y sigue ahí. Después, una ventana de asentamiento: otro `boot`, un `panic` o un `boot_loop` = `crashed`.
+  `session`) y sigue ahí. Después, una ventana de asentamiento: otro reinicio (por su línea `rst:`: en un boot loop
+  no hay eventos `boot`), un `panic` o un `boot_loop` = `crashed`. Un `boot_loop` que **empieza en el boot
+  encontrado** (mismo cursor que `match_cursor`: resets que no pasaron por el monitor, como el botón EN) no es un
+  crash del firmware nuevo: sale `boot_loop: true`, informativo.
 - **Reserva**: el cliente que reservó guarda un registro local por MAC (`~/.cache/espbench/reservations.json`) y desde ahí
   sus escrituras van con `require_reservation` → `reservation_lost` si venció o la soltó otro. `expect_mac` en
   todas las escrituras. `force` nunca.
 - **Config**: flags > env > `~/.config/espbench.json` (perfiles) > `.flashcfg.json`.
+- **`ls`/`status`**: `available` = `monitoring` y sin lock, o con lock propio (un lock ajeno, aunque sea el
+  permanente de un flash, no deja flashear ni reservar).
+- `fcntl` es opcional (Windows): sin él, el registro local de reservas va sin `flock`.
 
 Tests: contra `tests/benchsim.py`, una Pi simulada con la API real y `DeviceManager`/`DeviceLog` reales (§10).

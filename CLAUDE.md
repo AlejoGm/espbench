@@ -16,7 +16,7 @@ espbench/
 │   └── infra/         # devremote, esp32_tmux.sh, espbench-name, udev, systemd
 ├── tests/             # pytest, corre en host sin hardware
 ├── rpi/               # Setup de una Pi nueva
-├── docs/              # ARCHITECTURE.md; archive/ = PRDs y código histórico
+├── docs/              # ARCHITECTURE.md, PI_CHECKLIST.md (lo que se prueba en la Pi); specs/ = diseño histórico; archive/ = PRDs y código viejo
 └── issues/            # Histórico (01-13). Los issues nuevos van a GitHub Issues.
 ```
 
@@ -36,7 +36,7 @@ espbench/
 pytest tests/
 ```
 
-Corren en el host, sin hardware. `tests/conftest.py` apunta `ESP_BASE` a un directorio temporal, así que ningún test toca `/opt/esp`. Lo que solo se puede verificar en la Pi está listado en `docs/ARCHITECTURE.md` §10.
+Corren en el host, sin hardware. `tests/conftest.py` apunta `ESP_BASE` a un directorio temporal, así que ningún test toca `/opt/esp`. Lo que solo se puede verificar en la Pi está en `docs/PI_CHECKLIST.md` (P0–P3, desde `docs/ARCHITECTURE.md` §10).
 
 ## Server en la Pi
 

@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.31.7
+**Version:** 0.31.8
 
 ---
 
@@ -190,6 +190,8 @@ cómo no llenar el contexto de log):
 mkdir -p ~/.claude/skills && ln -sfn "$PWD/client/agent" ~/.claude/skills/espbench    # desde la raíz del repo
 ```
 
+`ls --json` marca `available: true` en las placas libres o con lock propio: un agente elige entre esas.
+
 Probar sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --port 8099` levanta una Pi simulada (API real, una
 placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_HOST=127.0.0.1:8099 espbench ls`.
 
@@ -354,7 +356,7 @@ Devices whose MAC can't be read keep the per-tty layout (`devices/unknown-<tty>/
 pytest tests/
 ```
 
-No hardware required. The protocol, the per-device entrypoint and the infra shell scripts run end-to-end against fakes at the edges (esptool, esp_idf_monitor, socket, tmux, udev). What can only be verified on a real Pi is listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §10.
+No hardware required. The protocol, the per-device entrypoint and the infra shell scripts run end-to-end against fakes at the edges (esptool, esp_idf_monitor, socket, tmux, udev). What can only be verified on a real Pi is the prioritized checklist in [docs/PI_CHECKLIST.md](docs/PI_CHECKLIST.md) (P0 deploy → P3 infra): run it after every big update.
 
 ---
 
@@ -368,7 +370,8 @@ devremote --reset         # restart all sessions
 devremote --reset 0       # restart one device
 devremote --unlock 0      # release a device lock (any owner; leaves a `release` event)
 devremote --slots         # ID_PATH of each physical port (for slots.conf)
-devremote --cleanup       # delete old jobs and rotated logs (--dry-run to preview)
+devremote --cleanup       # delete old jobs and rotated logs (--dry-run to preview); their events stay
+                          # in events.jsonl, so `--around <cursor>` of a deleted session → cursor_expired
 ```
 
 ### Stable ports (optional)

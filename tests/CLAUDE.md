@@ -11,7 +11,7 @@ pytest tests/
 | Archivo | Qué cubre |
 |---|---|
 | `test_device.py` | FSM de `Device`, `TtyPort`, `DeviceManager` (reintentos de MAC, MAC por serial, watcher del tty), publicación de estado, eventos `state` y del serial apuntando a su línea |
-| `test_serial_watch.py` | `SerialWatch.on_line`: resets, panics, boot loop, firmware, `\r`/ANSI, chunks por la tubería real; eventos `boot`/`panic`/`fw`/`boot_loop` |
+| `test_serial_watch.py` | `SerialWatch.on_line`: resets, panics, boot loop (umbral 5 en 60 s, panics agregados en el `end`), firmware, `\r`/ANSI, chunks por la tubería real; eventos `boot`/`panic`/`fw`/`boot_loop` |
 | `test_device_log.py` | `DeviceLog`: prefijo, chunks y UTF-8 partidos, parcial retenido y `↪`, taglog en medio de una serial, header fuera del buffer, offsets en bytes, rotación por `session_id`, buffer pre-MAC, migración; eventos con cursor exacto (pre-MAC, migración solo de la sesión) |
 | `test_events.py` | `events.jsonl`: dos procesos escribiendo a la vez, lectura, truncado, migración de sesión, cursor del fin del log, `record()` del api |
 | `test_logrange.py` | Rangos del log: anchors (ordinales, tiempo con horas desordenadas y líneas sin prefijo, cursor a mitad de línea, vencido), `until` (evento, boot/panic en las líneas, patrón en la línea lógica, eco, histórico vs espera), `around`, filtros, truncado, `/events` |
@@ -24,10 +24,11 @@ pytest tests/
 | `test_device_registry.py` | Vista del dashboard: estado runtime, slots, último flasheo, `devices.json` sin corrupción concurrente |
 | `test_history.py` | Historial: jobs con/sin `result.json`, sesiones, path traversal |
 | `test_api.py` | Endpoints llamando los handlers directo (no hay httpx): historial, `send` (cursor previo, evento, `expect_mac`, 409 ocupado), reservas (`reserve`/`release`, 423 a otros, `force`; `unlock` con `force: true` y evento `release`), `command` con tty validado, token en las escrituras, `/api/board/{key}/log|events` por key/SN/MAC con la placa desconectada, orden de rutas |
-| `test_log_streamer.py` | WebSocket: contenido inicial, stream, rotación, `log_path` desde el estado runtime |
+| `test_log_streamer.py` | WebSocket: contenido inicial, stream, rotación, `log_path` desde el estado runtime; no parsea ni lee logs al arrancar |
 | `test_linemark_parity.py` | `EB.lineMark` (JS) y `serial_watch.line_kind` (Python) dan lo mismo sobre los mismos casos (corre node); se saltea sin node |
+| `test_contract_parity.py` | Los otros contratos escritos dos veces: prefijo de línea (`logrange` ↔ `EB.splitPrefix`), cursor (`events` ↔ `EB.parseCursor` ↔ `espbench_lib`), nombre de sesión (`make_session_id` ↔ `history.SESSION_RE` ↔ `EB.sessionStart`) |
 | `test_dashboard_js.py` | Corre `tests/js/test_*.js` con `node --test` en tres zonas horarias (UTC, Argentina, Tokio) (lógica del frontend en `espbench.js`: prefijo, clases de línea, reservas y "vence en", filas y contexto de eventos, marcas del vivo); se saltea sin node |
-| `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos; `devremote.service` espera a `time-sync.target` |
+| `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`, `pip-deps.sh`) con `tmux`/`udevadm`/`pkill`/`pip` falsos; `devremote.service` espera a `time-sync.target`; `devremote --unlock` con el server de verdad (flock + evento); `regex` opcional en el install |
 | `test_espbench_lib.py` | `client/espbench_lib.py` contra `benchsim`: config, resolve, esperas (idle, `--for`, patrón, eco en el 2º poll, línea lógica partida, timeout), panic → `crashed` (también como `↪` del prompt y con el evento tarde), `--expect-panic`, `session_ended`, errores del contrato (busy, locked, reservation_lost, token_mismatch, device_changed, auth, auth_config, not_found, bad_anchor, cursor_expired, network), flash + verify (sesión nueva, panic/reboot en la ventana, until), reset; uno con uvicorn |
 | `test_espbench_cli.py` | El CLI con `--json` (`main(argv)` en el proceso; por `subprocess` el contrato, `python -m` e `install.sh`): un objeto por comando, exit codes, ciclo reserve → send → logs/events → release, flash `--verify`, argumentos validados antes de escribir, salida humana |
 | `test_deploy.py` | `deploy.py` importa el flash de la lib y su salida no cambió; `flash_one` contra el protocolo real |

@@ -20,7 +20,9 @@ Spec del CLI y de la lib: `docs/specs/agents-cli.md` §8 y §12.2 (decisiones de
 - **Escrituras** (`_write_body`, `_write`): siempre `expect_mac` y el par del lock; `require_reservation: true` si este cliente la reservó (registro local por MAC en `~/.cache/espbench/reservations.json`, `ESPBENCH_STATE_DIR`, con `flock`; se olvida ante `reservation_lost`). **Nunca `force`.** El CLI valida todos los argumentos (duraciones, regex) antes de escribir, y toma la foto de crashes (`crash_snapshot`) antes de la escritura.
 - **Esperas** (`read_range`): poll cada 0,3 s desde el `end` anterior, `echo` hasta `echo_seen`. Los crash (panic, boot_loop) salen de `/events`, no de los `events` de cada respuesta: ver el docstring de `_crash_since` (cursor = inicio de la línea lógica; evento escrito después de su línea; la regla de "nuevo" solo para `panic`). `idle:` en `send` cuenta desde la primera línea después del eco.
 - **Flash**: `collect_artifact` (solo `flasher_args.json` del build dir) + `flash_one` (protocolo TCP) viven acá; `deploy.py` los importa (con sus prints) y mantiene aparte solo el modo custom.
-- **Verify**: primer `boot` después del cursor del flash/reset (si la sesión termina, sigue en la nueva: S3/C3), ventana de asentamiento sin `boot`/`panic`/`boot_loop`, y `until` opcional.
+- **Verify**: primer `boot` después del cursor del flash/reset (si la sesión termina, sigue en la nueva: S3/C3), ventana de asentamiento sin reinicio (por la línea `rst:`, `_settle`), `panic` ni `boot_loop`, y `until` opcional. Un `boot_loop` que empieza en el boot encontrado (su cursor = `match_cursor`) es informativo: `boot_loop: true`.
+- **`ls`/`status`**: `available` (monitoring y sin lock, o con lock propio).
+- **Windows**: `fcntl` es opcional (import con fallback): sin él, el registro local de reservas va sin `flock`. `deploy.py` necesita `client/espbench_lib.py` y `common.py` al lado (no se copia suelto).
 
 ## Tests
 

@@ -7,6 +7,11 @@ tools/deploy.py — Único comando: build + flash (local o remoto)
 - Puede preguntar si hacer build+flash o solo flash
 - Local: idf.py (encrypted-)flash (+ monitor opcional)
 - Remoto: arma artifact.zip, lo envía y recibe JSON
+
+Ya no es copiable suelto a otro proyecto: el camino del flash vive en
+client/espbench_lib.py (compartido con el CLI `espbench`) y usa common.py de la
+raíz del repo. Correrlo desde el clone (`python <repo>/client/deploy.py`), o
+copiar client/ y common.py juntos.
 """
 
 import argparse, json, os, pathlib, shlex, socket, struct, subprocess, sys, tempfile, zipfile, hashlib, time, shutil, platform, threading

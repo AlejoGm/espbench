@@ -1,8 +1,29 @@
 # Spec — espbench para agentes (CLI `espbench`, eventos, log con timestamps)
 
-Estado: **v2, revisada y confirmada** · rama `feat/agents` (sobre `feat/dashboard-ux`) · 2026-10-05
+Estado: **histórica** · implementada en `feat/agents` · última actualización 2026-10-06
 
-Sale de un grill con Alejo. v2 incorpora una revisión contra el código (sección 10). Lo marcado **[confirmar]** es propuesta, no decisión.
+> **Documento histórico: diseño y decisiones de la feature.** No se mantiene al día. El contrato
+> vigente vive en [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §4 (log y eventos), §8 (API) y §11
+> (cliente), y en [client/agent/SKILL.md](../../client/agent/SKILL.md). Lo que cambió después de
+> escribirla (la revisión de la feature entera, v0.30.6 → v0.31.x):
+>
+> - **Boot loop**: 5 boots en 60 s (no 3 en 2 min). Los resets pedidos al monitor (`command
+>   reset|bootloader`: Ctrl-T Ctrl-R/P) ponen los contadores en cero como el flash; `restart-session`
+>   arranca un proceso nuevo. Durante un loop los `panic` tampoco van sueltos: el `boot_loop end` trae
+>   `panics`, `first_panic`, `last_panic` (§4.1).
+> - **`--verify`** (§8.2): un `boot_loop` que empieza en el boot encontrado es informativo
+>   (`boot_loop: true`), y la ventana ve el reinicio por su línea `rst:`. `/log` devuelve
+>   `match_cursor` (§7.3).
+> - **Reserva**: máximo 24 h, no 7 días (§12); `expires` con zona en `reserve` y en sus eventos.
+> - **`lock_user`/`lock_token` pueden tener `:`** (escapados en el archivo del lock), contra lo que
+>   dicen §6 y §12.
+> - Lock vencido: se **ignora**, no se borra al leerlo (§6 corregido; §12 ya lo decía).
+> - Anchors de tiempo con `ms` (§5). `partial` es siempre `null` (§7.3, corregido).
+> - `events.jsonl` se lee una vez por pedido y de atrás para adelante; `counts` incremental (§4.2).
+> - `ls`/`status` traen `available`. El `LogStreamer` ya no parsea firmware ni CHIPID.
+>
+> Lo marcado **[confirmar]** era propuesta, no decisión. Sale de un grill con Alejo; v2 incorporó una
+> revisión contra el código (sección 10).
 
 ---
 
@@ -114,6 +135,7 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 | `state` | device (FSM) | from, to (incluye `disconnected`) |
 | `flash` | device (protocol) | job_id, ok, status, error, user |
 | `send` | api | text, enter, user |
+| `command` | api (`/command`, `devremote-reset`) | command (`reset`/`bootloader`/`restart-session`), user, forced? (§12) |
 | `reserve` / `release` | api | user, expires |
 
 - **`boot` = `rst:`** (antes había `reset` y `boot`; el `rst:` es el **inicio** del arranque, y `app_init` puede no aparecer con log level bajo o si el firmware no cambió).
@@ -153,7 +175,7 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 - Archivo `locks/<tty>`: `user:token[:expires_epoch[:mac]]`. Lectura compatible con `user:token`.
 - **`reserve` usa el mismo par `lock_user`/`lock_token` que el flash**, así el flash del propio agente no da `device_locked`. `release` exige el par (como el unlock de hoy, `api.py:170`).
 - `LockStore.acquire` **conserva** el vencimiento y la MAC si el lock ya es del mismo user (hoy reescribe `user:token`, `protocol.py:153`).
-- Vencido = inexistente en todos lados (`LockStore`, `DeviceRegistry`, api); se borra al leerlo.
+- Vencido = inexistente en todos lados (`LockStore`, `DeviceRegistry`, api): se **ignora** al leerlo y la próxima escritura lo pisa. **No se borra al leerlo** (entre la lectura y el borrado otro proceso podía escribir una reserva nueva, y se perdía).
 - **Reconexión**: `esp32_tmux.sh:44` borra el lock al relanzar la sesión. v2: borra solo locks **sin vencimiento** (los del flash, como hoy). Una reserva vigente se conserva; al arrancar, el proceso de la placa la borra si su MAC no coincide (los ttyUSB se renumeraron). El CLI, en cada escritura, verifica que la reserva siga siendo suya → `reservation_lost` (exit 6).
 - **A3 (confirmado)**: una reserva con vencimiento bloquea `send`/`command`/`reset` de otros usuarios (423). Los locks permanentes del flash **no** bloquean `send` (si no, la consola del dashboard muere en toda placa ya flasheada). El dashboard puede forzar con el token de la API.
 
@@ -191,7 +213,7 @@ Token (D13): archivo opcional `/opt/esp/api_token`. Si existe: escrituras con `A
   "end":   "c:20261005_155000_812:49380",
   "until_found": true,
   "match": "16:02:03.123 > Guru Meditation Error: ...",
-  "partial": null,                           // línea serial en curso (solo si el cliente la pide, para idle)
+  "partial": null,                           // siempre null: la línea en curso vive en el proceso del device (§12)
   "truncated": false,
   "session_ended": false,
   "events": [{"ts":"...","type":"panic","cursor":"..."}],

@@ -42,11 +42,14 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 - En `send` el eco del comando nunca cuenta para el match: `--until status` sobre `send status` espera la respuesta.
 - Un panic o boot loop durante la espera la corta con exit 3. Si el panic es lo que estás probando: `--expect-panic` (exit 0, `reason: "panic"`).
 - `--verify=D` cambia la ventana de asentamiento; `flash`/`reset` con `--until X` además esperan X después del boot.
+- `verify.boot_loop: true` con exit 0: el boot que encontró es el que la Pi marcó como inicio de un boot loop (varios resets seguidos que no pasaron por `espbench reset`, p. ej. el botón EN). Es informativo: si el firmware de verdad reinicia en loop, la ventana lo ve y da exit 3.
 - `idle:D` en `send` cuenta desde la primera línea **después del eco**: elegí D mayor que la pausa más larga entre líneas de la respuesta.
 
 ## Anchors (`--since`, `--around`)
 
-`now`, `session` (default), un evento con ordinal (`boot` = el último de la sesión, `boot~1` = el anterior, `panic`, `flash`, `send`), tiempo (`5m`, `30s`, `16:02`, `2026-10-05T16:02`, hora de la Pi) o un cursor `c:<sesión>:<offset>` de una respuesta anterior (`start`, `end`, `cursor`, `boot_cursor`). Un rango no cruza sesiones.
+`now`, `session` (default), un evento con ordinal (`boot` = el último de la sesión, `boot~1` = el anterior, `panic`, `flash`, `send`), tiempo (`500ms`, `30s`, `5m`, `16:02`, `2026-10-05T16:02`, hora de la Pi) o un cursor `c:<sesión>:<offset>` de una respuesta anterior (`start`, `end`, `cursor`, `boot_cursor`, `match_cursor` = inicio de la línea del `match`). Un rango no cruza sesiones.
+
+Durante un boot loop los panics no quedan como eventos sueltos: mirá el `boot_loop` (`detail.panics`, `first_panic`, `last_panic`) y `logs --around <su cursor>`.
 
 Los anchors de evento (`panic`, `boot~1`) buscan **solo en la sesión actual**. Después de un cambio de sesión (replug, `restart-session`, S3/C3 tras el flash) `--around panic` da `bad_anchor` aunque el panic exista: tomá su cursor de `events`, que cruza sesiones.
 
