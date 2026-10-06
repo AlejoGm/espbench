@@ -29,6 +29,7 @@ Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests
 - Toolbar: filtro de texto (`/`, mira el cuerpo, no la hora), "solo problemas" (panics, resets, E/W de ESP-IDF, WARN/ERROR de taglog), ir al último panic, **Hora** (muestra/oculta la hora de cada línea; se recuerda en `localStorage`), pausar/seguir (`End`), limpiar, descargar.
 - Historial (panel lateral): flasheos con resultado, usuario y error (`/api/device/{tty}/jobs`, log de cada uno en un visor) y sesiones de log anteriores (`/sessions`, ver o descargar).
 - Consola serie abajo (`i` para enfocar): `POST /api/device/{tty}/send`, con ⏎ opcional e historial con ↑↓. Se deshabilita mientras flashea/borra.
+- Escrituras (`send`, `command`) por `postJson`: si la placa está reservada por otro (423) pregunta y reintenta con `force: true`. Los errores del API vienen como `{detail: "texto"}` o `{detail: {error, message}}`: mostrarlos con `EB.errorText`.
 - Los badges (`/api/device/{tty}`) se refrescan cada 3 s.
 
 ## Notas

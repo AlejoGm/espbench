@@ -202,7 +202,8 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor} |
 | `state` | `Device` (FSM), en cada transición; evento y línea taglog bajo el lock del `DeviceLog` (`atomic()`) | from, to |
 | `flash` | `protocol.py`, al armar la respuesta final | job_id, ok, status, error, user |
-| `send` / `reserve` / `release` | api (fase 2, `events.record`) | |
+| `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user |
+| `reserve` / `release` | api | user, expires |
 
 - **Boot loop**: mientras está activo no se registran los `boot` sueltos (solo
   `start` con el conteo y `end`). El `end` se registra con la primera línea que
@@ -327,13 +328,26 @@ boot ─────► devremote.service ────────────�
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
 | `POST /api/device/{tty}/unlock` | Liberar lock |
-| `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys` |
+| `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; renueva si es propia |
+| `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
+| `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`. Body opcional: `expect_mac`, par del lock, `force` |
 | `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>` |
 | `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
-| `POST /api/device/{tty}/send` `{text, enter}` | Texto al serial vía `tmux send-keys -l`; 409 si flashea/borra |
+| `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 
+- **Errores** de las escrituras (y de `/api/board`): `{"detail": {"error", "message"}}`.
+  `error` es el contrato del CLI (spec §8.3): `bad_request`, `busy` (409),
+  `device_changed` (409: `expect_mac` no es la MAC del tty), `locked` (423: placa
+  reservada por otro; 409 en `reserve`), `token_mismatch` (403), `not_found`,
+  `bad_anchor`, `cursor_expired`.
+- **Reservas (A3)**: una reserva vigente bloquea `send`/`command` de cualquiera que
+  no mande el mismo par (423). El lock permanente del flash no bloquea. `force:
+  true` la saltea: el dashboard lo manda después de confirmar.
+- `send`, `reserve` y `release` quedan en `events.jsonl` (`events.record`, cursor =
+  fin del log en ese momento; el de `send` es el previo al envío y solo se
+  registra si tmux lo mandó).
 - Las rutas `/api/device/{tty}/...` de GET tienen que declararse **antes** de
   `/api/device/{tty:path}`, que si no se las come (hay test).
 - `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del

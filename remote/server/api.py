@@ -13,14 +13,15 @@ import dataclasses
 import pathlib
 import re
 import subprocess
-from typing import Any
+import time
+from typing import Any, Optional
 from urllib.parse import unquote
 
 from fastapi import Body, FastAPI, HTTPException, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import history, locks, paths, runstate
+from server import events, history, locks, paths, runstate
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
@@ -66,11 +67,67 @@ async def get_device_by_key(device_key: str):
 _TTY_RE = re.compile(r"(ttyUSB|esp-slot)\d+")
 SEND_MAX = 256
 BUSY_STATES = ("flashing", "erasing")
+RESERVE_DEFAULT_S = 1800
+RESERVE_MAX_S = 7 * 24 * 3600
+
+
+def _fail(status: int, error: str, message: str):
+    """Error con `error` estable (el contrato del CLI, docs/specs/agents-cli.md
+    §8.3) y un mensaje para humanos: {"detail": {"error", "message"}}."""
+    raise HTTPException(status_code=status, detail={"error": error, "message": message})
 
 
 def _check_tty(tty: str) -> None:
     if not _TTY_RE.fullmatch(tty):
-        raise HTTPException(status_code=400, detail=f"tty no válido: {tty}")
+        _fail(400, "bad_request", f"tty no válido: {tty}")
+
+
+def _creds(body: dict, required: bool = True):
+    user = str(body.get("lock_user") or "").strip()
+    token = str(body.get("lock_token") or "").strip()
+    if required and (not user or not token):
+        _fail(400, "bad_request", "lock_user y lock_token requeridos")
+    if any(v and not locks.valid_credential(v) for v in (user, token)):
+        _fail(400, "bad_request", "lock_user y lock_token no pueden tener ':'")
+    return user, token
+
+
+def _check_expect_mac(state: dict, expect_mac) -> None:
+    """La escritura es para una placa (por MAC) y el tty puede tener otra (replug,
+    renumeración): 409 device_changed."""
+    if not expect_mac:
+        return
+    if locks.normalize_mac(state.get("mac")) != locks.normalize_mac(str(expect_mac)):
+        _fail(409, "device_changed", f"en este tty está {state.get('mac') or 'una placa sin MAC'}, "
+                                     f"no {expect_mac}")
+
+
+def _check_reservation(tty: str, body: dict) -> None:
+    """A3: una reserva (lock con vencimiento) bloquea send/command de otros. El
+    lock permanente del flash no (si no, la consola del dashboard muere en toda
+    placa flasheada). `force` la saltea (el dashboard, después de confirmar)."""
+    lock = locks.read(tty)
+    if lock is None or not lock.reservation or body.get("force"):
+        return
+    user, token = _creds(body, required=False)
+    if not lock.owned_by(user, token):
+        _fail(423, "locked", f"reservada por '{lock.user}' hasta {lock.expires_iso()}")
+
+
+def _record(state: dict, type_: str, detail: dict, cursor: Optional[str] = None) -> Optional[str]:
+    """Evento del api en el events.jsonl de la placa que está en el tty. Que no se
+    pueda registrar no rompe la escritura."""
+    log_path = state.get("log_path")
+    if not log_path:
+        return None
+    try:
+        if cursor is None:
+            ev = events.record(log_path, type_, detail)
+            return ev["cursor"] if ev else None
+        events.append(paths.events_file_beside(log_path), events.make(type_, cursor, detail, by="api"))
+        return cursor
+    except OSError:
+        return None
 
 
 @app.get("/api/device/{tty}/jobs")
@@ -119,28 +176,77 @@ def send_keys_cmds(session: str, text: str, enter: bool) -> list:
 
 @app.post("/api/device/{tty}/send")
 async def device_send(tty: str, body: dict = Body(...)):
-    """Manda texto por el serial del device (a través del monitor en tmux)."""
+    """Manda texto por el serial del device (a través del monitor en tmux).
+    Devuelve el cursor del log previo al envío (desde ahí se busca la
+    respuesta) y lo registra como evento `send`."""
     _check_tty(tty)
     text = str(body.get("text", ""))
     enter = bool(body.get("enter", True))
     if len(text) > SEND_MAX:
-        raise HTTPException(status_code=400, detail=f"texto de más de {SEND_MAX} caracteres")
+        _fail(400, "bad_request", f"texto de más de {SEND_MAX} caracteres")
     if any(ord(c) < 0x20 or ord(c) == 0x7f for c in text):
-        raise HTTPException(status_code=400, detail="caracteres de control no permitidos")
+        _fail(400, "bad_request", "caracteres de control no permitidos")
     if not text and not enter:
-        raise HTTPException(status_code=400, detail="nada para mandar")
+        _fail(400, "bad_request", "nada para mandar")
+    user, _ = _creds(body, required=False)
     state = runstate.read(tty) or {}
+    _check_expect_mac(state, body.get("expect_mac"))
     if state.get("state") in BUSY_STATES:
-        raise HTTPException(status_code=409, detail=f"device ocupado ({state['state']})")
+        _fail(409, "busy", f"device ocupado ({state['state']})")
+    _check_reservation(tty, body)
+    cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
     session = f"esp32_{tty}"
     for cmd in send_keys_cmds(session, text, enter):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError:
-            raise HTTPException(status_code=502, detail="tmux no disponible")
+            _fail(502, "unexpected", "tmux no disponible")
         if r.returncode != 0:
-            raise HTTPException(status_code=502, detail=f"tmux: {r.stderr.strip() or r.returncode}")
-    return {"ok": True, "session": session, "sent": text, "enter": enter}
+            _fail(502, "unexpected", f"tmux: {r.stderr.strip() or r.returncode}")
+    if cursor is not None:
+        _record(state, "send", {"text": text, "enter": enter, "user": user or None}, cursor)
+    return {"ok": True, "session": session, "sent": text, "enter": enter, "cursor": cursor}
+
+
+@app.post("/api/device/{tty}/reserve")
+async def device_reserve(tty: str, body: dict = Body(...)):
+    """Reserva con vencimiento (docs/specs/agents-cli.md §6), con el mismo par
+    lock_user/lock_token que el flash. Volver a reservar renueva el vencimiento."""
+    _check_tty(tty)
+    user, token = _creds(body)
+    try:
+        ttl = int(RESERVE_DEFAULT_S if body.get("ttl_s") is None else body["ttl_s"])
+    except (TypeError, ValueError):
+        _fail(400, "bad_request", "ttl_s tiene que ser un entero")
+    if not 1 <= ttl <= RESERVE_MAX_S:
+        _fail(400, "bad_request", f"ttl_s entre 1 y {RESERVE_MAX_S}")
+    state = runstate.read(tty) or {}
+    _check_expect_mac(state, body.get("expect_mac"))
+    lock = locks.read(tty)
+    if lock is not None and lock.user != user:
+        detail = f" hasta {lock.expires_iso()}" if lock.reservation else ""
+        _fail(409, "locked", f"la tiene '{lock.user}'{detail}")
+    if lock is not None and lock.token != token:
+        _fail(403, "token_mismatch", "par user/token incorrecto")
+    new = locks.Lock(user, token, int(time.time()) + ttl, locks.normalize_mac(state.get("mac")))
+    locks.write(tty, new)
+    _record(state, "reserve", {"user": user, "expires": new.expires_iso()})
+    return {"ok": True, "tty": tty, "user": user, "expires": new.expires_iso(), "mac": state.get("mac")}
+
+
+@app.post("/api/device/{tty}/release")
+async def device_release(tty: str, body: dict = Body(...)):
+    """Suelta el lock (reserva o el del flash) con el mismo par, como unlock."""
+    _check_tty(tty)
+    user, token = _creds(body)
+    lock = locks.read(tty)
+    if lock is None:
+        return {"ok": True, "message": "no estaba bloqueado"}
+    if not lock.owned_by(user, token):
+        _fail(403, "token_mismatch", "par user/token incorrecto")
+    locks.remove(tty)
+    _record(runstate.read(tty) or {}, "release", {"user": user, "expires": lock.expires_iso()})
+    return {"ok": True, "message": "liberado"}
 
 
 @app.get("/api/device/{tty:path}")
@@ -169,6 +275,7 @@ async def patch_device(mac: str, body: dict = Body(...)):
 
 @app.post("/api/device/{tty}/unlock")
 async def device_unlock(tty: str, body: dict = Body(...)):
+    _check_tty(tty)
     lock_user = body.get("lock_user", "").strip()
     lock_token = body.get("lock_token", "").strip()
     if not lock_user or not lock_token:
@@ -188,9 +295,15 @@ _COMMANDS = {
 }
 
 @app.post("/api/device/{tty}/command/{command}")
-async def device_command(tty: str, command: str):
+async def device_command(tty: str, command: str, body: Optional[dict] = Body(None)):
+    """Teclas al monitor (reset / bootloader). Body opcional: expect_mac,
+    lock_user/lock_token (dueño de la reserva), force."""
+    _check_tty(tty)
     if command not in _COMMANDS:
-        raise HTTPException(status_code=400, detail=f"Comando desconocido: {command}")
+        _fail(400, "bad_request", f"Comando desconocido: {command}")
+    body = body if isinstance(body, dict) else {}
+    _check_expect_mac(runstate.read(tty) or {}, body.get("expect_mac"))
+    _check_reservation(tty, body)
     session = f"esp32_{tty}"
     for key in _COMMANDS[command]:
         subprocess.run(["tmux", "send-keys", "-t", session, key], check=False)

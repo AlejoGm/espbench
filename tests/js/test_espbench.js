@@ -129,3 +129,12 @@ test('sesiones: el nombre es el inicio (con pid); los viejos no', () => {
     const epoch = new Date(2026, 9, 5, 16, 2, 3).getTime() / 1000;
     assert.equal(EB.isoLocal(epoch), '2026-10-05T16:02:03');
 });
+
+test('errorText / errorCode: detail string u objeto', () => {
+    assert.equal(EB.errorText({detail: 'device ocupado'}, 409), 'device ocupado');
+    assert.equal(EB.errorText({detail: {error: 'locked', message: "reservada por 'juan'"}}, 423), "reservada por 'juan'");
+    assert.equal(EB.errorText({detail: {error: 'auth'}}, 401), 'auth');
+    assert.equal(EB.errorText(null, 502), 'HTTP 502');
+    assert.equal(EB.errorCode({detail: {error: 'locked'}}), 'locked');
+    assert.equal(EB.errorCode({detail: 'texto'}), null);
+});

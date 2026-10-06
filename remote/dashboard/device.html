@@ -351,21 +351,31 @@
         var sent = [];
         var sentIdx = -1;
 
+        // POST con JSON → [ok, status, body]. Ante 423 (placa reservada por otro)
+        // pregunta y reintenta con force.
+        function postJson(path, body) {
+            return fetch(api + path, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body || {})
+            }).then(function(r) {
+                return r.json().catch(function() { return null; })
+                        .then(function(d) { return [r.ok, r.status, d]; });
+            }).then(function(res) {
+                if (res[1] !== 423 || (body && body.force)) return res;
+                if (!confirm(EB.errorText(res[2], res[1]) + '\n¿Mandar igual?')) return res;
+                return postJson(path, Object.assign({}, body, {force: true}));
+            });
+        }
+
         function sendSerial(e) {
             e.preventDefault();
             var input = $('serial-text');
             var text = input.value;
             var enter = $('serial-enter').checked;
             if (!text && !enter) return;
-            fetch(api + '/send', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: text, enter: enter})
-            }).then(function(r) {
-                return r.json().catch(function() { return {detail: 'HTTP ' + r.status}; })
-                        .then(function(d) { return [r.ok, d]; });
-            })
+            postJson('/send', {text: text, enter: enter})
               .then(function(res) {
-                  if (!res[0]) { toast(res[1].detail || 'Error', true); return; }
+                  if (!res[0]) { toast(EB.errorText(res[2], res[1]), true); return; }
                   if (text && sent[sent.length - 1] !== text) sent.push(text);
                   sentIdx = -1;
                   input.value = '';
@@ -397,9 +407,9 @@
         function sendCommand(cmd) {
             var btn = $('btn-' + cmd);
             btn.disabled = true;
-            fetch(api + '/command/' + cmd, {method: 'POST'})
-                .then(function(r) { return r.json(); })
-                .catch(function() {})
+            postJson('/command/' + cmd)
+                .then(function(res) { if (!res[0]) toast(EB.errorText(res[2], res[1]), true); })
+                .catch(function() { toast('Error de conexión', true); })
                 .finally(function() { setTimeout(function() { btn.disabled = false; }, 1000); });
         }
 
@@ -441,7 +451,7 @@
                 }).then(function(r) { return r.json(); })
                   .then(function(d) {
                       if (d.ok) { loadDeviceInfo(); }
-                      else { alert('Error: ' + (d.detail || d.error || 'token incorrecto')); }
+                      else { alert('Error: ' + EB.errorText(d, 403)); }
                   })
                   .catch(function() { alert('Error de conexión'); })
                   .finally(function() { btn.disabled = false; });

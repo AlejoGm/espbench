@@ -220,7 +220,25 @@
     // Lo que se muestra de la línea en curso.
     LineBuffer.prototype.partialView = function () { return overwrite(this.partial); };
 
+    // ── Errores del API ───────────────────────────────────────────────────
+
+    // Texto de un error de FastAPI: {detail: "texto"} o {detail: {error, message}}.
+    function errorText(body, status) {
+        var d = body && body.detail;
+        if (typeof d === 'string') return d;
+        if (d && (d.message || d.error)) return d.message || d.error;
+        if (body && body.error) return body.message || body.error;
+        return 'HTTP ' + status;
+    }
+
+    // Código estable del error ({detail: {error}}), o null.
+    function errorCode(body) {
+        var d = body && body.detail;
+        return d && typeof d === 'object' && d.error ? d.error : null;
+    }
+
     return {
+        errorText: errorText, errorCode: errorCode,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         isoLocal: isoLocal, sessionStart: sessionStart,
         healthBadges: healthBadges, healthLevel: healthLevel,

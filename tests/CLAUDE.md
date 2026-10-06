@@ -22,7 +22,7 @@ pytest tests/
 | `test_partition_table.py` | Parseo de la tabla de particiones del bootloader |
 | `test_device_registry.py` | Vista del dashboard: estado runtime, slots, último flasheo, `devices.json` sin corrupción concurrente |
 | `test_history.py` | Historial: jobs con/sin `result.json`, sesiones, path traversal |
-| `test_api.py` | Endpoints de historial y `send` llamando los handlers directo (no hay httpx): validación, 409 si ocupado, orden de rutas |
+| `test_api.py` | Endpoints llamando los handlers directo (no hay httpx): historial, `send` (cursor previo, evento, `expect_mac`, 409 ocupado), reservas (`reserve`/`release`, 423 a otros, `force`), `command` con tty validado, orden de rutas |
 | `test_log_streamer.py` | WebSocket: contenido inicial, stream, rotación, `log_path` desde el estado runtime |
 | `test_dashboard_js.py` | Corre `tests/js/test_*.js` con `node --test` (lógica del frontend en `espbench.js`); se saltea sin node |
 | `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos; `devremote.service` espera a `time-sync.target` |
