@@ -555,3 +555,12 @@ def test_list_events_more_and_order(b):
     assert le()["more"] is False
     with pytest.raises(RangeError):
         le(order="x")
+
+
+def test_list_events_counts_all_types_beyond_the_page(b):
+    """El dashboard: un boot_loop enterrado bajo 150 panics tiene que verse en los chips."""
+    r = le(limit=1, counts=True)
+    assert r["counts"] == {"boot": 2, "panic": 1} and len(r["events"]) == 1
+    assert le(limit=1, types="panic", counts=True)["counts"] == {"boot": 2, "panic": 1}   # sin el filtro de tipo
+    assert le(since=b.cursor("panic0"), counts=True)["counts"] == {"panic": 1, "boot": 1}
+    assert "counts" not in le()                                                          # el CLI no lo pide

@@ -234,12 +234,13 @@ def board_log(key: str, since: Optional[str] = None, until: Optional[str] = None
 
 @app.get("/api/board/{key}/events")
 def board_events(key: str, type: Optional[str] = None, since: Optional[str] = None,
-                 limit: Optional[str] = None, order: Optional[str] = None):
+                 limit: Optional[str] = None, order: Optional[str] = None, counts: bool = False):
     """Eventos de la placa (events.jsonl), por (sesión, offset): los últimos
-    `limit`, o los primeros desde since con order=asc; `more` si quedaron más."""
+    `limit`, o los primeros desde since con order=asc; `more` si quedaron más.
+    counts=1: además el conteo por tipo de todos (para los chips del dashboard)."""
     mac = _board_mac(key)
     return _range_call(logrange.list_events, paths.device_home(mac), types=type, since=since, limit=limit,
-                       order=order)
+                       order=order, counts=counts)
 
 
 @app.get("/api/device/{tty}/jobs")

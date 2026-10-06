@@ -376,6 +376,7 @@ def test_board_events():
     r = api.board_events(MAC)
     assert [e["type"] for e in r["events"]] == ["send", "boot"] and r["session"] == SID
     assert [e["type"] for e in api.board_events(MAC, type="boot")["events"]] == ["boot"]
+    assert api.board_events(MAC, type="boot", limit="1", counts=True)["counts"] == {"boot": 1, "send": 1}
     with pytest.raises(HTTPException) as e:
         api.board_events(MAC, type="xyz")
     assert err(e) == (400, "bad_request")

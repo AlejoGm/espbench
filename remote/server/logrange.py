@@ -685,12 +685,15 @@ def _line_end(sess: _Session, offset: int) -> int:
 
 
 def list_events(home, types: Optional[str] = None, since: Optional[str] = None,
-                limit=None, order: Optional[str] = None, now: Optional[float] = None) -> dict:
+                limit=None, order: Optional[str] = None, now: Optional[float] = None,
+                counts: bool = False) -> dict:
     """Eventos de la placa ordenados por (sesión, offset). `since`: un anchor
     (inclusive); si es de tiempo, compara la hora del evento (cruza sesiones).
     `limit` (default 50): los ÚLTIMOS N; con order=asc, los PRIMEROS N desde
     since (para paginar hacia adelante). La lista siempre va en orden
-    cronológico; `more`: quedaron eventos afuera (antes, o después con asc)."""
+    cronológico; `more`: quedaron eventos afuera (antes, o después con asc).
+    `counts`: además {tipo: n} de todos los eventos desde since (sin el filtro
+    de tipo ni el limit): el dashboard muestra los chips sin "cargar más"."""
     order = order or "desc"
     if order not in ("asc", "desc"):
         raise RangeError("bad_request", "order tiene que ser asc o desc")
@@ -711,11 +714,18 @@ def list_events(home, types: Optional[str] = None, since: Optional[str] = None,
             else:
                 p = resolve(board, since, now, evs)
                 out = [e for e in out if _event_key(e) >= (p.sess.sid, p.offset)]
+        by_type = {}
+        if counts:
+            for e in out:
+                by_type[e.get("type")] = by_type.get(e.get("type"), 0) + 1
         if wanted:
             out = [e for e in out if e.get("type") in wanted]
         page = out[:limit] if order == "asc" else out[-limit:]
-        return {"events": [compact_event(e) for e in page], "more": len(out) > limit,
+        resp = {"events": [compact_event(e) for e in page], "more": len(out) > limit,
                 "session": current, "server_time": _server_time(now)}
+        if counts:
+            resp["counts"] = by_type
+        return resp
 
 
 def _event_epoch(ev: dict) -> Optional[float]:
