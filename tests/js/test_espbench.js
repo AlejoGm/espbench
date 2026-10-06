@@ -243,6 +243,13 @@ test('eventView: icono, hora, detalle corto y quién', () => {
     assert.equal(s.detail, '"status" ⏎ · forzado');
     assert.equal(s.who, 'alejo');
     assert.equal(EB.eventView(ev('boot_loop', {phase: 'start', boots: 3})).cls, 'ev-boot-loop');
+    // los panics del loop van en el end (no como eventos sueltos)
+    assert.equal(EB.eventDetail(ev('boot_loop', {phase: 'end', boots: 40, panics: 38, first_panic: 'guru',
+                                                 last_panic: 'abort'})),
+                 'fin · 40 arranques · 38 panics (Guru Meditation … abort())');
+    assert.equal(EB.eventDetail(ev('boot_loop', {phase: 'end', boots: 6, panics: 1, first_panic: 'guru',
+                                                 last_panic: 'guru'})), 'fin · 6 arranques · 1 panic (Guru Meditation)');
+    assert.equal(EB.eventDetail(ev('boot_loop', {phase: 'end', boots: 6, panics: 0})), 'fin · 6 arranques');
     assert.ok(p.bad && !s.bad);
     assert.ok(EB.eventView(ev('flash', {ok: false})).bad && !EB.eventView(ev('flash', {ok: true})).bad);
     assert.ok(EB.eventView(ev('boot', {abnormal: true})).bad && !EB.eventView(ev('boot', {})).bad);

@@ -228,6 +228,34 @@ def test_boot_loop_groups_boots_into_start_and_end():
     assert evs[-1][0] == "boot"                           # vuelve a registrar boots
 
 
+def test_panics_during_a_boot_loop_go_in_the_end_not_one_by_one():
+    """Un firmware que crashea al arrancar: en loop, cada panic era un evento
+    (events.jsonl crecía sin tope y el poll lo leía entero). Ahora el end trae
+    cuántos y el kind del primero y el último; la salud los sigue contando."""
+    clock = Clock()
+    w, evs = watch_with_events(clock=clock)
+    n = BOOT_LOOP_COUNT
+    for i in range(n):
+        feed(w, RST, start=10 * i)
+        clock.t += 2
+    assert evs[-1][0] == "boot_loop"
+    for i in range(20):
+        feed(w, PANIC.replace("Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.",
+                              "abort() was called at PC 0x1" if i == 19 else
+                              "Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled."),
+             start=100 + 10 * i)
+        clock.t += 2
+    assert [e[0] for e in evs].count("panic") == 0
+    assert w.panics == 20 and w.last_panic["kind"] == "abort"
+    clock.t += 300
+    assert w.poll()
+    end = evs[-1][1]
+    assert end["phase"] == "end" and end["panics"] == 20
+    assert (end["first_panic"], end["last_panic"]) == ("guru", "abort")
+    feed(w, PANIC, start=1000)                            # fuera del loop: evento de nuevo
+    assert evs[-2][0] == "panic" and evs[-1][0] == "boot"
+
+
 def test_flash_ends_an_active_boot_loop():
     clock = Clock()
     w, evs = watch_with_events(clock=clock)

@@ -24,11 +24,13 @@ run/<tty>.json (ver device.py), y de ahí lo lee el dashboard.
 Eventos (on_event(type, detail, cursor, ts), van a events.jsonl):
 - boot: cada línea rst: (la ROM la imprime siempre, es el inicio del arranque)
 - boot_loop: start al detectarlo / end cuando se estabiliza. Mientras está
-  activo, los boot sueltos no se registran (un loop escribiría miles por hora).
-  El end lleva ts = último boot + ventana (cuándo terminó de verdad) y el ts y
-  cursor del último boot; se registra con la primera línea siguiente o con
-  poll() (el proceso lo llama cada segundo: una placa muda también lo cierra).
-- panic
+  activo, los boot y panic sueltos no se registran (un loop escribiría miles
+  por hora): el end lleva cuántos panics hubo y el kind del primero y el
+  último. El end lleva ts = último boot + ventana (cuándo terminó de verdad) y
+  el ts y cursor del último boot; se registra con la primera línea siguiente o
+  con poll() (el proceso lo llama cada segundo: una placa muda también lo
+  cierra).
+- panic (fuera de un boot loop)
 - fw: solo si cambió (proyecto, versión o IDF), al ver la línea ESP-IDF del
   arranque o, si no aparece, en el siguiente rst:.
 """
@@ -103,6 +105,7 @@ class SerialWatch:
         self._lock = threading.Lock()
         self._loop_active = False
         self._loop_boots = 0
+        self._loop_panics = []             # kinds de los panics del loop actual (no van como eventos)
         self._last_boot_t = 0.0           # self._clock() del último boot (la ventana)
         self._last_boot = None            # {"ts", "cursor"} del último boot, para el end
         self._fw_dirty = False
@@ -204,8 +207,12 @@ class SerialWatch:
         corta un flash/erase), ts = ahora."""
         self._loop_active = False
         ts = self._last_boot_t + self._loop_window if expired else None
-        return ("boot_loop", {"phase": "end", "boots": self._loop_boots, "last_boot": self._last_boot},
-                cursor, ts)
+        detail = {"phase": "end", "boots": self._loop_boots, "last_boot": self._last_boot,
+                  "panics": len(self._loop_panics)}
+        if self._loop_panics:
+            detail["first_panic"], detail["last_panic"] = self._loop_panics[0], self._loop_panics[-1]
+        self._loop_panics = []
+        return ("boot_loop", detail, cursor, ts)
 
     def _fw_event(self) -> tuple:
         self._fw_dirty = False
@@ -232,6 +239,7 @@ class SerialWatch:
             elif self._in_loop():
                 self._loop_active = True
                 self._loop_boots = len(self._boot_times)
+                self._loop_panics = []
                 evs.append(("boot_loop", {"phase": "start", "boots": self._loop_boots}, cursor, ts))
             else:
                 evs.append(("boot", {"reason": reason, "abnormal": abnormal}, cursor, ts))
@@ -243,7 +251,10 @@ class SerialWatch:
                 self.panics += 1
                 self.last_panic = {"ts": _now_iso(self._clock), "kind": kind,
                                    "detail": detail, "line": line.strip()[:200]}
-                evs.append(("panic", {"kind": kind, "reason": detail, "line": line.strip()[:200]}, cursor, ts))
+                if self._loop_active:           # se cuentan en el boot_loop end
+                    self._loop_panics.append(kind)
+                else:
+                    evs.append(("panic", {"kind": kind, "reason": detail, "line": line.strip()[:200]}, cursor, ts))
                 return True
         for key, rx in _FW_RES.items():
             m = rx.search(line)

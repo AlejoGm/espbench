@@ -351,13 +351,21 @@
 
     var COMMAND_NAMES = {'restart-session': 'reiniciar sesión'};
 
+    // Durante un boot loop los panics no van como eventos: el end trae cuántos y el kind del primero y el último.
+    function loopKinds(d) {
+        var k = [d.first_panic, d.last_panic].filter(Boolean).map(function (x) { return PANIC_KINDS[x] || x; });
+        if (k.length === 2 && k[0] === k[1]) k = [k[0]];
+        return k.length ? ' (' + k.join(' … ') + ')' : '';
+    }
+
     function eventDetail(ev) {
         var d = ev.detail || {};
         var forced = d.forced ? ' · forzado' + (forcedBy(d) ? ' por ' + forcedBy(d) : '') : '';
         switch (ev.type) {
         case 'boot': return (d.reason || '') + (d.abnormal ? ' ⚠' : '');
         case 'panic': return (PANIC_KINDS[d.kind] || d.kind || 'panic') + (d.reason ? ' (' + d.reason + ')' : '');
-        case 'boot_loop': return (d.phase === 'end' ? 'fin' : 'inicio') + (d.boots ? ' · ' + d.boots + ' arranques' : '');
+        case 'boot_loop': return (d.phase === 'end' ? 'fin' : 'inicio') + (d.boots ? ' · ' + d.boots + ' arranques' : '') +
+                                 (d.panics ? ' · ' + d.panics + (d.panics === 1 ? ' panic' : ' panics') + loopKinds(d) : '');
         case 'fw': return [d.project, d.version].filter(Boolean).join(' ') + (d.idf ? ' · IDF ' + d.idf : '');
         case 'state': return (STATE_NAMES[d.from] || d.from || '?') + ' → ' + (STATE_NAMES[d.to] || d.to || '?');
         case 'flash': return d.ok ? '✓ ' + (d.status || 'ok') : '✗ ' + String(d.error || d.status || 'falló').replace(/_/g, ' ');
