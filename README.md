@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.15.0
+**Version:** 0.15.1
 
 ---
 
@@ -54,11 +54,14 @@ Disables desktop, serial TTL, HID, installs WiFi provisioning AP fallback and Ta
 sudo bash rpi/pi-setup.sh
 ```
 
-After it finishes, authenticate Tailscale (one time):
+Pass a Tailscale auth key so the bench joins the tailnet as a **tagged node** (`tag:bench`), not as your user
+(single-use, non-ephemeral key with `tag:bench`; see [docs/security.md](docs/security.md)):
 
 ```bash
-sudo tailscale up    # open the printed URL in a browser
+sudo TS_AUTHKEY=tskey-auth-... bash rpi/pi-setup.sh
 ```
+
+Without `TS_AUTHKEY`, join later with `sudo tailscale up --auth-key=<key> --advertise-tags=tag:bench`.
 
 Then reboot to apply all changes:
 
