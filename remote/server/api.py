@@ -116,16 +116,30 @@ def _check_expect_mac(state: dict, expect_mac) -> None:
                                      f"no {expect_mac}")
 
 
-def _check_reservation(tty: str, body: dict) -> None:
+def _forced(body: dict) -> bool:
+    """Solo el booleano true fuerza ("false", 1 o "yes" no). El CLI nunca lo manda."""
+    return body.get("force") is True
+
+
+def _check_reservation(tty: str, body: dict) -> bool:
     """A3: una reserva (lock con vencimiento) bloquea send/command de otros. El
     lock permanente del flash no (si no, la consola del dashboard muere en toda
-    placa flasheada). `force` la saltea (el dashboard, después de confirmar)."""
+    placa flasheada). `force: true` la saltea (el dashboard, después de
+    confirmar). `require_reservation: true` (el CLI): la escritura solo sale si
+    el par tiene la reserva vigente, en el mismo pedido (sin carrera entre
+    chequear y escribir) → 423 reservation_lost. Devuelve True si forzó."""
     lock = locks.read(tty)
-    if lock is None or not lock.reservation or body.get("force"):
-        return
     user, token = _creds(body, required=False)
-    if not lock.owned_by(user, token):
-        _fail(423, "locked", f"reservada por '{lock.user}' hasta {lock.expires_iso()}")
+    if body.get("require_reservation") is True:
+        if lock is None or not lock.reservation or not lock.owned_by(user, token):
+            who = f"'{lock.user}'" if lock is not None else "nadie"
+            _fail(423, "reservation_lost", f"la reserva ya no es tuya (la tiene {who})")
+        return False
+    if lock is None or not lock.reservation or lock.owned_by(user, token):
+        return False
+    if _forced(body):
+        return True
+    _fail(423, "locked", f"reservada por '{lock.user}' hasta {lock.expires_iso()}")
 
 
 def _record(state: dict, type_: str, detail: dict, cursor: Optional[str] = None) -> Optional[str]:
@@ -162,10 +176,11 @@ def _board_mac(key: str) -> str:
 def _board_live(mac: str) -> bool:
     """Hay un proceso vivo escribiendo el output.log de esa placa."""
     log = str(paths.device_output_log(mac))
-    for state in runstate.list_all().values():
-        if state.get("log_path") == log:
-            return state.get("state") != "disconnected" and runstate.pid_alive(state.get("pid"))
-    return False
+    # run/<tty>.json queda en "disconnected" a propósito (esp32_tmux.sh): si la
+    # placa volvió en otro tty hay dos con el mismo log_path.
+    return any(state.get("log_path") == log and state.get("state") != "disconnected"
+               and runstate.pid_alive(state.get("pid"))
+               for state in runstate.list_all().values())
 
 
 def _range_call(fn, *args, **kw):
@@ -259,7 +274,7 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
     _check_expect_mac(state, body.get("expect_mac"))
     if state.get("state") in BUSY_STATES:
         _fail(409, "busy", f"device ocupado ({state['state']})")
-    _check_reservation(tty, body)
+    forced = _check_reservation(tty, body)
     cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
     session = f"esp32_{tty}"
     for cmd in send_keys_cmds(session, text, enter):
@@ -270,7 +285,10 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
         if r.returncode != 0:
             _fail(502, "unexpected", f"tmux: {r.stderr.strip() or r.returncode}")
     if cursor is not None:
-        _record(state, "send", {"text": text, "enter": enter, "user": user or None}, cursor)
+        detail = {"text": text, "enter": enter, "user": user or None}
+        if forced:
+            detail["forced"] = True
+        _record(state, "send", detail, cursor)
     return {"ok": True, "session": session, "sent": text, "enter": enter, "cursor": cursor}
 
 
@@ -289,11 +307,17 @@ async def device_reserve(tty: str, body: dict = Body(...), authorization: Option
         _fail(400, "bad_request", f"ttl_s entre 1 y {RESERVE_MAX_S}")
     state = runstate.read(tty) or {}
     _check_expect_mac(state, body.get("expect_mac"))
+    if not state.get("mac"):
+        # Sin MAC la reserva no puede atarse a la placa (replug/renumeración)
+        _fail(409, "busy", f"la placa de {tty} todavía no tiene MAC ({state.get('state') or 'sin proceso'}): "
+                           "reintentar cuando esté en monitoring")
     with locks.exclusive(tty):
         lock = locks.read(tty)
         if lock is not None and lock.user != user:
-            detail = f" hasta {lock.expires_iso()}" if lock.reservation else ""
-            _fail(409, "locked", f"la tiene '{lock.user}'{detail}")
+            if lock.reservation:
+                _fail(409, "locked", f"la tiene '{lock.user}' hasta {lock.expires_iso()}")
+            _fail(409, "locked", f"lock permanente de '{lock.user}' (de su último flash): que lo suelte "
+                                 f"con unlock/release, o `devremote --unlock {tty}` en la Pi")
         if lock is not None and lock.token != token:
             _fail(403, "token_mismatch", "par user/token incorrecto")
         new = locks.Lock(user, token, int(time.time()) + ttl, locks.normalize_mac(state.get("mac")))
@@ -341,14 +365,17 @@ _devices_file = DevicesFile()
 @app.patch("/api/devices/{mac:path}")
 async def patch_device(mac: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
     _require_auth(authorization)
-    device_key = body.get("device_key", "").strip()
+    device_key = str(body.get("device_key") or "").strip()
     if not device_key:
-        raise HTTPException(status_code=400, detail="device_key requerido")
-    mac_norm = unquote(mac).upper().replace("-", ":")
+        _fail(400, "bad_request", "device_key requerido")
+    bare = unquote(mac).upper().replace("-", "").replace(":", "")
+    if not re.fullmatch(r"[0-9A-F]{12}", bare):
+        _fail(400, "bad_request", f"MAC inválida: {mac}")
+    mac_norm = ":".join(bare[i:i + 2] for i in range(0, 12, 2))
     try:
         _devices_file.update_device_key(mac_norm, device_key)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _fail(500, "unexpected", str(e))
     return {"ok": True}
 
 
@@ -377,16 +404,26 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
     if command not in _COMMANDS:
         _fail(400, "bad_request", f"Comando desconocido: {command}")
     body = body if isinstance(body, dict) else {}
-    _check_expect_mac(runstate.read(tty) or {}, body.get("expect_mac"))
-    _check_reservation(tty, body)
+    user, _ = _creds(body, required=False)
+    state = runstate.read(tty) or {}
+    _check_expect_mac(state, body.get("expect_mac"))
+    if state.get("state") in BUSY_STATES:
+        _fail(409, "busy", f"device ocupado ({state['state']})")
+    forced = _check_reservation(tty, body)
     session = f"esp32_{tty}"
     for key in _COMMANDS[command]:
         try:
-            subprocess.run(["tmux", "send-keys", "-t", session, key], check=False)
+            r = subprocess.run(["tmux", "send-keys", "-t", session, key], capture_output=True, text=True)
         except FileNotFoundError:
             _fail(502, "unexpected", "tmux no disponible")
+        if r.returncode != 0:
+            _fail(502, "unexpected", f"tmux: {r.stderr.strip() or r.returncode}")
         await asyncio.sleep(0.05)
-    return {"ok": True, "command": command, "session": session}
+    detail = {"command": command, "user": user or None}
+    if forced:
+        detail["forced"] = True
+    cursor = _record(state, "command", detail)
+    return {"ok": True, "command": command, "session": session, "cursor": cursor}
 
 
 @app.post("/api/device/{tty}/devremote-reset")

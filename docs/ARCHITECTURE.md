@@ -202,7 +202,8 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor} |
 | `state` | `Device` (FSM), en cada transición; evento y línea taglog bajo el lock del `DeviceLog` (`atomic()`) | from, to |
 | `flash` | `protocol.py`, con la respuesta final y antes de reanudar el monitor (§5) | job_id, ok, status, error, user |
-| `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user |
+| `send` | api, en cada `POST /send` exitoso (cursor = antes del envío) | text, enter, user, forced? |
+| `command` | api, en cada `POST /command` exitoso | command (reset/bootloader), user, forced? |
 | `reserve` / `release` | api | user, expires |
 
 - **Boot loop**: mientras está activo no se registran los `boot` sueltos (solo
@@ -341,9 +342,9 @@ boot ─────► devremote.service ────────────�
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` | Renombrar (`devices.json`) |
 | `POST /api/device/{tty}/unlock` | Liberar lock |
-| `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; renueva si es propia |
+| `POST /api/device/{tty}/reserve` `{lock_user, lock_token, ttl_s, expect_mac}` | Reserva con vencimiento (§5); 409 `locked` si la tiene otro; 409 `busy` si la placa todavía no tiene MAC; renueva si es propia |
 | `POST /api/device/{tty}/release` `{lock_user, lock_token}` | Suelta el lock con el mismo par (403 si no) |
-| `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`. Body opcional: `expect_mac`, par del lock, `force` |
+| `POST /api/device/{tty}/command/{reset\|bootloader}` | Teclas al monitor vía `tmux send-keys`; 409 `busy` si flashea/borra, 502 si tmux falla; evento `command`. Body opcional: `expect_mac`, par del lock, `force`, `require_reservation` |
 | `POST /api/device/{tty}/devremote-reset` | `devremote --reset <tty>` |
 | `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
@@ -367,8 +368,11 @@ boot ─────► devremote.service ────────────�
   reservada por otro; 409 en `reserve`), `token_mismatch` (403), `not_found`,
   `bad_anchor`, `cursor_expired`.
 - **Reservas (A3)**: una reserva vigente bloquea `send`/`command` de cualquiera que
-  no mande el mismo par (423). El lock permanente del flash no bloquea. `force:
-  true` la saltea: el dashboard lo manda después de confirmar.
+  no mande el mismo par (423 `locked`). El lock permanente del flash no bloquea.
+  `force: true` (solo el booleano) la saltea: el dashboard lo manda después de
+  confirmar, el CLI nunca; queda `forced: true` en el evento. `require_reservation:
+  true` (el CLI): la escritura sale solo si el par tiene la reserva vigente, chequeado
+  en el mismo pedido → 423 `reservation_lost`.
 - `send`, `reserve` y `release` quedan en `events.jsonl` (`events.record`, cursor =
   fin del log en ese momento; el de `send` es el previo al envío y solo se
   registra si tmux lo mandó).

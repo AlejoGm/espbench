@@ -315,7 +315,10 @@ def test_token_required_on_writes(tmux, call, monkeypatch):
             run(call(bad))
         assert err(e) == (401, "auth")
     assert tmux == []
-    run(call("Bearer s3cret"))          # pasa la auth (lo que haga después no importa acá)
+    try:
+        run(call("Bearer s3cret"))      # pasa la auth (lo que haga después no importa acá)
+    except HTTPException as e:
+        assert e.status_code != 401
 
 
 def test_token_does_not_close_reads():
@@ -418,3 +421,121 @@ def test_reserve_waits_for_the_lock_of_another_process(monkeypatch):
         reserve()
     t.join()
     assert err(e) == (409, "locked") and locks.read("ttyUSB0").user == "juan"
+
+
+# ---------- revisión de la fase 2 ----------
+
+def test_force_must_be_boolean_true(tmux):
+    board()
+    reserve()
+    for bad in ("false", "true", 1, "yes"):
+        with pytest.raises(HTTPException) as e:
+            run(api.device_send("ttyUSB0", {"text": "x", "force": bad}))
+        assert err(e) == (423, "locked"), bad
+    assert tmux == []
+
+
+def test_forced_writes_are_recorded_with_user(tmux):
+    board()
+    reserve()
+    run(api.device_send("ttyUSB0", {"text": "x", "force": True, "lock_user": "dash"}))
+    run(api.device_command("ttyUSB0", "reset", {"force": True}))
+    send = [e for e in api_events() if e["type"] == "send"][0]
+    cmd = [e for e in api_events() if e["type"] == "command"][0]
+    assert send["detail"]["forced"] is True and send["detail"]["user"] == "dash"
+    assert cmd["detail"] == {"command": "reset", "user": None, "forced": True}
+
+
+def test_command_records_event_with_cursor(tmux):
+    log = board()
+    r = run(api.device_command("ttyUSB0", "reset", {"lock_user": "alejo"}))
+    assert r["cursor"] == f"c:{SID}:{log.stat().st_size}"
+    (ev,) = api_events()
+    assert ev["type"] == "command" and ev["detail"] == {"command": "reset", "user": "alejo"}
+
+
+def test_command_tmux_failure_is_502(monkeypatch):
+    board()
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="no session"))
+    with pytest.raises(HTTPException) as e:
+        run(api.device_command("ttyUSB0", "reset"))
+    assert err(e) == (502, "unexpected") and "no session" in e.value.detail["message"]
+    assert api_events() == []
+
+
+def test_command_busy_while_flashing_or_erasing(tmux):
+    for st in ("flashing", "erasing"):
+        runstate.write("ttyUSB0", {"state": st, "pid": 1})
+        with pytest.raises(HTTPException) as e:
+            run(api.device_command("ttyUSB0", "reset"))
+        assert err(e) == (409, "busy")
+    assert tmux == []
+
+
+def test_require_reservation(tmux):
+    board()
+    owner = {"lock_user": "alejo", "lock_token": "t0k", "require_reservation": True}
+    with pytest.raises(HTTPException) as e:                       # sin reserva
+        run(api.device_send("ttyUSB0", {"text": "x", **owner}))
+    assert err(e) == (423, "reservation_lost")
+    reserve()
+    assert run(api.device_send("ttyUSB0", {"text": "x", **owner}))["ok"]
+    assert run(api.device_command("ttyUSB0", "reset", owner))["ok"]
+    run(api.device_release("ttyUSB0", {"lock_user": "alejo", "lock_token": "t0k"}))
+    reserve(user="juan")
+    for call in (lambda: api.device_send("ttyUSB0", {"text": "x", **owner}),
+                 lambda: api.device_command("ttyUSB0", "reset", owner)):
+        with pytest.raises(HTTPException) as e:
+            run(call())
+        assert err(e) == (423, "reservation_lost") and "juan" in e.value.detail["message"]
+
+
+def test_reserve_requires_known_mac():
+    runstate.write("ttyUSB0", {"state": "discovering", "mac": None})
+    with pytest.raises(HTTPException) as e:
+        reserve()
+    assert err(e) == (409, "busy") and "MAC" in e.value.detail["message"]
+
+
+def test_reserve_against_flash_lock_suggests_unlock():
+    from server import locks
+    board()
+    locks.write("ttyUSB0", locks.Lock("juan", "x"))
+    with pytest.raises(HTTPException) as e:
+        reserve()
+    assert err(e) == (409, "locked") and "unlock" in e.value.detail["message"]
+
+
+def test_board_live_with_stale_state_of_another_tty():
+    """La placa estuvo en ttyUSB0 (queda disconnected a propósito) y ahora vive en ttyUSB1."""
+    import os
+    log = board()
+    runstate.write("ttyUSB0", {"mac": MAC, "state": "disconnected", "log_path": str(log), "pid": os.getpid()})
+    runstate.write("ttyUSB1", {"mac": MAC, "state": "monitoring", "log_path": str(log), "pid": os.getpid()})
+    assert api.board_log(MAC, until="re:nunca")["session_ended"] is False
+
+
+def test_patch_device_validates_mac(monkeypatch):
+    from server.device_registry import DevicesFile
+    monkeypatch.setattr(api, "_devices_file", DevicesFile(paths.devices_file()))
+    for bad in ("../x", "AABBCC", "GG:BB:CC:DD:EE:FF"):
+        with pytest.raises(HTTPException) as e:
+            run(api.patch_device(bad, {"device_key": "X"}))
+        assert err(e) == (400, "bad_request")
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device(MAC, {}))
+    assert err(e) == (400, "bad_request")
+    assert run(api.patch_device("aabbccddeeff", {"device_key": "X"}))["ok"]
+    assert DevicesFile(paths.devices_file()).get_all() == {MAC: {"device_key": "X", "hw_model": None}}
+
+
+def test_unlock_errors_are_structured():
+    from server import locks
+    locks.write("ttyUSB0", locks.Lock("juan", "x"))
+    with pytest.raises(HTTPException) as e:
+        run(api.device_unlock("ttyUSB0", {"lock_user": "alejo", "lock_token": "t"}))
+    assert err(e) == (403, "token_mismatch")
+    with pytest.raises(HTTPException) as e:
+        run(api.device_unlock("ttyUSB0", {}))
+    assert err(e) == (400, "bad_request")
