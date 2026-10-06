@@ -454,6 +454,22 @@ def test_command_records_event_with_cursor(tmux):
     assert ev["type"] == "command" and ev["detail"] == {"command": "reset", "user": "alejo"}
 
 
+def test_command_cursor_is_taken_before_the_keys(monkeypatch):
+    """El rst: de un reset sale en milisegundos: si el cursor se toma después de
+    mandar las teclas, queda después del boot y reset --verify no lo ve."""
+    log = board()
+    before = log.stat().st_size
+
+    def tmux_that_resets(cmd, **kw):
+        with open(log, "ab") as f:
+            f.write(b"2026-10-05 16:00:02.000 > rst:0xc (SW_CPU_RESET),boot:0x13\n")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(api.subprocess, "run", tmux_that_resets)
+    r = run(api.device_command("ttyUSB0", "reset"))
+    assert r["cursor"] == f"c:{SID}:{before}"
+    assert api_events()[0]["cursor"] == r["cursor"]
+
+
 def test_command_tmux_failure_is_502(monkeypatch):
     board()
     monkeypatch.setattr(api.subprocess, "run",

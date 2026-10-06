@@ -326,7 +326,7 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - **Reserva**: `ttl_s` default 1800, máximo 7 días; reservar de nuevo renueva; exige que la placa tenga MAC (si no, 409 `busy`); contra un lock permanente ajeno el mensaje sugiere `unlock`. `release` suelta cualquier lock del par (también el del flash), como `unlock`. `user` y `token` no pueden tener `:`. Un lock vencido se ignora (no se borra al leerlo) y todo leer-decidir-escribir va bajo `flock` (`locks/<tty>.lck`).
 - **`force: true`** (solo el booleano) en `send`/`command` saltea una reserva ajena: lo manda el dashboard después de confirmar; **el CLI nunca lo manda**. Queda `forced: true` y el `user` en el evento. `reserve` no tiene `force`.
 - **`require_reservation: true`** en `send`/`command`: la escritura sale solo si el par tiene la reserva vigente, chequeado en el mismo pedido → 423 `reservation_lost`. Es lo que implementa `reservation_lost` (el server no lo detecta solo).
-- `/command` registra un evento **`command`** (tipo nuevo: command, user, forced?) y devuelve su `cursor`; 409 `busy` si flashea/borra, 502 si tmux falla.
+- `/command` registra un evento **`command`** (tipo nuevo: command, user, forced?) y devuelve su `cursor`, tomado **antes** de mandar las teclas (como `send`: el `rst:` de un reset sale en milisegundos y si no quedaba antes del cursor); 409 `busy` si flashea/borra, 502 si tmux falla.
 - **Token**: se lee en cada pedido (API) y en cada conexión (flash): crearlo no requiere reiniciar nada.
 - El evento `send` solo se registra si tmux lo mandó; su cursor se toma antes de mandar.
 

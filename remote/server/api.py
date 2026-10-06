@@ -412,6 +412,9 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
     if state.get("state") in BUSY_STATES:
         _fail(409, "busy", f"device ocupado ({state['state']})")
     forced = _check_reservation(tty, body)
+    # Cursor ANTES de las teclas, como en send: el rst: de un reset sale en ms y
+    # quedaría antes del cursor (reset --verify, que busca el boot desde ahí, no lo vería).
+    cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
     session = f"esp32_{tty}"
     for key in _COMMANDS[command]:
         try:
@@ -424,7 +427,7 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
     detail = {"command": command, "user": user or None}
     if forced:
         detail["forced"] = True
-    cursor = _record(state, "command", detail)
+    cursor = _record(state, "command", detail, cursor)
     return {"ok": True, "command": command, "session": session, "cursor": cursor}
 
 
