@@ -121,6 +121,11 @@ class BenchCache:
         seen = set()
         for b in found:
             seen.add(b.name)
+            # Un bench que cambió de nombre (bench_name) contesta desde la misma
+            # dirección: es el mismo, no uno nuevo. Sin esto el nombre viejo quedaba
+            # como caído, con la foto vieja de sus placas (duplicadas en la grilla).
+            for old in [n for n, st in self._states.items() if n != b.name and st.bench.url == b.url]:
+                del self._states[old]
             prev = self._states.get(b.name)
             if b.ok:
                 self._states[b.name] = BenchState(b, online=True, last_seen=now)

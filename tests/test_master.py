@@ -73,6 +73,16 @@ def test_cache_keeps_offline_bench_with_last_snapshot():
     assert cache.get("pi2").online and cache.get("pi2").error is None
 
 
+def test_cache_bench_renamed_replaces_old_name():
+    """sensipi03 pasa a llamarse dev (bench_name): misma URL, otro nombre. No tiene
+    que quedar sensipi03 caído con sus placas viejas duplicadas."""
+    cache = BenchCache(scan=None, now=Clock())
+    cache.update([bench("sensipi03", DEV_A, url="http://100.1.1.3:8080"), bench("pi2", DEV_B)])
+    cache.update([bench("dev", DEV_A, url="http://100.1.1.3:8080"), bench("pi2", DEV_B)])
+    assert [st.bench.name for st in cache.states()] == ["dev", "pi2"]
+    assert [d["bench"] for d in cache.devices()] == ["dev", "pi2"]
+
+
 def test_cache_devices_failure_keeps_previous_snapshot():
     cache = BenchCache(scan=None, now=Clock())
     cache.update([bench("pi1", DEV_A)])
