@@ -142,7 +142,8 @@ def test_mac_from_serial_when_esptool_cannot_read_it(env, monkeypatch):
     def fake_control_server(cfg, mon, device):
         assert device.state == DeviceState.UNKNOWN
         mon.output = "I (300) app: mac = AABBCCDDEEFF\n"   # el firmware imprime la MAC
-        if wait_for(lambda: device.mac is not None):
+        # promote() pone la MAC y después hace la transición: esperar el estado, no la MAC
+        if wait_for(lambda: device.state == DeviceState.MONITORING):
             seen["promoted"] = device.state
         done.set()
 
