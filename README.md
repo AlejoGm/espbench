@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.40.1
+**Version:** 0.41.0
 
 ---
 
@@ -318,6 +318,8 @@ master/bench-master --open      # first run creates master/.venv; http://localho
 - **Discovery**: online Tailscale peers that answer `GET :8080/api/version` as espbench, plus hosts listed in
   `~/.config/espbench-benches.json`: `{"hosts": ["10.0.0.5", "lab:8080"], "tailscale": true}`.
 - A bench names itself: `/opt/esp/bench_name` on the bench, or its hostname.
+- A bench can have a **location** ("Oficina BA", "Lab Chile"): edit it inline in the bench dashboard header
+  (`PATCH /api/bench {location}`, stored in `/opt/esp/meta/bench_location`). bench-master shows it and can group by it.
 - A bench that stops answering stays listed as offline with its last known devices.
 - Listens on 127.0.0.1 only and rejects cross-site requests: the proxy gives access to every bench's serial console.
 
@@ -415,6 +417,7 @@ espbench/
 ├── update.conf                   REPO_DIR (the clone, /opt/espbench) + PIN (empty = follow releases)
 ├── update_status.json, update.log  last espbench-update
 ├── bench_name                    (optional) bench name for bench-master
+├── meta/                         777, written by the dashboard: properties.json, bench_location
 └── VERSION
 ```
 

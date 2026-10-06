@@ -49,6 +49,7 @@ async def get_version():
     """También es la identidad del bench para bench-master: `app` dice que es un
     espbench (lo distingue de otros hosts de la tailnet), `name`, cómo se llama, e
     `id`, la MAC de la máquina (lo que lo identifica aunque cambie de nombre o de IP).
+    `location`: dónde está ("Oficina BA"; None si no se cargó, se edita con PATCH /api/bench).
     `auth`: la Pi tiene token de la API (el dashboard muestra "Forzar" solo si lo
     hay: `unlock` forzado lo exige)."""
     try:
@@ -60,6 +61,7 @@ async def get_version():
         "version": _read_first_line(paths.version_file()) or "dev",
         "name": _read_first_line(paths.bench_name_file()) or socket.gethostname(),
         "id": benchinfo.this_host_id(),
+        "location": benchinfo.location(),
         "auth": has_token,
     }
 
@@ -627,6 +629,22 @@ async def devremote_reset(tty: str, body: Optional[dict] = Body(None), authoriza
 async def bench_health():
     """Temperatura, RAM, disco, carga y uptime de la máquina del bench."""
     return await asyncio.to_thread(benchinfo.health)
+
+
+@app.patch("/api/bench")
+async def patch_bench(body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """Datos del bench: `location` (hasta 60 caracteres; "" o null la borra). Sale en /api/version."""
+    _require_auth(authorization)
+    if "location" not in body:
+        _fail(400, "bad_request", "nada para cambiar: location")
+    try:
+        loc = benchinfo.set_location(body.get("location"))
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    except OSError as e:
+        _fail(500, "unexpected", f"no se pudo guardar la ubicación: {e}")
+    taglog.info(TAG, f"ubicación del bench: {loc or '(sin ubicación)'}")
+    return {"ok": True, "location": loc}
 
 
 @app.get("/api/activity")

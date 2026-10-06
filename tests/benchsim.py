@@ -317,6 +317,8 @@ class _Handler(BaseHTTPRequestHandler):
             return _call(api.get_version)
         if method == "GET" and parts == ["api", "properties"]:
             return _call(api.get_properties)
+        if method == "PATCH" and parts == ["api", "bench"]:
+            return _call(api.patch_bench, body, authorization=auth)
         if method == "PATCH" and len(parts) == 3 and parts[:2] == ["api", "devices"]:
             return _call(api.patch_device, parts[2], body, authorization=auth)
         if parts[:2] == ["api", "properties"] and len(parts) >= 4 and parts[3] == "values":

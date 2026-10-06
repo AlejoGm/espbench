@@ -84,7 +84,7 @@ def _has_control(s: str) -> bool:
     return any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f or unicodedata.category(c) == "Cf" for c in s)
 
 
-def _clean_text(text, what: str, max_len: int) -> str:
+def clean_text(text, what: str, max_len: int) -> str:
     if text is None:
         return ""
     if not isinstance(text, str):
@@ -100,11 +100,11 @@ def _clean_text(text, what: str, max_len: int) -> str:
 
 def clean_note(text) -> str:
     """Nota normalizada ("" = borrar). MetaError si es larga o tiene caracteres de control."""
-    return _clean_text(text, "la nota", NOTE_MAX)
+    return clean_text(text, "la nota", NOTE_MAX)
 
 
 def clean_user(user) -> Optional[str]:
-    return _clean_text(None if user is None else str(user), "user", USER_MAX) or None
+    return clean_text(None if user is None else str(user), "user", USER_MAX) or None
 
 
 # ---------- catálogo (properties.json) ----------
@@ -217,8 +217,8 @@ def add_value(cat: str, value: str, label=None, desc=None, warn: bool = False, e
         raise MetaError(f"valor inválido: {value!r} (minúsculas, números, '.', '_', '-'; hasta {VALUE_MAX})")
     if (warn or exclude_pick) and cat not in FLAG_CATEGORIES:
         raise MetaError(f"warn / exclude_pick solo en: {', '.join(FLAG_CATEGORIES)}")
-    entry = {"id": vid, "label": _clean_text(label, "label", LABEL_MAX) or vid,
-             "desc": _clean_text(desc, "desc", DESC_MAX)}
+    entry = {"id": vid, "label": clean_text(label, "label", LABEL_MAX) or vid,
+             "desc": clean_text(desc, "desc", DESC_MAX)}
     if warn:
         entry["warn"] = True
     if exclude_pick:

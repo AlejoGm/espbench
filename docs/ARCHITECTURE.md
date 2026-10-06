@@ -354,7 +354,8 @@ boot ─────► devremote.service ────────────�
 | `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
 | `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`) |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
-| `GET /api/version` | `{app: "espbench", version, name, id, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname) y si hay token de la API |
+| `GET /api/version` | `{app: "espbench", version, name, id, location, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname; `location`, de `meta/bench_location`, `null` si no tiene) y si hay token de la API |
+| `PATCH /api/bench` `{location}` | Ubicación del bench ("Oficina BA"): hasta 60 caracteres, sin control ni formato Unicode (Cf); `""`/`null` la borra (`benchinfo.set_location`, escritura atómica en `meta/`). La edita el header del dashboard |
 | `GET /api/devices`, `GET /api/device/{tty}`, `GET /api/device/by-key/{key}` | `DeviceRegistry` |
 | `PATCH /api/devices/{mac}` `{device_key?, note?, props?, props_add?, props_remove?, user?}` | Renombrar, nota y propiedades de la placa (`devices.json`, ver "Nota y propiedades") |
 | `GET /api/properties` | Categorías de propiedades (fijas) con los valores de este bench |
@@ -509,7 +510,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── venv/                  Python + esptool + esp-idf-monitor + fastapi
 ├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?} (666: se escribe en el lugar)
 ├── meta/                  777: lo que crea el api (sfypi)
-│   └── properties.json    valores de las propiedades de este bench (las categorías están en el código)
+│   ├── properties.json    valores de las propiedades de este bench (las categorías están en el código)
+│   └── bench_location     (opcional) ubicación del bench ("Oficina BA"), la edita el dashboard
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/
@@ -527,7 +529,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 
 **Permisos**: `/opt/esp` es root 755 y el api corre como `sfypi`, así que el api no puede crear archivos ahí.
 `devices.json` (rename, nota, propiedades) se escribe **en el lugar** (`r+` con flock, sin temporal) y es 666;
-`properties.json` necesita temporal + rename y su `.lck`, así que vive en `meta/` (777, como `locks/`). Un
+`properties.json` necesita temporal + rename y su `.lck`, así que vive en `meta/` (777, como `locks/`), igual que
+`bench_location` (temporal + rename). Un
 `/opt/esp/properties.json` de 0.36–0.39 se lee si no está el de `meta/` e `install.sh` lo mueve.
 
 `devremote --cleanup` borra jobs y sesiones de log viejas. La sesión actual

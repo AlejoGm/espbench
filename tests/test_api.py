@@ -327,6 +327,7 @@ def test_empty_token_file_is_no_token(tmux):
     lambda a: api.device_command("ttyUSB0", "reset", None, authorization=a),
     lambda a: api.devremote_reset("ttyUSB0", authorization=a),
     lambda a: api.patch_device(MAC, {"device_key": "X"}, authorization=a),
+    lambda a: api.patch_bench({"location": "Lab"}, authorization=a),
 ])
 def test_token_required_on_writes(tmux, call, monkeypatch):
     from server.device_registry import DevicesFile
@@ -731,14 +732,58 @@ def test_version_identifies_bench(monkeypatch):
     paths.version_file().write_text("0.13.0\n")
     monkeypatch.setattr(api.benchinfo, "this_host_id", lambda: "dc:a6:32:01:02:03")
     assert run(api.get_version()) == {"app": "espbench", "version": "0.13.0", "name": "sensipi02",
-                                      "id": "dc:a6:32:01:02:03", "auth": False}
+                                      "id": "dc:a6:32:01:02:03", "location": None, "auth": False}
     paths.bench_name_file().write_text("lab-cordoba\n")
     assert run(api.get_version())["name"] == "lab-cordoba"
 
 
 def test_version_without_files():
     r = run(api.get_version())
-    assert r["app"] == "espbench" and r["version"] == "dev" and r["name"]
+    assert r["app"] == "espbench" and r["version"] == "dev" and r["name"] and r["location"] is None
+
+
+# ---------- ubicación del bench (PATCH /api/bench) ----------
+
+def test_bench_location_set_shown_in_version_and_cleared():
+    r = run(api.patch_bench({"location": "  Lab Chile  "}))
+    assert r == {"ok": True, "location": "Lab Chile"}
+    assert run(api.get_version())["location"] == "Lab Chile"
+    assert paths.bench_location_file().parent == paths.meta_dir()
+    assert run(api.patch_bench({"location": "Oficina BA · 2º piso"}))["location"] == "Oficina BA · 2º piso"
+    assert run(api.get_version())["location"] == "Oficina BA · 2º piso"
+    for empty in ("", None, "   "):
+        run(api.patch_bench({"location": "x"}))
+        assert run(api.patch_bench({"location": empty})) == {"ok": True, "location": None}
+        assert run(api.get_version())["location"] is None and not paths.bench_location_file().exists()
+
+
+@pytest.mark.parametrize("body", [{"location": "x" * 61}, {"location": "a\nb"}, {"location": "a\u202eb"},
+                                  {"location": "a\u200bb"}, {"location": 5}, {}])
+def test_bench_location_is_validated(body):
+    run(api.patch_bench({"location": "Lab"}))
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_bench(body))
+    assert err(e)[0] == 400 and err(e)[1] == "bad_request"
+    assert run(api.get_version())["location"] == "Lab"       # no se tocó
+
+
+def test_bench_location_max_length_is_accepted():
+    assert run(api.patch_bench({"location": "x" * 60}))["location"] == "x" * 60
+
+
+def test_bench_location_is_written_with_esp_base_read_only():
+    """En la Pi /opt/esp es root 755 y el api corre como sfypi: el archivo va en meta/ (install.sh lo crea 777)."""
+    base = paths.esp_base()
+    paths.meta_dir().mkdir(parents=True)
+    base.chmod(0o555)
+    try:
+        assert run(api.patch_bench({"location": "Lab"}))["location"] == "Lab"
+        assert run(api.patch_bench({"location": ""}))["location"] is None
+        assert run(api.patch_bench({"location": "Oficina"}))["location"] == "Oficina"
+    finally:
+        base.chmod(0o755)
+    assert run(api.get_version())["location"] == "Oficina"
+    assert not (base / "bench_location").exists()
 
 
 # ---------- update del bench (espbench-update) ----------

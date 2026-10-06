@@ -92,6 +92,11 @@ def bench_name_file() -> pathlib.Path:
     return esp_base() / "bench_name"
 
 
+def bench_location_file() -> pathlib.Path:
+    """(opcional) Ubicación del bench ("Oficina BA"). La edita el dashboard (api, sfypi): va en meta/."""
+    return meta_dir() / "bench_location"
+
+
 def run_dir() -> pathlib.Path:
     return esp_base() / "run"
 
