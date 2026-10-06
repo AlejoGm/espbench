@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.30.10
+**Version:** 0.30.11
 
 ---
 
@@ -199,18 +199,60 @@ placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_H
 
 Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and real-time serial logs via WebSocket.
 
-### API token (optional)
+Escrituras, token de la API y cómo liberar una placa: ver [Despliegue y seguridad](#despliegue-y-seguridad).
 
-Create `/opt/esp/api_token` (one line, the token) to require `Authorization: Bearer <token>` on every write of the
-dashboard API (send, reset, reserve, unlock, rename...). Reads stay open. The dashboard asks for the token once and keeps
-it in the browser.
+---
 
-> ⚠️ The same file is the **flash token** (unless the session runs with `--token`): as soon as it exists, every
-> `.flashcfg.json` without `remote.token` (or with a different one) **stops being able to flash** (`unauthorized`).
-> Set `remote.token` in each project before creating the file. Delete the file (or leave it empty) to go back to no auth.
->
-> Reads stay open on purpose: the serial log, the events and the text of every console `send` are visible to anyone
-> on the network. Don't type secrets in the serial console.
+## Despliegue y seguridad
+
+El banco está pensado para una **red interna de confianza**. Sin `/opt/esp/api_token` (el default) queda abierto:
+
+| Qué | Sin `api_token` | Con `api_token` |
+|---|---|---|
+| Lecturas: `/api/devices`, `/api/board/{key}/log\|events`, WebSocket del log, historial y sesiones | abiertas | **abiertas igual** (a propósito) |
+| `send`, `command` (reset / bootloader), `restart-session` | cualquiera en la red | `Authorization: Bearer <token>` |
+| `reserve`, `release`, `unlock` con el par `lock_user`/`lock_token` | cualquiera que tenga el par (o cree uno nuevo si la placa está libre) | + Bearer |
+| `unlock` forzado (botón **Forzar** del dashboard) | deshabilitado (403 `force_disabled`) | Bearer |
+| Flash (TCP `5000+K`) | sin auth: alcanza un par `lock_user`/`lock_token` | `remote.token` del `.flashcfg.json` = el token |
+
+- **Las lecturas no piden token nunca**: el log serie, los eventos y el texto de cada `send` de la consola los ve
+  cualquiera en la red. No mandes secretos por la consola serie.
+- **La reserva es de buena fe para `send`/`command`**: bloquea a los demás (423 `locked`), pero el dashboard la
+  saltea con `force: true` después de confirmar, y eso no pide token (queda `forced` y quién en el evento). Lo que
+  sí protege siempre es el **flash**: con una reserva o un lock ajeno, el flash da `device_locked`. El CLI nunca
+  manda `force`.
+- Una reserva dura como mucho **24 h** (`ttl_s` mayor → 400 `bad_request`; para más, renovarla con otro
+  `reserve`). El lock que deja un flash no vence: lo suelta su dueño o se borra al relanzar la sesión.
+
+### Activar el token
+
+El mismo archivo es el token de las escrituras del API **y del flash** (salvo que la sesión corra con `--token`):
+apenas existe, todo `.flashcfg.json` sin `remote.token` (o con otro) **deja de poder flashear** (`unauthorized`).
+Por eso el orden importa:
+
+1. Elegí el token y **repartilo primero**: `remote.token` en el `.flashcfg.json` de cada proyecto y
+   `ESPBENCH_TOKEN` (o `token` del perfil) de cada agente. Mientras la Pi no tenga el archivo, el token de más se ignora.
+2. **Recién después** crealo en la Pi. El api corre como `sfypi` y los procesos de las placas como root:
+
+   ```bash
+   sudo sh -c 'umask 027; printf "%s\n" "<token>" > /opt/esp/api_token'
+   sudo chown root:sfypi /opt/esp/api_token && sudo chmod 640 /opt/esp/api_token
+   ```
+
+   Se lee en cada pedido y en cada conexión de flash: no hace falta reiniciar nada. Si existe y no se puede leer
+   (permisos, no es UTF-8), **falla cerrado**: las escrituras dan 500 `auth_config` y el flash `auth_config`.
+3. El dashboard pide el token una vez (ante el primer 401) y lo guarda en el navegador; con el token aparece **Forzar**.
+
+Para volver a sin auth: borrar el archivo (o dejarlo vacío).
+
+### Liberar una placa trabada
+
+| Quién | Cómo |
+|---|---|
+| El dueño (con su par) | `espbench release <dev>`, `python client/deploy.py --unlock`, o **Liberar** en el dashboard |
+| Cualquiera, con `api_token` | **Forzar** en el dashboard (queda un `release` con el dueño anterior y quién forzó) |
+| Desde la Pi | `devremote --unlock <dev>`: suelta cualquier lock o reserva |
+| Solo | una reserva vence sola (máx. 24 h); el lock de un flash se borra al relanzar la sesión (replug, `devremote --reset`) |
 
 ---
 

@@ -203,6 +203,12 @@ def test_reserve_conflicts():
     assert err(e) == (409, "device_changed")
 
 
+def test_reserve_max_is_24h():
+    board()
+    assert api.RESERVE_MAX_S == 24 * 3600
+    assert reserve(ttl_s=24 * 3600)["ok"]
+
+
 def test_reserve_over_own_flash_lock_and_renew():
     from server import locks
     board()
@@ -225,6 +231,7 @@ def test_reserve_blocked_by_flash_lock_of_other_user():
     {"lock_user": "alejo", "lock_token": "a:b"},
     {"lock_user": "alejo", "lock_token": "t", "ttl_s": 0},
     {"lock_user": "alejo", "lock_token": "t", "ttl_s": "x"},
+    {"lock_user": "alejo", "lock_token": "t", "ttl_s": 24 * 3600 + 1},      # tope 24 h (antes 7 días)
 ])
 def test_reserve_bad_input(body):
     with pytest.raises(HTTPException) as e:

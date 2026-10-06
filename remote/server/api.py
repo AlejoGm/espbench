@@ -75,7 +75,10 @@ _TTY_RE = re.compile(r"(ttyUSB|esp-slot)\d+")
 SEND_MAX = 256
 BUSY_STATES = ("flashing", "erasing")
 RESERVE_DEFAULT_S = 1800
-RESERVE_MAX_S = 7 * 24 * 3600
+# Tope de una reserva: 24 h. Más es un banco bloqueado por un agente que se
+# olvidó de soltarla (y sin api_token nadie la puede forzar). Pasarse → 400
+# (sin clamp: que el pedido no reserve algo distinto de lo que se pidió).
+RESERVE_MAX_S = 24 * 3600
 
 
 def _fail(status: int, error: str, message: str):
@@ -338,7 +341,7 @@ async def device_reserve(tty: str, body: dict = Body(...), authorization: Option
     except (TypeError, ValueError):
         _fail(400, "bad_request", "ttl_s tiene que ser un entero")
     if not 1 <= ttl <= RESERVE_MAX_S:
-        _fail(400, "bad_request", f"ttl_s entre 1 y {RESERVE_MAX_S}")
+        _fail(400, "bad_request", f"ttl_s entre 1 y {RESERVE_MAX_S} (24 h): para más, renová la reserva")
     state = runstate.read(tty) or {}
     _check_expect_mac(state, body.get("expect_mac"))
     if not state.get("mac"):
