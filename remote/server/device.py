@@ -245,14 +245,14 @@ class DeviceManager:
             tty_name = self.tty_port.tty_name
             state_sink = lambda snap: runstate.write(tty_name, snap)  # noqa: E731
         self.watch = SerialWatch()
-        self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name),
+        self.device = Device(self.tty_port, DeviceLog(self.tty_port.tty_name, tcp_port=self.tty_port.tcp_port),
                              state_sink=state_sink, watch=self.watch)
         self.watch._on_change = self.device.publish
         self._mac_reader = mac_reader
 
     def on_serial(self, data: bytes) -> None:
         """Sink del EspMonitor: el serial va al log del device y al SerialWatch."""
-        self.device.device_log.write_bytes(data)
+        self.device.device_log.write_serial(data)
         self.watch.feed(data)
 
     def discover(self, attempts: int = 1, delay: float = 0.0,

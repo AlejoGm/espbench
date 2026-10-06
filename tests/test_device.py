@@ -52,7 +52,7 @@ def test_starts_in_discovering(monkeypatch, tmp_path):
 
 def test_promote_moves_to_monitoring_and_adopts_log(monkeypatch, tmp_path):
     device = make_device(monkeypatch, tmp_path)
-    device.device_log.write("boot antes de conocer MAC\n")
+    device.device_log.write_serial(b"boot antes de conocer MAC\n")
 
     device.promote(MAC)
 

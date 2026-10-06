@@ -94,3 +94,14 @@ def test_default_stdout_sink_prints(capsys):
     assert "INFO" in out
     assert "protocol" in out
     assert "mensaje de prueba" in out
+
+
+def test_stdout_format_unchanged(capsys):
+    """El formato de la sesión tmux no cambia con el prefijo del DeviceLog."""
+    taglog.warn("protocol", "x")
+    out = capsys.readouterr().out
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| WARN  \| protocol       \| x\r\n", out)
+
+
+def test_format_body_has_no_timestamp():
+    assert taglog.format_body("INFO", "device", "hola") == "INFO  | device         | hola"

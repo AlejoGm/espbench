@@ -28,9 +28,15 @@ _lock = threading.Lock()
 _sinks: list = []
 
 
+def format_body(level: str, tag: str, msg: str) -> str:
+    """Línea sin timestamp: "INFO  | tag            | msg". Es lo que escribe el
+    DeviceLog después de su propio prefijo (que ya trae la hora y el `|`)."""
+    return f"{level:5s} | {tag:14s} | {msg}"
+
+
 def format_line(ts: str, level: str, tag: str, msg: str) -> str:
-    """Formato único para todos los sinks (sin fin de línea)."""
-    return f"{ts} | {level:5s} | {tag:14s} | {msg}"
+    """Formato de stdout (la sesión tmux), sin fin de línea."""
+    return f"{ts} | {format_body(level, tag, msg)}"
 
 
 def _stdout_sink(ts: str, level: str, tag: str, msg: str) -> None:
