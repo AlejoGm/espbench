@@ -422,6 +422,13 @@ boot ─────► devremote.service ────────────�
   archivo a los 150 ms / 1 s).
 - Las rutas `/api/device/{tty}/...` de GET tienen que declararse **antes** de
   `/api/device/{tty:path}`, que si no se las come (hay test).
+- **Dashboard (fase 4)**: pestaña Eventos en `device.html` (`/api/board/{MAC}/events`,
+  chips por tipo, "cargar más" con `limit`/`more`, visor del evento con
+  `/log?around=<cursor>`, también de sesiones anteriores), marcas de eventos en el
+  log en vivo (panic/boot por contenido de línea; send/command/flash por hora del
+  evento, porque el WebSocket no lleva offsets) y reservas visibles (`lock_expires`
+  con "vence en" que se actualiza solo, contador y `@usuario` en la home, liberar
+  con el par o forzar con `unlock {force: true}`). Detalle en `remote/dashboard/CLAUDE.md`.
 - `DeviceRegistry` lista un device por puerto físico (`esp-slotK` en vez del
   `ttyUSB` al que apunta). El estado, la MAC y el puerto salen de
   `run/<tty>.json`. Sin estado runtime, cae al esquema anterior (`tmux
