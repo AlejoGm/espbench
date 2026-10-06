@@ -17,7 +17,7 @@
             </div>
             <div class="header-summary" id="summary"></div>
             <div class="header-meta">
-                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / )" autocomplete="off">
+                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / , @usuario )" autocomplete="off">
                 <span id="version-badge" class="version-badge"></span>
                 <span class="author-tag">by AlejoGm</span>
             </div>
@@ -99,6 +99,33 @@
 
         var _renamingTty = null;
 
+        // 🔒 juan · vence en 20 min (tooltip con la hora exacta). Click: busca "@juan".
+        function lockBadge(lock) {
+            if (!lock) return '';
+            return '<span class="badge badge-locked lock-badge' + (lock.reservation ? '' : ' lock-flash') +
+                   '" data-user="' + escapeHtml(lock.user) + '" title="' + escapeHtml(lock.title) + ' — click: ver sus placas">' +
+                   '&#128274; ' + escapeHtml(lock.user) + ' · <span class="lock-exp"' +
+                   (lock.expires ? ' data-expires="' + escapeHtml(lock.expires) + '"' : '') + '>' +
+                   escapeHtml(lock.text) + '</span></span>';
+        }
+
+        // Cada segundo: "vence en" sin esperar al poll; al vencer el badge desaparece.
+        function tickLocks() {
+            document.querySelectorAll('.lock-exp[data-expires]').forEach(function(el) {
+                var t = EB.expiresText(el.dataset.expires);
+                if (t) { el.textContent = t; return; }
+                var card = el.closest('.device-card');
+                if (card) { card.classList.remove('locked'); card.dataset.lockUser = ''; }
+                el.closest('.lock-badge').remove();
+            });
+        }
+
+        function setSearch(q) {
+            var search = document.getElementById('search');
+            search.value = q;
+            applySearch();
+        }
+
         function buildCard(device) {
             var statusClass = device.status === 'RUNNING' ? 'badge-running' : 'badge-down';
             var lastFlash = formatTimestamp(device.last_flash_ts);
@@ -106,7 +133,9 @@
             var tty = escapeHtml(device.tty_name);
 
             var card = document.createElement('div');
-            card.className = 'device-card' + cardStateClass(device) + (device.lock_user ? ' locked' : '');
+            var lock = EB.lockInfo(device);
+            card.className = 'device-card' + cardStateClass(device) + (lock ? ' locked' : '');
+            card.dataset.lockUser = lock ? lock.user : '';
             card.dataset.search = [title, device.tty_name, device.sn, device.mac, device.hw_model,
                                    device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
                                   .filter(Boolean).join(' ').toLowerCase();
@@ -131,7 +160,7 @@
                         renameHtml +
                     '</div>' +
                     '<div class="card-header-badges">' +
-                        (device.lock_user ? '<span class="badge badge-locked">&#128274; ' + escapeHtml(device.lock_user) + '</span>' : '') +
+                        lockBadge(lock) +
                         stateBadge(device) +
                         '<span class="badge ' + statusClass + '">' + escapeHtml(device.status) + '</span>' +
                     '</div>' +
@@ -333,7 +362,8 @@
 
         // Contadores del header: de un vistazo, cuántos andan y cuántos tienen problemas.
         function renderSummary(devices) {
-            var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, locked: 0};
+            var c = {total: devices.length, ok: 0, busy: 0, bad: 0, down: 0, reserved: 0, flashLocked: 0};
+            var who = [];
             devices.forEach(function(d) {
                 var cls = cardStateClass(d);
                 if (cls === ' st-down') c.down++;
@@ -341,9 +371,19 @@
                 else if (cls === ' st-bad' || cls === ' st-warn') c.bad++;
                 else if (cls === ' st-unknown') return;
                 else c.ok++;
-                if (d.lock_user) c.locked++;
+            });
+            devices.forEach(function(d) {
+                var lock = EB.lockInfo(d);
+                if (!lock) return;
+                if (lock.reservation) {
+                    c.reserved++;
+                    who.push(lock.user + ' → ' + (d.device_key || d.tty_name) + ' (' + lock.text + ')');
+                } else {
+                    c.flashLocked++;
+                }
             });
             function chip(n, cls, label, title) {
+                // title ya viene escapado
                 return n ? '<span class="sum-chip ' + cls + '" title="' + title + '"><b>' + n + '</b> ' + label + '</span>' : '';
             }
             document.getElementById('summary').innerHTML =
@@ -352,17 +392,27 @@
                 chip(c.busy, 'sum-busy', 'ocupados', 'Flasheando, borrando o iniciando') +
                 chip(c.bad, 'sum-bad', 'con problemas', 'Panic, boot loop o reset anormal desde el último flash') +
                 chip(c.down, 'sum-down', 'caídos', 'Sin proceso vivo') +
-                chip(c.locked, 'sum-locked', 'bloqueados', 'Con lock de usuario');
+                chip(c.reserved, 'sum-locked sum-click', c.reserved === 1 ? 'reservada' : 'reservadas',
+                     'Reservas vigentes (click: filtrar):\n' + escapeHtml(who.join('\n'))) +
+                chip(c.flashLocked, 'sum-flashlock sum-click', 'con lock de flash',
+                     'Lock del último flash, sin vencimiento: no bloquea la consola (click: filtrar)');
         }
 
         function applySearch() {
             var q = document.getElementById('search').value.trim().toLowerCase();
             document.querySelectorAll('.device-card').forEach(function(card) {
-                card.classList.toggle('hidden', !!q && card.dataset.search.indexOf(q) < 0);
+                card.classList.toggle('hidden', !EB.searchMatch(q, card.dataset.search, card.dataset.lockUser));
             });
         }
 
         document.getElementById('search').addEventListener('input', applySearch);
+        // Filtros rápidos: el badge del lock de una card ("@usuario") y los contadores de reservas ("@")
+        document.addEventListener('click', function(e) {
+            var b = e.target.closest('.lock-badge');
+            if (b) { setSearch('@' + b.dataset.user); return; }
+            if (e.target.closest('.sum-locked, .sum-flashlock')) setSearch('@');
+        });
+        setInterval(tickLocks, 1000);
         document.addEventListener('keydown', function(e) {
             var search = document.getElementById('search');
             if (e.key === '/' && document.activeElement !== search && document.activeElement.tagName !== 'INPUT') {

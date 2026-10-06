@@ -19,7 +19,8 @@
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
         <div class="header-actions">
-            <button class="action-btn" id="btn-unlock" title="Desbloquear dispositivo" style="display:none">🔓 Unlock</button>
+            <button class="action-btn hidden" id="btn-release" title="Liberar la reserva/lock con su lock_user y lock_token">🔓 Liberar</button>
+            <button class="action-btn action-btn--danger hidden" id="btn-force" title="Soltar la reserva/lock de otro (queda registrado como forzado)">⚠ Forzar</button>
             <button class="action-btn" id="btn-reset" title="Reset (Ctrl+T Ctrl+R)">↺ Reset</button>
             <button class="action-btn" id="btn-bootloader" title="Bootloader (Ctrl+T Ctrl+P)">⚙ Boot</button>
             <button class="action-btn action-btn--danger" id="btn-devremote-reset" title="Reiniciar sesión devremote (mata y relanza el proceso)">⟳ Sesión</button>
@@ -85,7 +86,7 @@
         var terminal = $('terminal');
         var ws = null;
         var reconnectTimer = null;
-        var currentLockUser = '';
+        var currentLock = null;     // EB.lockInfo del último /api/device/{tty}
         var boardKey = '';          // MAC sin separadores: /api/board/{key} (lecturas por placa)
         var boardApi = '';
         var deviceLoaded = false;
@@ -279,11 +280,121 @@
                    '<span class="dev-badge-value">' + EB.escapeHtml(value) + '</span></span>';
         }
 
+        // 🔒 reserva | juan · vence en 20 min  (el "vence en" lo actualiza tickLocks)
+        function lockBadge(lock) {
+            return '<span class="dev-badge badge-locked" title="' + EB.escapeHtml(lock.title) + '">' +
+                   '<span class="dev-badge-label">🔒 ' + (lock.reservation ? 'reserva' : 'lock flash') + '</span>' +
+                   '<span class="dev-badge-value">' + EB.escapeHtml(lock.user) + ' · <span class="lock-exp"' +
+                   (lock.expires ? ' data-expires="' + EB.escapeHtml(lock.expires) + '"' : '') + '>' +
+                   EB.escapeHtml(lock.text) + '</span></span></span>';
+        }
+
+        // Cada segundo: "vence en" sin recargar; al vencer desaparece (el server ya la ignora).
+        function tickLocks() {
+            var expired = false;
+            document.querySelectorAll('.lock-exp[data-expires]').forEach(function(el) {
+                var t = EB.expiresText(el.dataset.expires);
+                if (t) { el.textContent = t; return; }
+                el.closest('.dev-badge').remove();
+                expired = true;
+            });
+            if (expired) {
+                currentLock = null;
+                $('btn-release').classList.add('hidden');
+                $('btn-force').classList.add('hidden');
+                loadDeviceInfo();
+            }
+        }
+
+        // ── Reserva: liberar (con el par) y forzar ───────────────────────────
+        // El par lock_user/lock_token se puede recordar (localStorage): con él,
+        // "Liberar" no pregunta y las escrituras del dashboard salen como del dueño.
+        function getPair() {
+            try {
+                var u = localStorage.getItem('eb.lockUser') || '', t = localStorage.getItem('eb.lockToken') || '';
+                return u && t ? {user: u, token: t} : null;
+            } catch (e) { return null; }
+        }
+
+        function setPair(user, token) {
+            try { localStorage.setItem('eb.lockUser', user); localStorage.setItem('eb.lockToken', token); } catch (e) {}
+        }
+
+        function postWrite(path, body) {
+            return EBAuth.fetch(api + path, {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})
+            }).then(function(r) {
+                return r.json().catch(function() { return null; })
+                        .then(function(d) { return [r.ok, r.status, d]; });
+            });
+        }
+
+        function release(user, token, remember) {
+            return postWrite('/release', {lock_user: user, lock_token: token}).then(function(res) {
+                if (!res[0]) return EB.errorText(res[2], res[1]);
+                if (remember) setPair(user, token);
+                toast('Reserva liberada');
+                loadDeviceInfo();
+                return null;
+            });
+        }
+
+        // Barra inline (como la del token de la API) para el par del dueño.
+        function askPair(lock, error) {
+            var old = document.querySelector('.lock-bar');
+            if (old) old.remove();
+            var pair = getPair();
+            var bar = document.createElement('form');
+            bar.className = 'token-bar lock-bar';
+            bar.innerHTML = '<span>Liberar la reserva de <b>' + EB.escapeHtml(lock.user) + '</b></span>' +
+                '<input name="user" placeholder="lock_user" autocomplete="off">' +
+                '<input name="token" type="password" placeholder="lock_token" autocomplete="off">' +
+                '<label class="enter-opt"><input type="checkbox" name="remember"' + (pair ? ' checked' : '') + '> recordar</label>' +
+                '<button type="submit" class="action-btn">Liberar</button>' +
+                '<button type="button" class="tool-btn">Cancelar</button>' +
+                (error ? '<span class="lock-bar-err">' + EB.escapeHtml(error) + '</span>' : '');
+            document.body.appendChild(bar);
+            bar.user.value = lock.user;
+            (bar.user.value ? bar.token : bar.user).focus();
+            bar.querySelector('button[type=button]').onclick = function() { bar.remove(); };
+            bar.onsubmit = function(e) {
+                e.preventDefault();
+                var u = bar.user.value.trim(), t = bar.token.value.trim();
+                if (!u || !t) return;
+                bar.remove();
+                release(u, t, bar.remember.checked)
+                    .then(function(err) { if (err) askPair(lock, err); })
+                    .catch(function() { toast('Error de conexión', true); });
+            };
+        }
+
+        function onRelease() {
+            if (!currentLock) return;
+            var pair = getPair();
+            if (!pair || pair.user !== currentLock.user) { askPair(currentLock); return; }
+            var lock = currentLock;
+            release(pair.user, pair.token, false)
+                .then(function(err) { if (err) askPair(lock, err); })
+                .catch(function() { toast('Error de conexión', true); });
+        }
+
+        function onForce() {
+            if (!currentLock) return;
+            if (!confirm(EB.forceConfirmText(currentLock, 'Soltarla'))) return;
+            postWrite('/unlock', {force: true})
+                .then(function(res) {
+                    if (!res[0]) { toast(EB.errorText(res[2], res[1]), true); return; }
+                    toast(res[2] && res[2].forced ? 'Reserva de ' + res[2].user + ' soltada (forzado)' : 'No estaba bloqueada');
+                    loadDeviceInfo();
+                })
+                .catch(function() { toast('Error de conexión', true); });
+        }
+
         var STATE_LABELS = {discovering: 'iniciando', flashing: 'flasheando', erasing: 'borrando',
                             unknown: 'sin MAC', disconnected: 'desconectado'};
 
         function loadDeviceInfo() {
-            fetch(api)
+            return fetch(api)
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(d) {
                     var badges = [];
@@ -310,8 +421,8 @@
                                                   (d.last_flash_user ? ' · ' + d.last_flash_user : ''),
                                                   d.last_flash_ok === false ? 'badge-fail' : ''));
                         }
-                        currentLockUser = d.lock_user || '';
-                        if (d.lock_user) badges.push(makeBadge('🔒 locked', d.lock_user, 'badge-locked'));
+                        currentLock = EB.lockInfo(d);
+                        if (currentLock) badges.push(lockBadge(currentLock));
                         $('health-badges').innerHTML = EB.healthBadges(d.health).map(function(x) {
                             return '<span class="hbadge ' + x.cls + '" title="' + EB.escapeHtml(x.title) + '">' + EB.escapeHtml(x.text) + '</span>';
                         }).join('');
@@ -323,7 +434,10 @@
                     $('device-name').textContent = name;
                     document.title = 'espbench — ' + name;
                     $('device-badges').innerHTML = badges.join('');
-                    $('btn-unlock').style.display = d && d.lock_user ? '' : 'none';
+                    if (!d) currentLock = null;
+                    $('btn-release').classList.toggle('hidden', !currentLock);
+                    $('btn-force').classList.toggle('hidden', !currentLock);
+                    return d;
                 })
                 .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
         }
@@ -551,19 +665,19 @@
         var sent = [];
         var sentIdx = -1;
 
-        // POST con JSON → [ok, status, body]. Ante 423 (placa reservada por otro)
-        // pregunta y reintenta con force.
-        function postJson(path, body) {
-            return EBAuth.fetch(api + path, {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body || {})
-            }).then(function(r) {
-                return r.json().catch(function() { return null; })
-                        .then(function(d) { return [r.ok, r.status, d]; });
-            }).then(function(res) {
-                if (res[1] !== 423 || (body && body.force)) return res;
-                if (!confirm(EB.errorText(res[2], res[1]) + '\n¿Mandar igual?')) return res;
-                return postJson(path, Object.assign({}, body, {force: true}));
+        // POST con JSON → [ok, status, body], con el par recordado (si es el dueño
+        // de la reserva, pasa; si no, el evento queda con su usuario). Ante 423
+        // (reservada por otro) muestra quién y hasta cuándo, y reintenta con force.
+        function postJson(path, body, action) {
+            var pair = getPair();
+            var full = Object.assign(pair ? {lock_user: pair.user, lock_token: pair.token} : {}, body || {});
+            return postWrite(path, full).then(function(res) {
+                if (res[1] !== 423 || full.force) return res;
+                return Promise.resolve(loadDeviceInfo()).then(function() {
+                    var msg = EB.forceConfirmText(currentLock, action || 'Mandar', EB.errorText(res[2], res[1]));
+                    if (!confirm(msg)) return res;
+                    return postJson(path, Object.assign({}, body, {force: true}), action);
+                });
             });
         }
 
@@ -607,7 +721,7 @@
         function sendCommand(cmd) {
             var btn = $('btn-' + cmd);
             btn.disabled = true;
-            postJson('/command/' + cmd)
+            postJson('/command/' + cmd, {}, cmd === 'reset' ? 'Resetear' : 'Pasar a bootloader')
                 .then(function(res) { if (!res[0]) toast(EB.errorText(res[2], res[1]), true); })
                 .catch(function() { toast('Error de conexión', true); })
                 .finally(function() { setTimeout(function() { btn.disabled = false; }, 1000); });
@@ -634,7 +748,7 @@
                 var btn = $('btn-devremote-reset');
                 btn.disabled = true;
                 // postJson: ante una reserva ajena (423) pregunta y reintenta con force
-                postJson('/devremote-reset')
+                postJson('/devremote-reset', {}, 'Reiniciar la sesión')
                     .then(function(res) {
                         var d = res[2] || {};
                         if (!res[0]) { toast(EB.errorText(d, res[1]), true); return; }
@@ -643,24 +757,9 @@
                     .catch(function() { toast('Error de conexión', true); })
                     .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
             };
-            $('btn-unlock').onclick = function() {
-                if (!currentLockUser) { alert('No hay lock activo'); return; }
-                var token = window.prompt('Token para ' + currentLockUser + ':');
-                if (!token) return;
-                var btn = $('btn-unlock');
-                btn.disabled = true;
-                EBAuth.fetch(api + '/unlock', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({lock_user: currentLockUser, lock_token: token})
-                }).then(function(r) { return r.json(); })
-                  .then(function(d) {
-                      if (d.ok) { loadDeviceInfo(); }
-                      else { alert('Error: ' + EB.errorText(d, 403)); }
-                  })
-                  .catch(function() { alert('Error de conexión'); })
-                  .finally(function() { btn.disabled = false; });
-            };
+            $('btn-release').onclick = onRelease;
+            $('btn-force').onclick = onForce;
+            setInterval(tickLocks, 1000);
 
             $('filter').addEventListener('input', function() { filterText = this.value.trim().toLowerCase(); refilter(); });
             $('btn-problems').onclick = function() {
