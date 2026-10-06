@@ -304,6 +304,7 @@ Detalle y JSON de la política en [security.md](security.md). Orden sugerido:
 |---|---|
 | bench-master no encuentra ningún bench | `tailscale status` (¿Mac conectada? ¿bench online?), `curl <pi>:8080/api/version` desde la Mac, `ESPBENCH_BENCHES_CONFIG` apuntando a otro archivo |
 | Aparece un host que no es bench | Contestó `/api/version` con `{"version"}` y nada más (se toma como bench viejo): avisar |
+| Directo en el bench se ve el monitor viejo (cabecera `key`/`version`, sin Hora ni consola) y por bench-master el nuevo | Caché del navegador de la versión anterior (el dashboard viejo no mandaba `Cache-Control`): Cmd+Shift+R en la home y en el monitor del bench. Pasa una vez por bench, después de la primera instalación |
 | Monitor por el proxy en blanco | Ctrl-F5; DevTools → Network: ¿algún pedido a `/api/...` sin el `/bench/<nombre>/`? Ese bench tiene el frontend viejo |
 | Escritura por el proxy da 403 | El guard: ¿la página está en `localhost:8090` y no en otro nombre/IP de la Mac? |
 | Log del master | La terminal donde corre `master/bench-master` (errores de scan con `[bench-master]`) |
