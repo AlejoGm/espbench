@@ -12,7 +12,7 @@ master/bench-master --open        # arma master/.venv la primera vez; http://loc
 | `app.py` | FastAPI: `BenchCache` (estado de los benches, en memoria), API propia, proxy HTTP + WS, guard de Host/Origin |
 | `__main__.py` | `python -m master`: `--host` (default 127.0.0.1), `--port` (8090), `--poll` (5 s), `--open` |
 | `bench-master` | Launcher: crea/actualiza `.venv` desde `requirements.txt` y corre `python -m master` |
-| `dashboard/index.html` | Grilla de todos los devices agrupada por bench. Reusa `espbench.js` y `style.css` de `remote/dashboard/` (montados en `/shared`) |
+| `dashboard/index.html` | Grilla de todos los devices agrupada por bench. Reusa `espbench.js` y `style.css` de `remote/dashboard/` (montados en `/shared`). Cada card con la nota y las propiedades (chips; click filtra `cat:valor`, la búsqueda también mira la nota); los chips se colorean con la unión de los catálogos de los benches (`bench/<n>/api/properties` por el proxy, `EB.mergeCatalogs`). Solo muestra: se editan en el dashboard del bench (también a través del proxy) |
 
 ## Cómo funciona
 

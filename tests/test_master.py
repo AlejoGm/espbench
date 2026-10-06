@@ -245,6 +245,25 @@ def test_proxy_serves_real_bench_frontend_with_relative_urls():
     assert version.json()["app"] == "espbench"
 
 
+def test_note_and_props_reach_the_master_and_the_bench_catalog_through_the_proxy():
+    """Las placas llegan con note/props (el master no las filtra), el catálogo de cada bench
+    se lee por el proxy (bench/<n>/api/properties) y el frontend del master los dibuja."""
+    from server import api as bench_api
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench_api.app))
+    dev = {**DEV_A, "note": "dev ana", "note_by": "ana", "note_at": "2026-10-06T10:00:00-03:00",
+           "props": {"chip": "esp32-s3", "estado": "no-tocar"}}
+
+    async def go():
+        async with master_client(_cache(bench("pi1", dev)), http=http) as c:
+            return ((await c.get("/api/devices")).json(), (await c.get("/bench/pi1/api/properties")).json(),
+                    (await c.get("/")).text, (await c.get("/bench/pi1/")).text)
+    devices, props, master_index, bench_index = run(go())
+    assert devices[0]["note"] == "dev ana" and devices[0]["props"] == {"chip": "esp32-s3", "estado": "no-tocar"}
+    assert [c["id"] for c in props["categories"]][:3] == ["estado", "uso", "chip"]
+    assert "EB.propChipsHtml" in master_index and "/api/properties" in master_index
+    assert 'src="meta.js"' in bench_index            # relativo: anda bajo /bench/<n>/
+
+
 def test_rejects_dns_rebinding_and_cross_site_writes():
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=fake_bench_app()))
 

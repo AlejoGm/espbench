@@ -57,7 +57,7 @@
             </div>
             <div class="header-summary" id="summary"></div>
             <div class="header-meta">
-                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / )" autocomplete="off">
+                <input id="search" class="search-input" type="search" placeholder="Buscar…  ( / , chip:esp32-s3 )" autocomplete="off">
                 <button id="rescan" class="rescan-btn" title="Buscar benches ahora">↻</button>
                 <span id="version-badge" class="version-badge"></span>
             </div>
@@ -77,6 +77,7 @@
         var esc = EB.escapeHtml;
         var benchFilter = null;   // nombre del bench elegido, o null = todos
         var lastBenches = [], lastDevices = [], updates = {};   // updates: GET bench/<n>/api/update
+        var catalogs = {}, catalog = null;   // GET bench/<n>/api/properties; catalog = unión (EB.mergeCatalogs)
 
         function row(label, value, title) {
             return '<div class="card-row"><span class="card-label">' + label + '</span>' +
@@ -111,8 +112,12 @@
             card.className = 'device-card ' + EB.cardState(device) + (device.mac ? '' : ' card-unknown') +
                              (device.lock_user ? ' locked' : '');
             card.dataset.search = [title, device.bench, device.tty_name, device.sn, device.mac, device.hw_model,
-                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
+                                   device.fw_project, device.fw_version, device.last_flash_user, device.lock_user,
+                                   device.note, device.note_by]
                                   .filter(Boolean).join(' ').toLowerCase();
+            card.dataset.props = JSON.stringify(device.props || {});
+            var note = EB.noteHtml(device);
+            var chips = EB.propChipsHtml(device.props, catalog);
             card.innerHTML =
                 '<div class="card-header">' +
                     '<div class="card-title-wrap"><span class="card-title' + (device.mac ? '' : ' card-title-dim') + '">' +
@@ -125,6 +130,10 @@
                     '</div>' +
                 '</div>' +
                 healthHtml(device) +
+                (note || chips ? '<div class="card-meta">' +
+                    (note ? '<div class="card-note" title="' + esc(EB.noteInfo(device).title) + '"><span class="note-icon">✎</span> ' +
+                            note + '</div>' : '') +
+                    (chips ? '<div class="prop-row">' + chips + '</div>' : '') + '</div>' : '') +
                 '<div class="card-body">' +
                     (device.hw_model ? row('HW', esc(device.hw_model)) : '') +
                     EB.fwRows(device).map(function(r) { return row(r.label, r.html, r.title); }).join('') +
@@ -286,14 +295,23 @@
                 chip(c.flashLocked, 'sum-flashlock', 'con lock de flash', 'Lock del último flash, sin vencimiento');
         }
 
+        // Texto libre (también la nota) y propiedades cat:valor (click en un chip), como la home de un bench.
         function applySearch() {
-            var q = document.getElementById('search').value.trim().toLowerCase();
+            var q = document.getElementById('search').value;
             document.querySelectorAll('.device-card').forEach(function(card) {
-                card.classList.toggle('hidden', !!q && card.dataset.search.indexOf(q) < 0);
+                var props = {};
+                try { props = JSON.parse(card.dataset.props || '{}'); } catch (e) {}
+                card.classList.toggle('hidden', !EB.searchMatch(q, card.dataset.search, null, '', props));
             });
         }
 
         document.getElementById('search').addEventListener('input', applySearch);
+        document.addEventListener('click', function(e) {
+            var chip = e.target.closest('.prop-chip');
+            if (!chip) return;
+            document.getElementById('search').value = chip.dataset.filter;
+            applySearch();
+        });
         document.addEventListener('keydown', function(e) {
             var search = document.getElementById('search');
             if (e.key === '/' && document.activeElement !== search) { e.preventDefault(); search.focus(); }
@@ -313,11 +331,22 @@
             }));
         }
 
+        // Catálogo de propiedades de cada bench online (uno viejo no tiene): la unión colorea los chips.
+        function fetchCatalogs(benches) {
+            return Promise.all(benches.filter(function(b) { return b.online; }).map(function(b) {
+                return getJson('bench/' + encodeURIComponent(b.name) + '/api/properties')
+                    .then(function(d) { catalogs[b.name] = d.categories || []; })
+                    .catch(function() { delete catalogs[b.name]; });
+            })).then(function() {
+                catalog = EB.mergeCatalogs(Object.keys(catalogs).sort().map(function(k) { return catalogs[k]; }));
+            });
+        }
+
         function refresh() {
             return Promise.all([getJson('api/benches'), getJson('api/devices')])
                 .then(function(res) {
                     lastBenches = res[0].benches; lastDevices = res[1];
-                    return fetchUpdates(lastBenches);
+                    return Promise.all([fetchUpdates(lastBenches), fetchCatalogs(lastBenches)]);
                 })
                 .then(render)
                 .catch(function(err) { console.error('Error:', err); });
