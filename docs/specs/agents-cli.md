@@ -1,6 +1,6 @@
 # Spec — espbench para agentes (CLI `espbench`, eventos, log con timestamps)
 
-Estado: **v2, revisada** · rama `feat/agents` (sobre `feat/dashboard-ux`) · 2026-10-05
+Estado: **v2, revisada y confirmada** · rama `feat/agents` (sobre `feat/dashboard-ux`) · 2026-10-05
 
 Sale de un grill con Alejo. v2 incorpora una revisión contra el código (sección 10). Lo marcado **[confirmar]** es propuesta, no decisión.
 
@@ -153,7 +153,7 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 - `LockStore.acquire` **conserva** el vencimiento y la MAC si el lock ya es del mismo user (hoy reescribe `user:token`, `protocol.py:153`).
 - Vencido = inexistente en todos lados (`LockStore`, `DeviceRegistry`, api); se borra al leerlo.
 - **Reconexión**: `esp32_tmux.sh:44` borra el lock al relanzar la sesión. v2: borra solo locks **sin vencimiento** (los del flash, como hoy). Una reserva vigente se conserva; al arrancar, el proceso de la placa la borra si su MAC no coincide (los ttyUSB se renumeraron). El CLI, en cada escritura, verifica que la reserva siga siendo suya → `reservation_lost` (exit 6).
-- **A3 [confirmar]**: una reserva con vencimiento bloquea `send`/`command`/`reset` de otros usuarios (423). Los locks permanentes del flash **no** bloquean `send` (si no, la consola del dashboard muere en toda placa ya flasheada). El dashboard puede forzar con el token de la API.
+- **A3 (confirmado)**: una reserva con vencimiento bloquea `send`/`command`/`reset` de otros usuarios (423). Los locks permanentes del flash **no** bloquean `send` (si no, la consola del dashboard muere en toda placa ya flasheada). El dashboard puede forzar con el token de la API.
 
 ## 7. API
 
@@ -177,7 +177,7 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 
 Token (D13): archivo opcional `/opt/esp/api_token`. Si existe: escrituras con `Authorization: Bearer <token>`, si no 401. El dashboard pide el token una vez ante un 401 y lo guarda en `localStorage`.
 
-**A2 [confirmar]**: `remote_esp32.py` usa el mismo archivo como token del flash si no viene `--token`. **Consecuencia**: los `.flashcfg.json` sin `token` dejan de poder flashear apenas se cree el archivo. Hoy `esp32_tmux.sh` no pasa `--token`: el flash anda sin auth en producción.
+**A2 (confirmado)**: `remote_esp32.py` usa el mismo archivo como token del flash si no viene `--token`. **Consecuencia**: los `.flashcfg.json` sin `token` dejan de poder flashear apenas se cree el archivo. Hoy `esp32_tmux.sh` no pasa `--token`: el flash anda sin auth en producción.
 
 ### 7.3 Respuesta de `/log`
 
@@ -294,6 +294,8 @@ El string `error` del JSON es el contrato; el exit code es el resumen.
 
 ## 11. Abiertos
 
-- **A2** — token del flash = token de la API (rompe `.flashcfg` sin `token`).
+Ninguno. A1–A4 confirmados por Alejo (2026-10-05):
+- **A1** — un rango no cruza sesiones (D14).
+- **A2** — token del flash = token de la API (`/opt/esp/api_token`). Avisar en el README: los `.flashcfg` sin `token` dejan de flashear cuando se crea el archivo.
 - **A3** — reservas con vencimiento bloquean `send`/`reset` ajenos (423); locks del flash no.
-- **A4** — una sola Pi por comando; perfiles en `~/.config/espbench.json`. Varias Pi (`name@host`) después.
+- **A4** — una sola Pi por comando; perfiles en `~/.config/espbench.json`.
