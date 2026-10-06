@@ -99,9 +99,22 @@ class RequestRejected(Exception):
 # ---------- 1. autenticación y acción ----------
 
 def authenticate(header: dict, token: str) -> None:
-    if token and header.get("token") != token:
+    if token and not auth.same_secret(str(header.get("token") or ""), token):
         taglog.warn(TAG, "token inválido, rechazando conexión")
         raise RequestRejected({"ok": False, "error": "unauthorized"})
+
+
+def flash_token(cfg: dict) -> str:
+    """--token manda; si no, el de /opt/esp/api_token (el mismo del API, A2).
+    Si el archivo existe pero no se puede leer, falla cerrado."""
+    if cfg.get("token"):
+        return str(cfg["token"])
+    try:
+        return auth.read_token()
+    except auth.AuthConfigError as e:
+        taglog.error(TAG, f"token ilegible, rechazando: {e}")
+        raise RequestRejected({"ok": False, "error": "auth_config",
+                               "message": "el token de la Pi (/opt/esp/api_token) no se puede leer"})
 
 
 def validate_action(header: dict) -> str:
@@ -394,8 +407,7 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
 
     try:
         header = recv_msg(sock)
-        # --token manda; si no, el de /opt/esp/api_token (el mismo del API, A2)
-        authenticate(header, str(cfg.get("token") or "") or auth.read_token())
+        authenticate(header, flash_token(cfg))
         action = validate_action(header)
         lock_store = LockStore(device.tty_name)
         user = header.get("lock_user", "").strip()

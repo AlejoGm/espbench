@@ -107,7 +107,11 @@ def main(argv=None):
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _on_signal)
 
-    token_src = "--token" if args.token else ("api_token" if auth.read_token() else "no")
+    try:
+        token_src = "--token" if args.token else ("api_token" if auth.read_token() else "no")
+    except auth.AuthConfigError as e:
+        token_src = "ILEGIBLE (el flash se rechaza)"
+        taglog.error(TAG, str(e))
     taglog.info(TAG, f"inicio: tty={args.port_tty} tcp={args.control_port} chip={args.chip} "
                      f"baud={args.serial_baud}/{args.flash_baud} token={token_src} "
                      f"base={paths.esp_base()}")

@@ -191,3 +191,12 @@ def test_startup_keeps_reservation_of_same_board(env, monkeypatch):
     lock.write_text(f"juan:x:{int(time.time()) + 600}:AABBCCDDEEFF")
     run_main(tty, base, stop_after=0.3)
     assert lock.exists()
+
+
+def test_startup_with_unreadable_token_does_not_crash(env, monkeypatch):
+    base, tty, seen = env
+    monkeypatch.setattr(remote_esp32, "read_mac", lambda port: MAC)
+    (base / "api_token").mkdir()
+    run_main(tty, base, stop_after=0.3)
+    log = (base / "devices" / "AABBCCDDEEFF" / "output.log").read_text()
+    assert "token=ILEGIBLE" in log

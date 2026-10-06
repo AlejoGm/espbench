@@ -148,6 +148,17 @@ def test_api_token_file_is_the_flash_token(esp_base):
     assert msgs == [{"ok": False, "error": "bad_action"}]
 
 
+def test_unreadable_api_token_rejects_flash(esp_base):
+    (esp_base / "api_token").mkdir()
+    msgs = request({"action": "xyz"})
+    assert msgs[0]["error"] == "auth_config"
+
+
+def test_non_ascii_token_is_unauthorized(esp_base):
+    (esp_base / "api_token").write_text("s3cret")
+    assert request({"action": "xyz", "token": "ñandú"}) == [{"ok": False, "error": "unauthorized"}]
+
+
 def test_bad_action():
     """deploy.py hace auth_ping con action 'xyz': tiene que recibir bad_action."""
     assert request({"action": "xyz"}) == [{"ok": False, "error": "bad_action"}]

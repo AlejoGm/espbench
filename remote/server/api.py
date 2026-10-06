@@ -21,10 +21,11 @@ from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import auth, events, history, locks, logrange, paths, runstate
+from server import auth, events, history, locks, logrange, paths, runstate, taglog
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
+TAG = "api"
 BASE_DIR = pathlib.Path(__file__).parent.parent
 DASHBOARD_DIR = BASE_DIR / "dashboard"
 
@@ -81,7 +82,12 @@ def _require_auth(authorization) -> None:
     """Escrituras: si hay /opt/esp/api_token, `Authorization: Bearer <token>`.
     Llamado directo (tests), el default de Header() no es un str: cuenta como
     ausente."""
-    if not auth.bearer_ok(authorization if isinstance(authorization, str) else None):
+    try:
+        ok = auth.bearer_ok(authorization if isinstance(authorization, str) else None)
+    except auth.AuthConfigError as e:
+        taglog.error(TAG, f"token de la API ilegible, escrituras rechazadas: {e}")
+        _fail(500, "auth_config", "el token de la API de la Pi no se puede leer (ver /opt/esp/api_token)")
+    if not ok:
         _fail(401, "auth", "falta el token de la API (Authorization: Bearer <token>) o es incorrecto")
 
 

@@ -375,3 +375,24 @@ def test_board_events():
     with pytest.raises(HTTPException) as e:
         api.board_events(MAC, type="xyz")
     assert err(e) == (400, "bad_request")
+
+
+def test_unreadable_token_fails_closed(tmux):
+    """Un api_token que existe pero no se lee (directorio, permisos, no es
+    texto) no es "sin token": las escrituras se rechazan."""
+    paths.api_token_file().mkdir(parents=True)
+    with pytest.raises(HTTPException) as e:
+        run(api.device_send("ttyUSB0", {"text": "x"}))
+    assert err(e) == (500, "auth_config") and tmux == []
+    paths.api_token_file().rmdir()
+    paths.api_token_file().write_bytes(b"\xff\xfe")
+    with pytest.raises(HTTPException) as e:
+        run(api.device_send("ttyUSB0", {"text": "x"}, authorization="Bearer x"))
+    assert err(e) == (500, "auth_config")
+
+
+def test_non_ascii_bearer_is_401_not_500(tmux):
+    set_token("s3cret")
+    with pytest.raises(HTTPException) as e:
+        run(api.device_send("ttyUSB0", {"text": "x"}, authorization="Bearer ñandú"))
+    assert err(e) == (401, "auth")

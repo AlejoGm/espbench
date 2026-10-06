@@ -352,7 +352,10 @@ boot ─────► devremote.service ────────────�
   401 `auth`; las lecturas siguen abiertas. Es también el token del flash si la
   sesión no recibe `--token` (A2): con el archivo creado, un `.flashcfg.json` sin
   `token` deja de flashear. El dashboard (`auth.js`) lo pide una vez ante un 401 y
-  lo guarda en `localStorage`.
+  lo guarda en `localStorage`. **Falla cerrado**: solo un archivo inexistente (o
+  vacío) es "sin token"; si existe y no se puede leer (permisos, directorio, no es
+  UTF-8) las escrituras dan 500 `auth_config` y el flash `auth_config`. Las
+  comparaciones son en tiempo constante (sobre bytes).
 - **Errores** de las escrituras (y de `/api/board`): `{"detail": {"error", "message"}}`.
   `error` es el contrato del CLI (spec §8.3): `bad_request`, `busy` (409),
   `device_changed` (409: `expect_mac` no es la MAC del tty), `locked` (423: placa
