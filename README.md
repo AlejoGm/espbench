@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.24.0
+**Version:** 0.25.0
 
 ---
 
@@ -139,6 +139,62 @@ python client/deploy.py
 
 ---
 
+## Uso por agentes (`espbench`)
+
+CLI para que un agente (Claude Code) cierre el ciclo contra una placa real: flash, verificar el arranque, mandar
+comandos por la consola serie, esperar la respuesta, leer log y eventos. Salida `--json` (un objeto por comando) y
+exit codes por causa. Spec: [docs/specs/agents-cli.md](docs/specs/agents-cli.md) §8.
+
+```bash
+cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_BIN_DIR para otro lugar)
+
+espbench ls --json
+espbench reserve mi-board --ttl 30m --json
+idf.py build && espbench flash mi-board --verify --json        # flash + primer boot + 10 s sin crash
+espbench send mi-board "status" --until "OK" --json
+espbench events mi-board --type panic --json
+espbench logs mi-board --around panic --max-lines 80 --json
+espbench release mi-board --json
+```
+
+| Exit | `error` |
+|---|---|
+| 0 | ok |
+| 1 | `bad_request` / `unexpected` |
+| 2 | `flash_failed` |
+| 3 | `crashed` (panic, boot loop o reinicio en la ventana) |
+| 4 | `timeout` |
+| 5 | `busy` |
+| 6 | `locked` / `reservation_lost` / `token_mismatch` |
+| 7 | `not_found` / `device_changed` |
+| 8 | `bad_anchor` / `cursor_expired` |
+| 9 | `session_ended` |
+| 10 | `network` / `auth` / `auth_config` |
+
+**Config** (gana la primera): flags (`--host`, `--profile`) > env (`ESPBENCH_HOST`, `ESPBENCH_TOKEN`, `ESPBENCH_USER`,
+`ESPBENCH_LOCK_TOKEN`) > `~/.config/espbench.json` > `remote` del `.flashcfg.json` del proyecto (host, token,
+lock_user, lock_token; chip, `flash_baud` y `encrypt` también salen de ahí).
+
+```json
+{"default_profile": "lab",
+ "profiles": {"lab": {"host": "sensipi03", "token": "", "lock_user": "alejo-agent", "lock_token": "..."}}}
+```
+
+`host` acepta `host`, `host:puerto` (default 8080, el dashboard) o una URL. El flash va por TCP al puerto de la
+placa, que el CLI saca de `/api/devices`.
+
+**Skill para Claude Code** (`client/agent/SKILL.md`: cuándo usar `espbench`, el ciclo, qué hacer con cada `error`,
+cómo no llenar el contexto de log):
+
+```bash
+mkdir -p ~/.claude/skills && ln -sfn "$PWD/client/agent" ~/.claude/skills/espbench    # desde la raíz del repo
+```
+
+Probar sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --port 8099` levanta una Pi simulada (API real, una
+placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_HOST=127.0.0.1:8099 espbench ls`.
+
+---
+
 ## Dashboard
 
 Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and real-time serial logs via WebSocket.
@@ -185,7 +241,10 @@ it in the browser.
 espbench/
 ├── common.py                  # Shared: TCP framing, SHA256, MAC↔SN, HW model utils
 ├── client/
-│   └── deploy.py              # CLI: build + artifact + remote/local flash
+│   ├── deploy.py              # CLI for humans: build + artifact + remote/local flash
+│   ├── espbench.py            # CLI for agents (`espbench`, --json, exit codes)
+│   ├── espbench_lib.py        # Client library: config, HTTP API, log ranges with waits, flash + verify
+│   └── agent/SKILL.md         # Claude Code skill for `espbench`
 ├── remote/
 │   ├── server/
 │   │   ├── remote_esp32.py    # Per-device process: wiring, MAC discovery, threads
