@@ -108,7 +108,8 @@ def _props_text(props) -> str:
 def _human_benches(r: dict) -> None:
     rows = [("BENCH", "HOST", "VERSION", "AUTH", "PLACAS", "LIBRES", "")]
     for b in r["benches"]:
-        note = "viejo: ignorado" if not b["supported"] else (b["error"] or "")
+        note = "viejo: ignorado" if not b["supported"] else (b["error"] or (
+            "sin notas/propiedades: actualizar" if b.get("props") is False else ""))
         rows.append((b["name"], b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
                      str(b["boards"]), str(b["available"]), note))
     _table(rows)
@@ -136,8 +137,19 @@ def cmd_benches(cfg: lib.Config, a, out: Out) -> int:
     """Siempre escanea (y refresca la cache del discovery)."""
     found = lib.Benches(only=None)
     found.load(fresh=True)
-    bs = [lib.bench_summary(b, cfg.lock_user) for b in found.found
-          if getattr(a, "bench", None) in (None, b.name)]
+    bs = []
+    for b in found.found:
+        if getattr(a, "bench", None) not in (None, b.name):
+            continue
+        props = exclude = None
+        if not b.legacy and b.ok:
+            bc = lib.Client(lib.config_for_bench(cfg, b), log=out.log)
+            try:
+                bc.properties()
+                props, exclude = True, bc.excluded()
+            except EspbenchError as e:
+                props = False if e.error == "not_found" else None
+        bs.append(lib.bench_summary(b, cfg.lock_user, exclude, props))
     return out.emit({"ok": True, "benches": bs}, _human_benches)
 
 
@@ -198,7 +210,7 @@ def cmd_pick(c: lib.Client, a, out: Out) -> int:
         c.config.require_creds("pick --reserve")
     devs, errors = _all_boards(c, a)
     skipped = []
-    for s in lib.pick_order(devs, where):
+    for s in lib.pick_order(devs, where, me=c.config.lock_user, include_mine=a.include_mine):
         r = {"ok": True, "board": s["key"], **s, "reserved": False}
         if not a.reserve:
             return out.emit(r, _human_kv)
@@ -207,9 +219,13 @@ def cmd_pick(c: lib.Client, a, out: Out) -> int:
             board = bc.resolve(s["mac"], write=True)
             res = bc.reserve(board, int(lib.parse_duration(a.ttl, "--ttl")))
         except EspbenchError as e:
-            if e.error not in ("locked", "busy", "device_changed", "not_found", "token_mismatch"):
+            # Un problema de esa placa o de ese bench (otro la tomó, token de la API de ese
+            # bench, red): la siguiente. Lo demás (sin lock_user/lock_token...) corta.
+            if e.error not in ("locked", "busy", "device_changed", "not_found", "token_mismatch", "auth",
+                               "auth_config", "network", "reservation_lost"):
+                e.data = {**e.data, "bench": s.get("bench"), "board": s["key"]}
                 raise
-            skipped.append({"board": s["key"], "bench": s.get("bench"), "error": e.error})
+            skipped.append({"board": s["key"], "bench": s.get("bench"), "error": e.error, "message": e.message})
             continue
         r.update(reserved=True, lock_user=res.get("user"), lock_expires=res.get("expires"), available=True)
         if skipped:
@@ -227,6 +243,7 @@ def cmd_note(c: lib.Client, a, out: Out) -> int:
         raise EspbenchError("bad_request", 'note: un texto o --clear (espbench note <dev> "testeando, no tocar")')
     if a.text is not None and not a.text.strip():
         raise EspbenchError("bad_request", "note: texto vacío (para borrarla: --clear)")
+    c.require_meta("notas")
     board = c.resolve(a.dev, need_mac=False)
     r = c.set_meta(board, note="" if a.clear else a.text)
     return out.emit({"ok": True, "board": board.label, "note": r.get("note"), "note_by": r.get("note_by"),
@@ -239,16 +256,10 @@ def cmd_set(c: lib.Client, a, out: Out) -> int:
     before = dict(board.info.get("props") or {})
     if not (props or add or remove):        # solo mirar
         return out.emit({"ok": True, "board": board.label, "props": before}, _human_kv)
-    try:
-        cats = c.properties()
-    except EspbenchError as e:
-        if e.error != "not_found":
-            raise
-        cats = None             # bench sin catálogo: que decida el server
-    if cats is not None:
-        pairs = [(k, v) for k, vs in list(props.items()) + list(add.items())
-                 for v in (vs if isinstance(vs, list) else [vs])] + [(k, None) for k in remove]
-        lib.check_props(pairs, cats)
+    cats = c.require_meta("propiedades")
+    pairs = [(k, v) for k, vs in list(props.items()) + list(add.items())
+             for v in (vs if isinstance(vs, list) else [vs]) if v is not None] + [(k, None) for k in remove]
+    lib.check_props(pairs, cats, bench=out.extra.get("bench"))
     fields = {k: v for k, v in (("props", props), ("props_add", add), ("props_remove", remove)) if v}
     r = c.set_meta(board, **fields)
     after = dict(r.get("props") or {})
@@ -261,18 +272,42 @@ def _human_props(r: dict) -> None:
     if "value" in r:
         print(f"{r['category']}={r['value']['id']}")
         return
+    multi = len(r.get("benches") or []) > 1
     for cat in r.get("categories") or []:
         print(f"{cat['id']} ({'varios' if cat.get('multi') else 'uno'}):")
         for v in cat.get("values") or []:
             flags = " [no pick]" if v.get("exclude_pick") else (" [!]" if v.get("warn") else "")
-            print(f"  {v['id']:<14} {v.get('desc') or ''}{flags}")
+            where = f"  [{', '.join(v.get('benches') or [])}]" if multi else ""
+            print(f"  {v['id']:<14} {v.get('desc') or ''}{flags}{where}")
 
 
 def cmd_props(c: lib.Client, a, out: Out) -> int:
+    """Sin acción: el catálogo (con varios benches, la unión, y cada valor con `benches`).
+    add/rm: el catálogo es de cada bench; con varios, --bench."""
     if not a.action:
-        return out.emit({"ok": True, "categories": c.properties()}, _human_props)
+        if a.multi is None:
+            return out.emit({"ok": True, "categories": c.require_meta("propiedades")}, _human_props)
+        lists, names, errors = [], [], []
+        for b, bc in a.multi:
+            try:
+                lists.append(bc.require_meta("propiedades"))
+                names.append(b.name)
+            except EspbenchError as e:
+                errors.append({"bench": b.name, "error": e.error, "message": e.message})
+        r = {"ok": True, "categories": lib.merge_categories(lists, names), "benches": names}
+        if errors:
+            r["errors"] = errors
+        return out.emit(r, _human_props)
     if a.action not in ("add", "rm") or len(a.args) != 2:
         raise EspbenchError("bad_request", "props add|rm <categoria> <valor>")
+    if a.multi is not None:
+        if len(a.multi) != 1:
+            names = ", ".join(b.name for b, _ in a.multi) or "ninguno"
+            raise EspbenchError("bad_request", f"props {a.action}: el catálogo es de cada bench y hay varios "
+                                               f"({names}): elegí uno con --bench <bench>")
+        b, c = a.multi[0]
+        out.extra["bench"] = b.name
+    c.require_meta("propiedades")
     cat, value = a.args
     if a.action == "rm":
         c.request("DELETE", f"/api/properties/{urllib.parse.quote(cat, safe='')}/values/"
@@ -505,20 +540,15 @@ def _discover(cfg: lib.Config, a, out: Out, found: "lib.Benches") -> None:
     """Sin host: `ls` / `events --all` van a todos los benches (a.multi); un
     comando con <dev> va al bench donde está la placa (cfg.host) y la nombra por
     su MAC (lo que se pidió puede ser `<dev>@<bench>`)."""
-    if a.fn in (cmd_ls, cmd_pick) or (a.fn is cmd_events and getattr(a, "all", False)):
-        a.multi = [(b, lib.Client(dataclasses.replace(cfg, host=b.url, sources=dict(cfg.sources)), log=out.log))
-                   for b in found.list()]
-        return
-    if a.fn is cmd_props:           # el catálogo del primer bench (o el de --bench)
-        bs = found.list()
-        if not bs:
+    if a.fn in (cmd_ls, cmd_pick, cmd_props) or (a.fn is cmd_events and getattr(a, "all", False)):
+        a.multi = [(b, lib.Client(lib.config_for_bench(cfg, b), log=out.log)) for b in found.list()]
+        if a.fn is cmd_props and not a.multi:
             raise EspbenchError("not_found", "no se encontró ningún bench (`espbench benches`)")
-        cfg.host = bs[0].url
-        out.extra["bench"] = bs[0].name
         return
     if not getattr(a, "dev", None):
         return
     bench, d = found.locate(a.dev)
+    cfg.token = lib.config_for_bench(cfg, bench).token
     cfg.host = bench.url
     cfg.sources["host"] = f"bench:{bench.name}"
     a.dev = d.get("mac") or d.get("tty_name")
@@ -567,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("pick", cmd_pick, "la primera placa libre que cumple --where, en cualquier bench", dev=False)
     sp.add_argument("--where", action="append", metavar="CAT=VALOR", help="propiedad requerida (repetible: todas)")
     sp.add_argument("--reserve", action="store_true", help="además la reserva (si otro la toma, la siguiente)")
+    sp.add_argument("--include-mine", action="store_true", help="también las que ya tengo reservadas")
     sp.add_argument("--ttl", default="30m", help="vencimiento de la reserva (default 30m)")
 
     sp = add("note", cmd_note, "nota de la placa (aviso: \"testeando, no tocar\")")

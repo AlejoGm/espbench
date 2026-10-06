@@ -64,7 +64,7 @@ EXIT_CODES = {
     "flash_failed": 2,
     "crashed": 3,
     "timeout": 4,
-    "busy": 5, "in_use": 5,
+    "busy": 5, "in_use": 1, "unsupported": 1,
     "locked": 6, "reservation_lost": 6, "token_mismatch": 6,
     "not_found": 7, "device_changed": 7, "session_down": 7, "ambiguous": 7,
     "bad_anchor": 8, "cursor_expired": 8,
@@ -359,12 +359,14 @@ def matches_where(summary: dict, where) -> bool:
     return True
 
 
-def pick_order(summaries: list, where=None) -> list:
+def pick_order(summaries: list, where=None, me: Optional[str] = None, include_mine: bool = False) -> list:
     """Candidatas de `espbench pick`, en orden: cumplen `where`, `available` (libre, sin
-    estado no-tocar/roto), con MAC y sin boot loop. Primero las que no tienen nota (una
-    nota suele ser "estoy usando esta")."""
+    estado no-tocar/roto), con MAC y sin boot loop. Las que ya tiene `me` (lock propio)
+    no, salvo include_mine: pick es para conseguir otra. Primero las que no tienen nota
+    (una nota suele ser "estoy usando esta")."""
     ok = [s for s in summaries if s.get("mac") and s.get("available") and matches_where(s, where)
-          and not (s.get("health") or {}).get("boot_loop")]
+          and not (s.get("health") or {}).get("boot_loop")
+          and (include_mine or not (me and s.get("lock_user") == me))]
     return sorted(ok, key=lambda s: bool(s.get("note")))
 
 
@@ -382,8 +384,9 @@ def parse_set_ops(ops) -> tuple:
         bad = [v for v in vals if not _VALUE_RE.fullmatch(v)]
         if bad:
             raise EspbenchError("bad_request", f"{op!r}: valor inválido {bad[0]!r} (minúsculas, números, '.', '_', '-')")
-        if cat in props or cat in add or cat in remove:
-            raise EspbenchError("bad_request", f"{cat} aparece dos veces")
+        dest = props if kind == "=" else add if kind == "+=" else remove
+        if cat in dest:       # cat+=a cat-=b sí; cat+=a cat+=b no (va como cat+=a,b)
+            raise EspbenchError("bad_request", f"{cat}{kind} aparece dos veces (varios valores: {cat}{kind}a,b)")
         if kind == "=":
             props[cat] = vals if len(vals) > 1 else (vals[0] if vals else None)
         elif not vals:
@@ -393,8 +396,9 @@ def parse_set_ops(ops) -> tuple:
     return props, add, remove
 
 
-def check_props(where_or_values, categories: list) -> None:
-    """bad_request si una categoría o un valor (cat, valor) no está en el catálogo, con el más parecido."""
+def check_props(where_or_values, categories: list, bench: Optional[str] = None) -> None:
+    """bad_request si una categoría o un valor (cat, valor) no está en el catálogo, con el más parecido.
+    `bench`: en qué bench agregarlo (el catálogo es de cada bench)."""
     by_cat = {c.get("id"): [v.get("id") for v in c.get("values") or []] for c in categories}
     for cat, val in where_or_values:
         if cat not in by_cat:
@@ -402,8 +406,8 @@ def check_props(where_or_values, categories: list) -> None:
                                 f". Categorías: {', '.join(by_cat)} (`espbench props`)")
         if val is not None and val not in by_cat[cat]:
             raise EspbenchError("bad_request", f"{cat}: '{val}' no es un valor válido" + _near(val, by_cat[cat]) +
-                                f". Válidos: {', '.join(by_cat[cat])} (`espbench props add {cat} {val}` para "
-                                "agregarlo)")
+                                f". Válidos: {', '.join(by_cat[cat])} (`espbench props add {cat} {val}"
+                                f"{' --bench ' + bench if bench else ''}` para agregarlo)")
 
 
 def _near(x: str, options: list) -> str:
@@ -411,16 +415,25 @@ def _near(x: str, options: list) -> str:
     return f" (¿'{m[0]}'?)" if m else ""
 
 
-def merge_categories(lists) -> list:
-    """Unión de los catálogos de varios benches (mismas categorías, valores sumados)."""
+def merge_categories(lists, names: Optional[list] = None) -> list:
+    """Unión de los catálogos de varios benches (mismas categorías, valores sumados). Con
+    `names` (el bench de cada lista), cada valor lleva `benches`: dónde existe."""
     out, index = [], {}
-    for cats in lists:
+    for i, cats in enumerate(lists):
         for c in cats or []:
             if c.get("id") not in index:
                 index[c["id"]] = {**c, "values": []}
                 out.append(index[c["id"]])
-            have = {v.get("id") for v in index[c["id"]]["values"]}
-            index[c["id"]]["values"] += [v for v in c.get("values") or [] if v.get("id") not in have]
+            have = {v.get("id"): v for v in index[c["id"]]["values"]}
+            for v in c.get("values") or []:
+                if v.get("id") not in have:
+                    v = dict(v)
+                    if names is not None:
+                        v["benches"] = []
+                    index[c["id"]]["values"].append(v)
+                    have[v["id"]] = v
+                if names is not None:
+                    have[v["id"]]["benches"].append(names[i])
     return out
 
 
@@ -501,12 +514,33 @@ def _resolve_error(e) -> "EspbenchError":
     return EspbenchError("not_found", str(e))
 
 
-def bench_summary(b, me: Optional[str] = None) -> dict:
-    """Lo que `espbench benches` muestra de un bench."""
+def bench_summary(b, me: Optional[str] = None, exclude: Optional[dict] = None, props: Optional[bool] = None) -> dict:
+    """Lo que `espbench benches` muestra de un bench. `exclude`: los exclude_pick de su
+    catálogo (Client.excluded()); `props`: si soporta nota y propiedades."""
     devs = [d for d in b.devices if d.get("mac")]
     return {"name": b.name, "url": b.url, "host": f"{b.address}:{b.port}", "version": b.version, "auth": b.auth,
-            "supported": not b.legacy, "ok": b.ok, "error": b.error, "boards": len(devs),
-            "available": sum(1 for d in devs if summarize_device(d, me)["available"])}
+            "supported": not b.legacy, "props": props, "ok": b.ok, "error": b.error, "boards": len(devs),
+            "available": sum(1 for d in devs if summarize_device(d, me, exclude)["available"])}
+
+
+def bench_tokens() -> dict:
+    """Tokens de la API por bench (opcional): `"tokens": {"<bench>": "<token>"}` en
+    ~/.config/espbench-benches.json. Sin eso, el token es uno solo (ESPBENCH_TOKEN / perfil)."""
+    try:
+        t = bench_discovery.load_config().get("tokens")
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in t.items()} if isinstance(t, dict) else {}
+
+
+def config_for_bench(cfg: "Config", b) -> "Config":
+    """La config para hablarle a un bench del discovery: su url, y su token si
+    espbench-benches.json tiene uno (salvo --token/ESPBENCH_TOKEN explícito: gana el flag/env)."""
+    token = cfg.token
+    tok = bench_tokens().get(b.name)
+    if tok and cfg.sources.get("token") not in ("flag", "env"):
+        token = tok
+    return dataclasses.replace(cfg, host=b.url, token=token, sources=dict(cfg.sources))
 
 
 # ---------- artefacto y flash por TCP (antes en deploy.py) ----------
@@ -815,6 +849,25 @@ class Client:
             self._catalog = (self.request("GET", "/api/properties") or {}).get("categories") or []
         return self._catalog
 
+    def version(self) -> dict:
+        try:
+            return self.request("GET", "/api/version") or {}
+        except EspbenchError:
+            return {}
+
+    def require_meta(self, what: str = "notas/propiedades") -> list:
+        """El catálogo de propiedades, o `unsupported` si el bench es anterior (no tiene
+        /api/properties: el PATCH de nota/props daría 'device_key requerido')."""
+        try:
+            return self.properties()
+        except EspbenchError as e:
+            if e.error != "not_found":
+                raise
+            v = self.version()
+            raise EspbenchError("unsupported", f"el bench {v.get('name') or self.config.base_url} "
+                                               f"({v.get('version') or 'versión vieja'}) no soporta {what}: "
+                                               "actualizalo (botón update en bench-master o espbench-update)")
+
     def excluded(self) -> dict:
         """{cat: valores con exclude_pick}; sin catálogo, DEFAULT_EXCLUDE."""
         try:
@@ -844,6 +897,16 @@ class Client:
         if not name:
             raise EspbenchError("bad_request", "falta la placa (device_key, SN, MAC o tty)")
         found = [d for d in self.devices() if _match_device(name, d)]
+        if not found and "@" in name:
+            # <dev>@<bench> con host fijo: vale si el bench es este; si no, que lo diga
+            dev, _, bench = name.rpartition("@")
+            here = self.version().get("name")
+            if dev and bench == here:
+                return self.resolve(dev, write=write, need_mac=need_mac)
+            if dev:
+                raise EspbenchError("bad_request", f"'{name}': el host configurado ({self.config.base_url}) es el "
+                                                   f"bench '{here or '?'}', no '{bench}'. Sin --host / ESPBENCH_HOST "
+                                                   "el CLI busca la placa en todos los benches")
         live = [d for d in found if d.get("state") not in (None, "disconnected")]
         pick = (live or found or [None])[0]
         if pick is None:

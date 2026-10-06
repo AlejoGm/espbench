@@ -597,7 +597,8 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
   en `errors`, no frena al resto); un comando con `<dev>` busca la placa en todos (`benches.resolve`: device_key,
   SN, MAC, tty, `<dev>@<bench>`, `<bench>/<tty>`) y sigue contra ese bench, con `bench` en la respuesta. Ambigua →
   `ambiguous` (exit 7, `matches` con dónde está); no está → `not_found`. Los benches viejos (sin `app: espbench`)
-  se ignoran. **Costo**: el scan sondea `/api/version` de cada peer online de la tailnet (en paralelo, hasta
+  se ignoran (los espbench anteriores a las propiedades se usan, y `note`/`set`/`props` dan `unsupported`).
+  Token de la API: uno solo, o `"tokens": {"<bench>": ...}` en `espbench-benches.json`. **Costo**: el scan sondea `/api/version` de cada peer online de la tailnet (en paralelo, hasta
   `timeout_s` = 2 s por peer que no contesta); la lista de benches se cachea 30 s en
   `$ESPBENCH_STATE_DIR/benches.json` y los devices se piden en cada comando. Si la placa no está en los benches de
   la cache, se escanea de nuevo una vez. `espbench benches` siempre escanea.
@@ -605,8 +606,9 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
   permanente de un flash, no deja flashear ni reservar), y sin `estado` excluido (`exclude_pick`: `avoid`).
 - **`pick`**: la primera placa `available`, con MAC, sin boot loop y que cumple los `--where` (AND), en todos los
   benches (o el configurado); las que tienen nota van al final. Con `--reserve` la reserva en el mismo comando y, si
-  otro la toma entre la lista y la reserva (`locked`, `busy`, `device_changed`), prueba la siguiente. Ninguna →
-  `not_found`. La nota y las propiedades son avisos: el server no bloquea nada por ellas (§8).
+  otro la toma entre la lista y la reserva, o ese bench rechaza el token (`locked`, `busy`, `device_changed`,
+  `auth`, `network`), prueba la siguiente (`skipped`, con el bench). Las que ya tengo reservadas no (`--include-mine`).
+  Ninguna → `not_found`. La nota y las propiedades son avisos: el server no bloquea nada por ellas (§8).
 - `fcntl` es opcional (Windows): sin él, el registro local de reservas va sin `flock`.
 
 Tests: contra `tests/benchsim.py`, una Pi simulada con la API real y `DeviceManager`/`DeviceLog` reales (§10).

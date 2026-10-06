@@ -529,7 +529,7 @@ def test_props_catalog_add_and_rm(cli, board):
     code, r = cli("ls", "--free")
     assert r["devices"] == []                                   # el valor nuevo también excluye
     code, r = cli("props", "rm", "estado", "prestada")
-    assert (code, r["error"]) == (5, "in_use") and "sim-board" in r["message"]
+    assert (code, r["error"]) == (1, "in_use") and "sim-board" in r["message"]
     cli("set", "sim-board", "estado=")
     assert cli("props", "rm", "estado", "prestada")[0] == 0
 
@@ -553,7 +553,9 @@ def test_pick_reserve_and_skip_taken(cli, bench, board):
     code, r = cli("pick", "--where", "uso=agentes", "--reserve", "--ttl", "5m")
     assert code == 0 and r["board"] == "sim-2" and r["reserved"] and r["lock_user"] == "agent"
     code, r = cli("pick", "--where", "uso=agentes", "--reserve")
-    assert code == 0 and r["board"] == "sim-2"                     # la propia sigue disponible para mí
+    assert code == 7 and r["error"] == "not_found"                 # la mía no: pick es para conseguir otra
+    code, r = cli("pick", "--where", "uso=agentes", "--reserve", "--include-mine")
+    assert code == 0 and r["board"] == "sim-2"
     assert cli("pick", "--where", "uso=agentes", "--reserve", user="tercero")[1]["error"] == "not_found"
 
 
@@ -570,7 +572,7 @@ def test_pick_reserve_tries_next_when_taken_in_between(cli, bench, board, monkey
     monkeypatch.setattr(lib.Client, "reserve", racy)
     code, r = cli("pick", "--reserve")
     assert code == 0 and r["reserved"] and r["board"] != taken[0]
-    assert r["skipped"] == [{"board": taken[0], "bench": None, "error": "locked"}]
+    assert r["skipped"] == [{"board": taken[0], "bench": None, "error": "locked", "message": "la tiene 'otro'"}]
 
 
 def test_pick_and_where_across_benches(disc, benches_net, board):
@@ -581,3 +583,72 @@ def test_pick_and_where_across_benches(disc, benches_net, board):
     assert code == 0 and (r["bench"], r["board"]) == ("bench-b", "otra-placa")
     code, r = disc("note", "sim-board", "dev alejo")
     assert code == 0 and r["bench"] == "bench-sim"
+
+
+# ---------- revisión: discovery + nota/propiedades ----------
+
+def test_props_with_several_benches(disc, benches_net, board):
+    """add/rm necesitan --bench (el catálogo es de cada bench); sin acción, la unión con dónde está cada valor."""
+    code, r = disc("props", "add", "chip", "esp32-p4")
+    assert (code, r["error"]) == (1, "bad_request") and "--bench" in r["message"]
+    code, r = disc("props", "add", "chip", "esp32-p4", "--bench", "bench-sim")
+    assert code == 0 and r["bench"] == "bench-sim"
+    code, r = disc("props")
+    chip = next(c for c in r["categories"] if c["id"] == "chip")
+    assert next(v for v in chip["values"] if v["id"] == "esp32-p4")["benches"] == ["bench-sim"]
+    assert r["errors"][0]["bench"] == "bench-b" and r["errors"][0]["error"] == "unsupported"
+    code, r = disc("set", "sim-board", "chip=esp32-p5")
+    assert code == 1 and "--bench bench-sim" in r["message"]
+
+
+def test_note_and_set_on_a_bench_without_properties_say_update_it(disc, benches_net, board):
+    """bench-b es espbench (0.34.0) pero sin /api/properties: error claro, antes del PATCH."""
+    for args in (("note", "otra-placa", "x"), ("set", "otra-placa", "chip=esp32")):
+        code, r = disc(*args)
+        assert (code, r["error"]) == (1, "unsupported"), r
+        assert "bench-b" in r["message"] and "0.34.0" in r["message"] and "actualizalo" in r["message"]
+
+
+def test_benches_reports_props_support_and_uses_the_bench_catalog(disc, benches_net, board):
+    disc("props", "add", "estado", "prestada", "--exclude-pick", "--bench", "bench-sim")
+    disc("set", "sim-board", "estado=prestada")
+    by = {b["name"]: b for b in disc("benches")[1]["benches"]}
+    assert by["bench-sim"]["props"] is True and by["bench-b"]["props"] is False
+    assert by["bench-sim"]["available"] == 0          # estado con exclude_pick del catálogo, no el default
+
+
+def test_pick_skips_my_own_boards_unless_include_mine(cli, bench, board):
+    assert cli("reserve", "sim-board")[0] == 0
+    code, r = cli("pick")
+    assert (code, r["error"]) == (7, "not_found")
+    code, r = cli("pick", "--include-mine")
+    assert code == 0 and r["board"] == "sim-board"
+
+
+def test_pick_reserve_skips_a_bench_that_rejects_the_token(cli, bench, board, monkeypatch):
+    bench.add_board("ttyUSB1", "AA:BB:CC:DD:EE:02", key="sim-2")
+    orig = lib.Client.reserve
+    first = []
+
+    def reserve(self, b, ttl):
+        if not first:
+            first.append(b.label)
+            raise lib.EspbenchError("auth", "falta el token de la API")
+        return orig(self, b, ttl)
+    monkeypatch.setattr(lib.Client, "reserve", reserve)
+    code, r = cli("pick", "--reserve")
+    assert code == 0 and r["reserved"] and r["skipped"][0]["error"] == "auth"
+
+
+def test_set_add_and_remove_in_the_same_category(cli, board):
+    cli("set", "sim-board", "conectividad=wifi,lte")
+    code, r = cli("set", "sim-board", "conectividad+=ble", "conectividad-=wifi")
+    assert code == 0 and r["props"]["conectividad"] == ["lte", "ble"]
+    assert cli("set", "sim-board", "uso+=ci", "uso+=demo")[1]["error"] == "bad_request"
+
+
+def test_dev_at_bench_with_a_fixed_host(cli, benches_net, board):
+    code, r = cli("status", "sim-board@bench-sim")
+    assert code == 0 and r["board"] == "sim-board"
+    code, r = cli("status", "sim-board@bench-b")
+    assert (code, r["error"]) == (1, "bad_request") and "bench-sim" in r["message"]

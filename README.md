@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.39.2
+**Version:** 0.39.3
 
 ---
 
@@ -176,10 +176,11 @@ cd client && ./install.sh          # deja `espbench` en ~/.local/bin (ESPBENCH_B
 
 espbench benches --json                  # benches encontrados (Tailscale + ~/.config/espbench-benches.json)
 espbench ls --json                       # sin host: las placas de todos los benches, con `bench`
-espbench pick --where chip=esp32-s3 --reserve --ttl 30m --json   # la primera libre que cumple, ya reservada
+espbench pick --where chip=esp32-s3 --reserve --ttl 30m --json   # la primera libre que cumple, ya reservada (no una mía: --include-mine)
 espbench note mi-board "agente: probando OTA" --json             # aviso para otros (--clear al terminar)
 espbench set mi-board chip=esp32-s3 conectividad+=lte estado=    # propiedades (estado= la quita)
-espbench props --json                    # categorías y valores; props add <cat> <valor> para uno nuevo
+espbench props --json                    # categorías y valores (con varios benches, la unión y dónde está cada valor)
+espbench props add conectividad nb-iot --bench bench-chile      # valor nuevo: el catálogo es de cada bench
 espbench reserve mi-board --ttl 30m --json
 idf.py build && espbench flash mi-board --verify --json        # flash + primer boot + 10 s sin crash
 espbench send mi-board "status" --until "OK" --json
@@ -191,11 +192,11 @@ espbench release mi-board --json
 | Exit | `error` |
 |---|---|
 | 0 | ok |
-| 1 | `bad_request` / `unexpected` |
+| 1 | `bad_request` / `unexpected` / `in_use` / `unsupported` |
 | 2 | `flash_failed` |
 | 3 | `crashed` (panic, boot loop o reinicio en la ventana) |
 | 4 | `timeout` |
-| 5 | `busy` / `in_use` |
+| 5 | `busy` |
 | 6 | `locked` / `reservation_lost` / `token_mismatch` |
 | 7 | `not_found` / `ambiguous` / `device_changed` / `session_down` |
 | 8 | `bad_anchor` / `cursor_expired` |
@@ -217,8 +218,13 @@ placa, que el CLI saca de `/api/devices`.
 **Sin host** (o `"host": "auto"`) el CLI encuentra los benches solo, como `deploy.py` y bench-master: peers online de
 Tailscale + `~/.config/espbench-benches.json`. `ls` lista las placas de todos (`--bench <nombre>` para uno) y cada
 comando busca `<dev>` en todos; si está en dos, `ambiguous` con dónde: `<dev>@<bench>` o `--bench` para elegir.
-La lista de benches se cachea 30 s (`~/.cache/espbench/benches.json`); los benches viejos (sin `app: espbench`) se
-ignoran.
+La lista de benches se cachea 30 s (`~/.cache/espbench/benches.json`). Los benches **muy** viejos (sin `app: espbench`
+en `/api/version`, p. ej. 0.6.x) se ignoran; los que sí son espbench pero anteriores a las propiedades (0.33–0.35)
+se usan para todo, y `note` / `set` / `props` contra ellos dan `unsupported` ("actualizalo").
+
+**Token de la API**: uno solo (`ESPBENCH_TOKEN` / perfil) para todos los benches. Si cada bench tiene el suyo,
+`~/.config/espbench-benches.json` acepta `"tokens": {"<bench>": "<token>"}` (un `ESPBENCH_TOKEN` / `--token`
+explícito gana). `pick --reserve` saltea un bench que rechaza el token (`skipped`, con el `bench`).
 
 **Skill para Claude Code** (`client/agent/SKILL.md`: cuándo usar `espbench`, el ciclo, qué hacer con cada `error`,
 cómo no llenar el contexto de log):

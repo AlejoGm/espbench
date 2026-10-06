@@ -817,3 +817,25 @@ def test_check_props_suggests_and_merge_categories():
         lib.check_props([("chip", "esp32-s4")], merged)
     with pytest.raises(lib.EspbenchError, match=r"¿'chip'\?"):
         lib.check_props([("chips", "x")], merged)
+
+
+
+def test_tokens_per_bench(tmp_path, monkeypatch):
+    from client import benches as bmod
+    f = tmp_path / "b.json"
+    f.write_text(json.dumps({"tailscale": False, "hosts": [], "tokens": {"lab": "t-lab"}}))
+    monkeypatch.setenv("ESPBENCH_BENCHES_CONFIG", str(f))
+    lab = bmod.Bench(name="lab", url="http://lab:8080", address="lab", port=8080, source="config")
+    other = bmod.Bench(name="otro", url="http://otro:8080", address="otro", port=8080, source="config")
+    cfg = lib.Config.load(env={"ESPBENCH_USER": "a"}, cwd=tmp_path, user_config=tmp_path / "no.json")
+    assert lib.config_for_bench(cfg, lab).token == "t-lab" and lib.config_for_bench(cfg, other).token == ""
+    cfg = lib.Config.load(env={"ESPBENCH_TOKEN": "global"}, cwd=tmp_path, user_config=tmp_path / "no.json")
+    assert lib.config_for_bench(cfg, lab).token == "global"          # el env explícito gana
+
+
+def test_pick_order_excludes_mine_by_default():
+    base = {"mac": "AA", "state": "monitoring"}
+    mine = lib.summarize_device({**base, "device_key": "m", "lock_user": "yo"}, "yo")
+    free = lib.summarize_device({**base, "device_key": "f"}, "yo")
+    assert [s["key"] for s in lib.pick_order([mine, free], me="yo")] == ["f"]
+    assert [s["key"] for s in lib.pick_order([mine, free], me="yo", include_mine=True)] == ["m", "f"]
