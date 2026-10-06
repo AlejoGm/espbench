@@ -15,6 +15,10 @@ from common import mac_to_sn_sfy, hw_model_from_project_name
 from server import board_meta, history, locks, paths, runstate
 
 
+class DevicesFileCorrupt(ValueError):
+    """devices.json no es JSON válido: no se escribe encima (se perderían los nombres)."""
+
+
 class DevicesFile:
     """Process-safe read/write de devices.json (fcntl.flock). Ver paths.devices_file()."""
 
@@ -27,7 +31,11 @@ class DevicesFile:
         # Sin path fijo, el de ESP_BASE en cada uso (como paths.*): el de api.py se crea al importar
         return self._fixed_path or paths.devices_file()
 
-    def _update(self, updater, silent: bool = True):
+    def _update(self, updater, silent: bool = True, write: bool = True):
+        """Leer-modificar-escribir bajo el flock. write=False: solo leer con el lock tomado
+        (para decidir algo de otro archivo sin que devices.json cambie en el medio).
+        Lo escribe en el lugar (r+, sin archivo temporal): /opt/esp es root 755 y el api
+        (sfypi) no puede crear archivos ahí, pero devices.json es 666 (install.sh)."""
         with self._lock:
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,8 +44,15 @@ class DevicesFile:
                     fcntl.flock(f, fcntl.LOCK_EX)
                     try:
                         content = f.read()
-                        data = json.loads(content) if content.strip() else {}
+                        try:
+                            data = json.loads(content) if content.strip() else {}
+                        except ValueError as e:
+                            raise DevicesFileCorrupt(f"{self._path} ilegible: {e}")
+                        if not isinstance(data, dict):
+                            raise DevicesFileCorrupt(f"{self._path} no es un objeto JSON")
                         updater(data)
+                        if not write:
+                            return
                         f.seek(0)
                         f.truncate()
                         f.write(json.dumps(data, indent=2))
@@ -84,11 +99,21 @@ class DevicesFile:
                 data[mac_up]["device_key"] = device_key
         self._update(_do, silent=False)
 
-    def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, props_ops: Optional[dict] = None,
+    def locked(self, fn):
+        """fn(data) con el flock de devices.json tomado, sin escribirlo. Devuelve lo que devuelve fn."""
+        out = []
+        self._update(lambda data: out.append(fn(data)), silent=False, write=False)
+        return out[0] if out else None
+
+    def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, props: Optional[dict] = None,
+                 props_add: Optional[dict] = None, props_remove: Optional[dict] = None,
                  now: Optional[dt.datetime] = None) -> dict:
-        """Nota y/o propiedades de una placa (ya validadas: board_meta.plan_props), en un
-        solo leer-modificar-escribir con el flock. note: None = no tocarla, "" = borrarla.
-        Devuelve {"entry", "note_changed", "props_changes"}. KeyError si la MAC no está."""
+        """Nota y/o propiedades de una placa, en un solo leer-modificar-escribir con el
+        flock. Las propiedades se validan contra el catálogo **con el lock tomado**
+        (board_meta.plan_props): un valor que otro borra en el medio no se cuela (la baja
+        también chequea "en uso" con este lock). note: None = no tocarla, "" = borrarla.
+        Devuelve {"entry", "note_changed", "props_changes"}. KeyError si la MAC no está;
+        board_meta.MetaError si un valor no es válido; DevicesFileCorrupt."""
         out = {}
         stamp = (now or dt.datetime.now().astimezone()).isoformat(timespec="seconds")
 
@@ -96,6 +121,7 @@ class DevicesFile:
             key = mac.upper()
             if key not in data:
                 raise KeyError(mac)
+            props_ops = board_meta.plan_props(props, props_add, props_remove)
             entry = data[key]
             out["note_changed"] = False
             if note is not None:
@@ -116,10 +142,10 @@ class DevicesFile:
         self._update(_do, silent=False)
         return out
 
-    def props_in_use(self, cat: str, value: str) -> list:
-        """Placas (device_key o MAC) que tienen `cat=value`."""
+    def props_in_use(self, cat: str, value: str, data: Optional[dict] = None) -> list:
+        """Placas (device_key o MAC) que tienen `cat=value` (de `data` si viene: ya leído con el lock)."""
         users = []
-        for mac, entry in self.get_all().items():
+        for mac, entry in (self.get_all() if data is None else data).items():
             v = (entry.get("props") or {}).get(cat)
             if v == value or (isinstance(v, list) and value in v):
                 users.append(entry.get("device_key") or mac)

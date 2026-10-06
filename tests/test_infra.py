@@ -315,6 +315,14 @@ def test_devremote_reset_all_kills_surviving_sessions(infra):
     assert "remote_esp32.py" in infra.session_cmd("esp32_ttyUSB0")
 
 
+def test_install_creates_meta_dir_writable_by_the_api():
+    """properties.json lo escribe el api (sfypi) con archivo temporal + rename: su directorio
+    tiene que ser escribible (/opt/esp es root 755)."""
+    install = (INFRA.parent / "install.sh").read_text()
+    assert "mkdir -p /opt/esp/meta" in install and "chmod 777 /opt/esp/meta" in install
+    assert "mv /opt/esp/properties.json /opt/esp/meta/properties.json" in install
+
+
 def test_devremote_service_waits_for_time_sync():
     """La Pi no tiene RTC: las sesiones del boot no arrancan con la hora de
     fake-hwclock (session_id y horas del log). Lo demás solo se ve en la Pi."""

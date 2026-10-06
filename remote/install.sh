@@ -45,8 +45,17 @@ mkdir -p /opt/esp/server /opt/esp/logs /opt/esp/jobs /opt/esp/dashboard /opt/esp
 mkdir -p /opt/esp/devices /opt/esp/run
 chmod 755 /opt/esp/devices /opt/esp/run
 chmod 777 /opt/esp/logs /opt/esp/locks
+# devices.json: lo escriben el device (root) y el api (sfypi: rename, nota, propiedades) en el
+# lugar, con flock (DevicesFile): 666 alcanza, /opt/esp no tiene que ser escribible.
 touch /opt/esp/devices.json
 chmod 666 /opt/esp/devices.json
+# meta/: lo que crea el api (properties.json + su .lck, escritura atómica = archivo temporal
+# + rename en el directorio): tiene que ser escribible por sfypi, como locks/.
+mkdir -p /opt/esp/meta
+chmod 777 /opt/esp/meta
+if [ -f /opt/esp/properties.json ] && [ ! -f /opt/esp/meta/properties.json ]; then
+    mv /opt/esp/properties.json /opt/esp/meta/properties.json      # 0.36–0.39 lo ponía en /opt/esp
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Toolchain xtensa-esp32-elf (addr2line para backtrace decoding)

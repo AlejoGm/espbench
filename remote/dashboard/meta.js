@@ -41,6 +41,7 @@
     function patch(device, body) {
         var u = user();
         if (u) body.user = u;
+        else body.via = 'dashboard';        // note_by = dashboard@<ip> (lo arma el server)
         return send('PATCH', 'api/devices/' + encodeURIComponent(device.mac), body);
     }
 

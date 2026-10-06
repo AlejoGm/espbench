@@ -18,10 +18,14 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import tempfile
+import unicodedata
 from typing import Dict, List, Optional
 
-from server import paths
+from server import paths, taglog
+
+TAG = "board_meta"
 
 NOTE_MAX = 200
 USER_MAX = 64
@@ -78,7 +82,9 @@ class NotFoundError(LookupError):
 # ---------- texto ----------
 
 def _has_control(s: str) -> bool:
-    return any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in s)
+    """Caracteres de control y de formato Unicode (Cf: bidi override, ZWSP, ZWJ...): con
+    ellos una nota puede mostrarse distinta de lo que dice (texto invertido, invisible)."""
+    return any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f or unicodedata.category(c) == "Cf" for c in s)
 
 
 def _clean_text(text, what: str, max_len: int) -> str:
@@ -90,7 +96,8 @@ def _clean_text(text, what: str, max_len: int) -> str:
     if len(text) > max_len:
         raise MetaError(f"{what} tiene más de {max_len} caracteres")
     if _has_control(text):
-        raise MetaError(f"{what} no puede tener caracteres de control (saltos de línea, tabs...)")
+        raise MetaError(f"{what} no puede tener caracteres de control ni de formato (saltos de línea, tabs, "
+                        "bidi, espacios de ancho cero)")
     return text
 
 
@@ -112,12 +119,21 @@ def _seed() -> Dict[str, list]:
 def _read_values() -> Dict[str, list]:
     """Valores por categoría: los del archivo, o el set inicial si no existe. Una
     categoría que falta en el archivo (agregada al código después) toma su set inicial;
-    una que ya no está en el código se ignora."""
+    una que ya no está en el código se ignora. Sin el archivo en meta/, el de la ruta
+    vieja (/opt/esp/properties.json): la primera escritura lo migra a meta/."""
+    path = paths.properties_file()
+    if not path.exists() and paths.legacy_properties_file().exists():
+        path = paths.legacy_properties_file()
+    values = None
     try:
-        data = json.loads(paths.properties_file().read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         values = data.get("values") if isinstance(data, dict) else None
-    except (OSError, ValueError):
-        values = None
+        if values is not None and not isinstance(values, dict):
+            raise ValueError("values no es un objeto")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:
+        _quarantine(path, e)
     seed = _seed()
     if not isinstance(values, dict):
         return seed
@@ -127,6 +143,24 @@ def _read_values() -> Dict[str, list]:
         out[cat] = [v for v in vals if isinstance(v, dict) and VALUE_RE.fullmatch(str(v.get("id") or ""))] \
             if isinstance(vals, list) else seed[cat]
     return out
+
+
+_quarantined = set()
+
+
+def _quarantine(path, error) -> None:
+    """properties.json ilegible: se loguea y se guarda una copia `.bad` (una vez por
+    archivo), así la próxima escritura (que lo reemplaza con el set inicial + el valor
+    nuevo) no pierde lo que había sin dejar rastro."""
+    key = str(path)
+    if key in _quarantined:
+        return
+    _quarantined.add(key)
+    taglog.error(TAG, f"{path} ilegible ({error}): uso los valores iniciales; copia en {path}.bad")
+    try:
+        shutil.copyfile(str(path), str(path) + ".bad")
+    except OSError as e:
+        taglog.error(TAG, f"no se pudo copiar {path} a .bad: {e}")
 
 
 def catalog() -> List[dict]:
@@ -154,6 +188,7 @@ def _locked():
 
 def _write_values(values: Dict[str, list]) -> None:
     path = paths.properties_file()
+    _quarantined.discard(str(path))
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".properties.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
@@ -247,9 +282,11 @@ def _check_values(cat: str, vals: List[str], cat_values: Dict[str, list]) -> Non
 
 
 def plan_props(props=None, add=None, remove=None) -> dict:
-    """Valida un pedido de cambios y lo deja en {cat: ("set", [vals]) | ("add", [..]) | ("remove", [..])}.
-    props: {cat: valor | [valores] | null/""/[] (= quitar)}; add/remove: {cat: valor | [valores]}.
-    Los valores a poner tienen que estar en el catálogo; quitar vale para cualquiera."""
+    """Valida un pedido de cambios y lo deja en {cat: [(kind, [vals]), ...]}, kind "set" /
+    "add" / "remove", aplicados en ese orden (`conectividad+=ble conectividad-=wifi` en un
+    mismo pedido). props: {cat: valor | [valores] | null/""/[] (= quitar)}; add/remove:
+    {cat: valor | [valores]}. Los valores a poner tienen que estar en el catálogo; quitar
+    vale para cualquiera."""
     ops = {}
     cat_values = _read_values()
     for kind, src in (("set", props), ("add", add), ("remove", remove)):
@@ -267,12 +304,12 @@ def plan_props(props=None, add=None, remove=None) -> dict:
             if kind == "add" and not c["multi"]:
                 if len(vals) > 1:
                     raise MetaError(f"{cat} admite un solo valor")
+                if "set" in [k for k, _ in ops.get(cat, [])]:
+                    raise MetaError(f"{cat}: un solo valor, y aparece dos veces en el pedido")
                 kind_ = "set"
             else:
                 kind_ = kind
-            if cat in ops:
-                raise MetaError(f"{cat} aparece dos veces en el pedido")
-            ops[cat] = (kind_, vals)
+            ops.setdefault(cat, []).append((kind_, vals))
     return ops
 
 
@@ -281,15 +318,16 @@ def apply_props(current: dict, ops: dict) -> tuple:
     new = {k: (list(v) if isinstance(v, list) else v) for k, v in (current or {}).items()}
     multi = {c["id"]: c["multi"] for c in CATEGORIES}
     changes = {}
-    for cat, (kind, vals) in ops.items():
+    for cat, steps in ops.items():
         old = new.get(cat)
-        old_list = old if isinstance(old, list) else ([old] if old else [])
-        if kind == "set":
-            res = vals
-        elif kind == "add":
-            res = old_list + [v for v in vals if v not in old_list]
-        else:
-            res = [v for v in old_list if v not in vals]
+        res = old if isinstance(old, list) else ([old] if old else [])
+        for kind, vals in steps:
+            if kind == "set":
+                res = list(vals)
+            elif kind == "add":
+                res = res + [v for v in vals if v not in res]
+            else:
+                res = [v for v in res if v not in vals]
         value = (res if multi[cat] else (res[0] if res else None)) if res else None
         if value is None:
             new.pop(cat, None)

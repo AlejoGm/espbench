@@ -879,3 +879,35 @@ def test_properties_endpoints():
     with pytest.raises(HTTPException) as e:
         run(api.delete_property_value("chip", "esp32-p4"))
     assert err(e) == (404, "not_found")
+
+
+def test_patch_with_corrupt_devices_json_is_a_handled_error_and_does_not_overwrite():
+    registered()
+    paths.devices_file().write_text('{"AA:BB": {roto')
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device(MAC, {"note": "x"}))
+    assert err(e) == (500, "unexpected") and "ilegible" in e.value.detail["message"]
+    assert paths.devices_file().read_text() == '{"AA:BB": {roto'
+
+
+def test_note_by_without_user_says_it_came_from_the_dashboard():
+    registered()
+    req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.9"))
+    assert run(api.patch_device(MAC, {"note": "x", "via": "dashboard"}, request=req))["note_by"] == "dashboard@10.0.0.9"
+    assert run(api.patch_device(MAC, {"note": "y", "via": "Mal Via!"}, request=req))["note_by"] == "10.0.0.9"
+
+
+def test_delete_value_checks_in_use_under_the_devices_lock(monkeypatch):
+    """La baja decide "en uso" con los datos leídos bajo el flock de devices.json."""
+    from server.device_registry import DevicesFile
+    registered()
+    run(api.add_property_value("chip", {"id": "esp32-p4"}))
+    seen = []
+    orig = DevicesFile.locked
+
+    def spy(self, fn):
+        seen.append("locked")
+        return orig(self, fn)
+    monkeypatch.setattr(DevicesFile, "locked", spy)
+    run(api.delete_property_value("chip", "esp32-p4"))
+    assert seen == ["locked"]

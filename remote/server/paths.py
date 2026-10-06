@@ -71,8 +71,19 @@ def update_status_file() -> pathlib.Path:
     return esp_base() / "update_status.json"
 
 
+def meta_dir() -> pathlib.Path:
+    """Datos que escribe el api (sfypi): /opt/esp es root 755, así que van en un directorio
+    propio, escribible (install.sh lo crea 777, como locks/)."""
+    return esp_base() / "meta"
+
+
 def properties_file() -> pathlib.Path:
     """Valores de las propiedades de las placas de este bench (board_meta: las categorías son fijas, en código)."""
+    return meta_dir() / "properties.json"
+
+
+def legacy_properties_file() -> pathlib.Path:
+    """Donde estaba properties.json en 0.36–0.39 (sin permisos para el api): se lee si el nuevo no existe."""
     return esp_base() / "properties.json"
 
 

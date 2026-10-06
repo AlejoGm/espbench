@@ -29,6 +29,11 @@ bench-master y el bench nuevo (identidad, URLs relativas, proxy, `host: auto`): 
 - [ ] Dashboard con Ctrl-F5: botón **Hora** en el log, pestaña **Eventos**, marcas ⚠/↻ en el vivo,
       contadores de reservas en la home.
 
+- [ ] **Nota y propiedades con el api como sfypi**: `ls -ld /opt/esp/meta` → `drwxrwxrwx`; desde el dashboard
+      (o `espbench note <dev> "x"` / `espbench set <dev> chip=esp32` / `espbench props add uso prueba` y
+      `props rm uso prueba`) sin 500; `/opt/esp/meta/properties.json` creado; `devices.json` sigue `-rw-rw-rw-`
+      y con los nombres de antes. `journalctl -u dashboard` sin `PermissionError`.
+
 ## P1 — hardware
 
 - [ ] `espbench logs <dev> --since boot` y `espbench logs <dev> --around <cursor de un evento>`

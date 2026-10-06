@@ -408,18 +408,24 @@ Por MAC en `devices.json` (`DevicesFile.set_meta`: un leer-modificar-escribir co
 `/api/devices` y `/api/device/{tty}` (`note`, `note_by`, `note_at`, `props`). Ninguno es un lock: el server no
 bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y `espbench pick` los respeta.
 
-- **Nota**: texto libre ("testeando, no tocar"), hasta 200 caracteres, sin caracteres de control; `""`/`null` la
-  borra. `note_by` = `user` del pedido (el CLI manda `ESPBENCH_USER`; el dashboard el `lock_user` recordado) o, sin
-  él, el host del pedido. `note_at`: ISO con la zona de la Pi. Misma nota = sin cambios (ni evento).
+- **Nota**: texto libre ("testeando, no tocar"), hasta 200 caracteres, sin caracteres de control ni de formato
+  Unicode (`Cf`: bidi override, espacios de ancho cero); `""`/`null` la borra. `note_by` = `user` del pedido (el CLI
+  manda `ESPBENCH_USER`; el dashboard el `lock_user` recordado) o, sin él, `dashboard@<ip>` (`via`) o el host. `note_at`: ISO con la zona de la Pi. Misma nota = sin cambios (ni evento).
 - **Propiedades**: categorías **fijas**, en el código (`board_meta.CATEGORIES`): `estado` (un valor), `uso`
   (varios), `chip` (uno), `conectividad` (varios), `perifericos` (varios). Los **valores** son de cada bench:
-  `/opt/esp/properties.json` (flock + escritura atómica), sembrado con el set inicial de cada categoría (leer no lo
-  crea; lo escribe el primer alta/baja). Se agregan valores a una categoría existente (nunca categorías); uno se
+  `/opt/esp/meta/properties.json` (flock + escritura atómica; `meta/` escribible por el api, ver §9), sembrado con
+  el set inicial de cada categoría (leer no lo crea; lo escribe el primer alta/baja). Ilegible → se usa el set
+  inicial, se loguea y se guarda una copia `.bad` antes de la próxima escritura. Se agregan valores a una categoría existente (nunca categorías); uno se
   borra solo si ninguna placa lo usa (409 `in_use`). En `estado`, un valor puede ser `warn` (estilo de advertencia)
   y `exclude_pick` (`espbench pick` / `ls --free` no eligen la placa): `no-tocar` y `roto` vienen así.
 - Por placa: `props = {"chip": "esp32-s3", "conectividad": ["wifi", "lte"]}`. `props` reemplaza la categoría
   (`null`/`""`/`[]` la quita), `props_add`/`props_remove` suman o sacan valores (en una categoría de un solo valor,
   `add` = poner). Solo valores del catálogo (400 con los válidos y el más parecido); quitar vale para cualquiera.
+  `props_add` y `props_remove` de la misma categoría van juntos (se aplican set → add → remove).
+- **Carreras**: `set_meta` valida contra el catálogo con el flock de `devices.json` tomado, y la baja de un
+  valor decide "en uso" con ese mismo lock (orden: `devices.json` → `meta/properties.json.lck`; el alta solo toma
+  el segundo): un PATCH y una baja simultáneos no dejan una placa con un valor que ya no existe.
+- `devices.json` ilegible en un PATCH → 500 `unexpected` con el motivo, sin escribir encima.
 - Escritura: token de la API como las demás; eventos `note` / `props` en el `events.jsonl` de la placa (si su log
   tiene sesión); alta/baja de valores, por taglog.
 
@@ -498,8 +504,9 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── server/                código (copia de remote/server/)
 ├── dashboard/             frontend (copia de remote/dashboard/)
 ├── venv/                  Python + esptool + esp-idf-monitor + fastapi
-├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?}
-├── properties.json        valores de las propiedades de este bench (las categorías están en el código)
+├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?} (666: se escribe en el lugar)
+├── meta/                  777: lo que crea el api (sfypi)
+│   └── properties.json    valores de las propiedades de este bench (las categorías están en el código)
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/
@@ -514,6 +521,11 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── api_token              (opcional) token de las escrituras del API y del flash
 └── jobs/, logs/, current_<tty>.elf   esquema anterior / devices sin MAC
 ```
+
+**Permisos**: `/opt/esp` es root 755 y el api corre como `sfypi`, así que el api no puede crear archivos ahí.
+`devices.json` (rename, nota, propiedades) se escribe **en el lugar** (`r+` con flock, sin temporal) y es 666;
+`properties.json` necesita temporal + rename y su `.lck`, así que vive en `meta/` (777, como `locks/`). Un
+`/opt/esp/properties.json` de 0.36–0.39 se lee si no está el de `meta/` e `install.sh` lo mueve.
 
 `devremote --cleanup` borra jobs y sesiones de log viejas. La sesión actual
 nunca se toca. `events.jsonl` no se limpia: los eventos de una sesión borrada
@@ -541,7 +553,8 @@ así que ningún test toca el `/opt/esp` real.
 reloj al boot (NTP / sin red) y todo lo que depende de `esp_idf_monitor`/esptool con
 hardware real (offsets con sus `\r\n` y backtraces, eco y prompt de `esp_console`,
 re-enumeración USB de S3/C3, panics reales, resets por RTS), más la concurrencia y la
-carga con varios agentes. La lista priorizada (P0 despliegue → P3 infra), para
+carga con varios agentes, y los **permisos** con el api corriendo como `sfypi` (en host los
+tests simulan `/opt/esp` en solo lectura: `test_board_meta.py`). La lista priorizada (P0 despliegue → P3 infra), para
 correr después de cada update grande: **[docs/PI_CHECKLIST.md](PI_CHECKLIST.md)**.
 
 ---

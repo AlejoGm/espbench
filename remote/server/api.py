@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server.device_registry import DeviceRegistry, DevicesFile
+from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
 TAG = "api"
@@ -438,7 +438,12 @@ async def delete_property_value(cat: str, value: str, authorization: Optional[st
     """Borra un valor si ninguna placa lo usa (409 in_use con cuáles)."""
     _require_auth(authorization)
     try:
-        board_meta.remove_value(cat, value, _devices_file.props_in_use)
+        # Con el flock de devices.json: un PATCH que lo pone en el medio espera, y después
+        # lo valida contra el catálogo ya sin el valor (set_meta valida con el mismo lock).
+        _devices_file.locked(lambda data: board_meta.remove_value(
+            cat, value, lambda c, v: _devices_file.props_in_use(c, v, data)))
+    except DevicesFileCorrupt as e:
+        _fail(500, "unexpected", str(e))
     except board_meta.MetaError as e:
         _fail(400, "bad_request", str(e))
     except board_meta.NotFoundError as e:
@@ -457,7 +462,8 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     - `note`: texto corto (aviso, no lock); "" o null la borra. Evento `note`.
     - `props` {cat: valor | [valores] | null}, `props_add` / `props_remove` {cat: valor(es)}:
       valores del catálogo (GET /api/properties); quitar vale para cualquiera. Evento `props`.
-    `user`: quién (va en note_by y en los eventos); sin él, el host del pedido."""
+    `user`: quién (va en note_by y en los eventos); sin él, `<via>@<host>` (el dashboard
+    manda via "dashboard") o el host del pedido."""
     _require_auth(authorization)
     bare = unquote(mac).upper().replace("-", "").replace(":", "")
     if not re.fullmatch(r"[0-9A-F]{12}", bare):
@@ -474,11 +480,13 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     try:
         note = board_meta.clean_note(body.get("note")) if wants_note else None
         user = board_meta.clean_user(body.get("user"))
-        ops = board_meta.plan_props(body.get("props"), body.get("props_add"), body.get("props_remove"))
+        board_meta.plan_props(body.get("props"), body.get("props_add"), body.get("props_remove"))   # antes de renombrar
     except board_meta.MetaError as e:
         _fail(400, "bad_request", str(e))
-    if user is None:
-        user = getattr(getattr(request, "client", None), "host", None)
+    if user is None:       # sin user: quién lo mandó ("dashboard@10.0.0.9") o solo el host
+        host = getattr(getattr(request, "client", None), "host", None)
+        via = str(body.get("via") or "")
+        user = f"{via}@{host}" if re.fullmatch(r"[a-z][a-z0-9-]{0,15}", via) and host else host
     if wants_key:
         try:
             _devices_file.update_device_key(mac_norm, device_key)
@@ -487,9 +495,16 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     out = {"ok": True}
     if wants_note or wants_props:
         try:
-            r = _devices_file.set_meta(mac_norm, user, note=note, props_ops=ops)
+            r = _devices_file.set_meta(mac_norm, user, note=note, props=body.get("props"),
+                                       props_add=body.get("props_add"), props_remove=body.get("props_remove"))
         except KeyError:
             _fail(404, "not_found", f"no hay placa {mac_norm} en devices.json")
+        except board_meta.MetaError as e:
+            _fail(400, "bad_request", str(e))
+        except DevicesFileCorrupt as e:
+            _fail(500, "unexpected", f"{e} (no se escribió nada: revisarlo en la Pi)")
+        except OSError as e:
+            _fail(500, "unexpected", f"no se pudo escribir devices.json: {e}")
         entry = r["entry"]
         log = str(paths.device_output_log(mac_norm))
         try:
