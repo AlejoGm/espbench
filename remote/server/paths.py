@@ -71,6 +71,11 @@ def update_status_file() -> pathlib.Path:
     return esp_base() / "update_status.json"
 
 
+def properties_file() -> pathlib.Path:
+    """Valores de las propiedades de las placas de este bench (board_meta: las categorías son fijas, en código)."""
+    return esp_base() / "properties.json"
+
+
 def bench_name_file() -> pathlib.Path:
     """(opcional) Nombre del bench para bench-master. Sin él, el hostname."""
     return esp_base() / "bench_name"

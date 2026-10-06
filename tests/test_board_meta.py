@@ -1,4 +1,5 @@
-"""board_meta: catálogo de tags (tags.json), validación de nota/tags; DevicesFile.set_meta."""
+"""board_meta: nota, propiedades (categorías fijas, valores por bench en properties.json),
+DevicesFile.set_meta."""
 import datetime as dt
 import json
 import multiprocessing
@@ -17,25 +18,49 @@ from server.device_registry import DevicesFile  # noqa: E402
 MAC = "AA:BB:CC:DD:EE:FF"
 
 
-def test_repo_catalog_is_valid_and_has_the_warn_tags():
-    raw = json.loads(board_meta.CATALOG_FILE.read_text())["tags"]
-    cat = board_meta.catalog()
-    assert len(cat) == len(raw)                 # ninguna entrada del repo se descarta por inválida
-    ids = [t["id"] for t in cat]
-    assert {"no-tocar", "roto", "agentes", "lte", "esp32-s3", "modbus"} <= set(ids)
-    assert set(board_meta.warn_ids(cat)) == {"no-tocar", "roto"}
-    assert all(t["label"] and t["group"] and t["desc"] for t in cat)
+def cat_by_id():
+    return {c["id"]: c for c in board_meta.catalog()}
 
 
-def test_catalog_skips_invalid_entries(tmp_path):
-    f = tmp_path / "tags.json"
-    f.write_text(json.dumps({"tags": [{"id": "ok", "group": "g"}, {"id": "Mal"}, {"id": "ok"}, "x",
-                                      {"id": "a" * 25}, {"id": "w", "kind": "warn", "color": "#f00"}]}))
-    assert board_meta.catalog(f) == [{"id": "ok", "label": "ok", "group": "g", "desc": ""},
-                                     {"id": "w", "label": "w", "group": "otros", "desc": "", "kind": "warn",
-                                      "color": "#f00"}]
-    f.write_text("{roto")
-    assert board_meta.catalog(f) == []
+def test_initial_catalog():
+    cats = cat_by_id()
+    assert list(cats) == ["estado", "uso", "chip", "conectividad", "perifericos"]
+    assert [c["multi"] for c in cats.values()] == [False, True, False, True, True]
+    assert [v["id"] for v in cats["chip"]["values"]] == ["esp32", "esp32-s3", "esp32-c3"]
+    assert board_meta.excluded_values(board_meta.catalog()) == {"estado": ["no-tocar", "roto"]}
+    assert not paths.properties_file().exists()          # leer no escribe
+
+
+def test_add_and_remove_values():
+    e = board_meta.add_value("conectividad", " NB-IoT ".strip().lower().replace(" ", ""), desc="NB-IoT")
+    assert e == {"id": "nb-iot", "label": "nb-iot", "desc": "NB-IoT"}
+    board_meta.add_value("estado", "prestada", label="prestada", warn=True, exclude_pick=True)
+    cats = cat_by_id()
+    assert cats["conectividad"]["values"][-1]["id"] == "nb-iot"
+    assert cats["estado"]["values"][-1] == {"id": "prestada", "label": "prestada", "desc": "", "warn": True,
+                                            "exclude_pick": True}
+    assert json.loads(paths.properties_file().read_text())["values"]["chip"][0]["id"] == "esp32"
+    for args, kw, msg in [(("conectividad", "lte"), {}, "ya existe"), (("nada", "x"), {}, "categoría"),
+                          (("chip", "Mal Valor"), {}, "inválido"), (("chip", "x"), {"warn": True}, "solo en"),
+                          (("chip", "x"), {"desc": "a\nb"}, "control")]:
+        with pytest.raises(MetaError, match=msg):
+            board_meta.add_value(*args, **kw)
+    with pytest.raises(board_meta.InUseError, match="placa-1"):
+        board_meta.remove_value("conectividad", "nb-iot", lambda c, v: ["placa-1"])
+    board_meta.remove_value("conectividad", "nb-iot", lambda c, v: [])
+    assert "nb-iot" not in [v["id"] for v in cat_by_id()["conectividad"]["values"]]
+    with pytest.raises(board_meta.NotFoundError):
+        board_meta.remove_value("conectividad", "nb-iot", lambda c, v: [])
+
+
+def test_broken_catalog_file_falls_back_to_seed_and_new_category():
+    paths.properties_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.properties_file().write_text("{roto")
+    assert len(cat_by_id()["chip"]["values"]) == 3
+    paths.properties_file().write_text(json.dumps({"values": {"chip": [{"id": "esp32-p4"}, {"id": "MAL"}]}}))
+    cats = cat_by_id()
+    assert [v["id"] for v in cats["chip"]["values"]] == ["esp32-p4"]
+    assert len(cats["uso"]["values"]) == 3                # categoría ausente del archivo: su set inicial
 
 
 @pytest.mark.parametrize("text,out", [(None, ""), ("", ""), ("  testeando, no tocar  ", "testeando, no tocar"),
@@ -50,63 +75,65 @@ def test_clean_note_rejects(bad):
         board_meta.clean_note(bad)
 
 
-def test_normalize_and_check_tags():
-    assert board_meta.normalize_tags([" LTE", "lte", "Modbus", ""]) == ["lte", "modbus"]
-    for bad in ("lte", [1], {"a": 1}):
-        with pytest.raises(MetaError):
-            board_meta.normalize_tags(bad)
-    cat = board_meta.catalog()
-    board_meta.check_known(["lte", "no-tocar"], cat)
-    with pytest.raises(MetaError, match=r"'modbsu' \(¿'modbus'\?\).*Válidos: no-tocar"):
-        board_meta.check_known(["modbsu"], cat)
+def test_plan_and_apply_props():
+    ops = board_meta.plan_props({"chip": "ESP32-S3", "estado": None}, {"conectividad": ["lte", "wifi"]},
+                                {"uso": "ci"})
+    assert ops == {"chip": ("set", ["esp32-s3"]), "estado": ("set", []), "conectividad": ("add", ["lte", "wifi"]),
+                   "uso": ("remove", ["ci"])}
+    cur = {"estado": "testeando", "uso": ["ci", "demo"], "conectividad": ["wifi"]}
+    new, changes = board_meta.apply_props(cur, ops)
+    assert new == {"chip": "esp32-s3", "uso": ["demo"], "conectividad": ["wifi", "lte"]}
+    assert changes == {"chip": {"from": None, "to": "esp32-s3"}, "estado": {"from": "testeando", "to": None},
+                       "conectividad": {"from": ["wifi"], "to": ["wifi", "lte"]},
+                       "uso": {"from": ["ci", "demo"], "to": ["demo"]}}
+    assert board_meta.apply_props(new, board_meta.plan_props(add={"chip": "esp32"}))[0]["chip"] == "esp32"
+    assert board_meta.apply_props(new, board_meta.plan_props(add={"uso": "demo"}))[1] == {}
 
 
-def test_merge_tags_limit():
-    assert board_meta.merge_tags(["a"], None, ["b", "a"], ["a"]) == ["b"]
-    assert board_meta.merge_tags(["a"], ["c"], ["d"], []) == ["c", "d"]
-    with pytest.raises(MetaError, match="12"):
-        board_meta.merge_tags([], [str(i) for i in range(13)], [], [])
+@pytest.mark.parametrize("args,msg", [
+    (({"chip": "esp32-s4"},), r"'esp32-s4' no es un valor válido \(¿'esp32-s3'\?\)"),
+    (({"color": "rojo"},), "categoría"), (({"chip": ["esp32", "esp32-c3"]},), "un solo valor"),
+    ((None, {"chip": ["esp32", "esp32-c3"]}), "un solo valor"), (({"chip": 3},), "valor"),
+    (("chip=esp32",), "categoría: valor"), (({"uso": "ci"}, {"uso": "demo"}), "dos veces"),
+])
+def test_plan_props_rejects(args, msg):
+    with pytest.raises(MetaError, match=msg):
+        board_meta.plan_props(*args)
 
 
-def test_set_meta_note_and_tags():
+def test_remove_accepts_values_not_in_catalog():
+    assert board_meta.plan_props(remove={"perifericos": "viejo"}) == {"perifericos": ("remove", ["viejo"])}
+
+
+def test_set_meta_note_and_props():
     f = DevicesFile()
     f.update_device_key(MAC, "mi-placa")
     now = dt.datetime(2026, 10, 6, 10, 0, tzinfo=dt.timezone(dt.timedelta(hours=-3)))
-    r = f.set_meta(MAC, "alejo", note="testeando", tags_add=["lte", "modbus"], now=now)
-    assert r["note_changed"] and r["added"] == ["lte", "modbus"] and r["removed"] == []
+    r = f.set_meta(MAC, "alejo", note="testeando", props_ops=board_meta.plan_props({"chip": "esp32"}), now=now)
+    assert r["note_changed"] and r["props_changes"] == {"chip": {"from": None, "to": "esp32"}}
     e = f.get_all()[MAC]
-    assert (e["device_key"], e["note"], e["note_by"], e["note_at"], e["tags"]) == (
-        "mi-placa", "testeando", "alejo", "2026-10-06T10:00:00-03:00", ["lte", "modbus"])
-    r = f.set_meta(MAC, "otro", note="testeando", tags_remove=["lte", "nada"])
-    assert not r["note_changed"] and r["removed"] == ["lte"]
-    assert f.get_all()[MAC]["note_by"] == "alejo"           # misma nota: no cambia quién ni cuándo
-    r = f.set_meta(MAC, "alejo", note="", tags=[])
-    assert r["note_changed"] and r["removed"] == ["modbus"]
+    assert (e["device_key"], e["note"], e["note_by"], e["note_at"], e["props"]) == (
+        "mi-placa", "testeando", "alejo", "2026-10-06T10:00:00-03:00", {"chip": "esp32"})
+    assert f.props_in_use("chip", "esp32") == ["mi-placa"] and f.props_in_use("chip", "esp32-c3") == []
+    r = f.set_meta(MAC, "otro", note="testeando")
+    assert not r["note_changed"] and f.get_all()[MAC]["note_by"] == "alejo"
+    f.set_meta(MAC, "alejo", note="", props_ops=board_meta.plan_props({"chip": None}))
     assert f.get_all()[MAC] == {"device_key": "mi-placa", "hw_model": None}
     with pytest.raises(KeyError):
         f.set_meta("11:22:33:44:55:66", "x", note="hola")
 
 
-def test_set_meta_over_the_limit_does_not_write():
-    f = DevicesFile()
-    f.update_device_key(MAC, "p")
-    before = paths.devices_file().read_text()
-    with pytest.raises(MetaError):
-        f.set_meta(MAC, "x", tags=[f"t{i}" for i in range(13)])
-    assert paths.devices_file().read_text() == before
+def _add(i):
+    DevicesFile().set_meta(MAC, f"u{i}", props_ops={"uso": ("add", [f"v{i}"])})
 
 
-def _add_tag(i):
-    DevicesFile().set_meta(MAC, f"u{i}", tags_add=[f"t{i}"])
-
-
-def test_set_meta_from_two_processes_keeps_both():
-    """Cada set_meta es un leer-modificar-escribir con el flock: dos procesos no se pisan."""
+def test_set_meta_from_several_processes_keeps_all():
+    """Cada set_meta es un leer-modificar-escribir con el flock: los procesos no se pisan."""
     DevicesFile().update_device_key(MAC, "p")
     ctx = multiprocessing.get_context("fork")
-    procs = [ctx.Process(target=_add_tag, args=(i,)) for i in range(8)]
+    procs = [ctx.Process(target=_add, args=(i,)) for i in range(8)]
     for p in procs:
         p.start()
     for p in procs:
         p.join()
-    assert sorted(DevicesFile().get_all()[MAC]["tags"]) == sorted(f"t{i}" for i in range(8))
+    assert sorted(DevicesFile().get_all()[MAC]["props"]["uso"]) == sorted(f"v{i}" for i in range(8))

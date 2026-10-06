@@ -413,10 +413,40 @@ async def get_device(tty: str):
 _devices_file = DevicesFile()
 
 
-@app.get("/api/tags")
-async def get_tags():
-    """Catálogo de tags (remote/server/tags.json): los únicos que se pueden poner."""
-    return {"tags": board_meta.catalog()}
+@app.get("/api/properties")
+async def get_properties():
+    """Propiedades de las placas: categorías fijas y los valores de este bench."""
+    return {"categories": board_meta.catalog()}
+
+
+@app.post("/api/properties/{cat}/values")
+async def add_property_value(cat: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """Agrega un valor a una categoría existente: {id, label?, desc?, warn?, exclude_pick?}
+    (warn / exclude_pick solo en `estado`)."""
+    _require_auth(authorization)
+    try:
+        entry = board_meta.add_value(cat, body.get("id"), label=body.get("label"), desc=body.get("desc"),
+                                     warn=body.get("warn") is True, exclude_pick=body.get("exclude_pick") is True)
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    taglog.info(TAG, f"propiedad nueva: {cat}={entry['id']}")
+    return {"ok": True, "category": cat, "value": entry}
+
+
+@app.delete("/api/properties/{cat}/values/{value}")
+async def delete_property_value(cat: str, value: str, authorization: Optional[str] = Header(None)):
+    """Borra un valor si ninguna placa lo usa (409 in_use con cuáles)."""
+    _require_auth(authorization)
+    try:
+        board_meta.remove_value(cat, value, _devices_file.props_in_use)
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    except board_meta.NotFoundError as e:
+        _fail(404, "not_found", str(e))
+    except board_meta.InUseError as e:
+        _fail(409, "in_use", str(e))
+    taglog.info(TAG, f"propiedad borrada: {cat}={value}")
+    return {"ok": True}
 
 
 @app.patch("/api/devices/{mac:path}")
@@ -425,8 +455,8 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     """Datos de la placa en devices.json, por MAC. Cualquier combinación de:
     - `device_key`: renombrar.
     - `note`: texto corto (aviso, no lock); "" o null la borra. Evento `note`.
-    - `tags` (lista entera), `tags_add`, `tags_remove`: solo tags del catálogo
-      (GET /api/tags); quitar vale para cualquiera. Evento `tags` (added/removed).
+    - `props` {cat: valor | [valores] | null}, `props_add` / `props_remove` {cat: valor(es)}:
+      valores del catálogo (GET /api/properties); quitar vale para cualquiera. Evento `props`.
     `user`: quién (va en note_by y en los eventos); sin él, el host del pedido."""
     _require_auth(authorization)
     bare = unquote(mac).upper().replace("-", "").replace(":", "")
@@ -435,20 +465,16 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     mac_norm = ":".join(bare[i:i + 2] for i in range(0, 12, 2))
     wants_key = "device_key" in body
     wants_note = "note" in body
-    wants_tags = any(k in body for k in ("tags", "tags_add", "tags_remove"))
-    if not (wants_key or wants_note or wants_tags):
-        _fail(400, "bad_request", "nada para cambiar: device_key, note, tags, tags_add o tags_remove")
+    wants_props = any(k in body for k in ("props", "props_add", "props_remove"))
+    if not (wants_key or wants_note or wants_props):
+        _fail(400, "bad_request", "nada para cambiar: device_key, note, props, props_add o props_remove")
     device_key = str(body.get("device_key") or "").strip()
     if wants_key and not device_key:
         _fail(400, "bad_request", "device_key requerido")
     try:
         note = board_meta.clean_note(body.get("note")) if wants_note else None
         user = board_meta.clean_user(body.get("user"))
-        tags = board_meta.normalize_tags(body["tags"]) if body.get("tags") is not None else None
-        add = board_meta.normalize_tags(body.get("tags_add"))
-        remove = board_meta.normalize_tags(body.get("tags_remove"))
-        if wants_tags:
-            board_meta.check_known((tags or []) + add, board_meta.catalog())
+        ops = board_meta.plan_props(body.get("props"), body.get("props_add"), body.get("props_remove"))
     except board_meta.MetaError as e:
         _fail(400, "bad_request", str(e))
     if user is None:
@@ -459,24 +485,22 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
         except Exception as e:
             _fail(500, "unexpected", str(e))
     out = {"ok": True}
-    if wants_note or wants_tags:
+    if wants_note or wants_props:
         try:
-            r = _devices_file.set_meta(mac_norm, user, note=note, tags=tags, tags_add=add, tags_remove=remove)
+            r = _devices_file.set_meta(mac_norm, user, note=note, props_ops=ops)
         except KeyError:
             _fail(404, "not_found", f"no hay placa {mac_norm} en devices.json")
-        except board_meta.MetaError as e:
-            _fail(400, "bad_request", str(e))
         entry = r["entry"]
         log = str(paths.device_output_log(mac_norm))
         try:
             if r["note_changed"]:
                 events.record(log, "note", {"text": note, "user": user})
-            if r["added"] or r["removed"]:
-                events.record(log, "tags", {"added": r["added"], "removed": r["removed"], "user": user})
+            if r["props_changes"]:
+                events.record(log, "props", {"changes": r["props_changes"], "user": user})
         except OSError:
             pass        # que no se pueda registrar no rompe la escritura
         out.update(note=entry.get("note"), note_by=entry.get("note_by"), note_at=entry.get("note_at"),
-                   tags=list(entry.get("tags") or []))
+                   props=dict(entry.get("props") or {}))
     return out
 
 

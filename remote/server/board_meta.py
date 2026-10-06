@@ -1,124 +1,306 @@
 """
-board_meta.py — nota y tags por placa (los guarda DevicesFile en devices.json).
+board_meta.py — nota y propiedades por placa (por MAC en devices.json, DevicesFile).
 
 - Nota: texto libre corto ("testeando, no tocar"). Es un aviso, no un lock.
-- Tags: fijos, del catálogo `tags.json` (al lado de este archivo; se lee en cada
-  pedido). Un tag fuera del catálogo no se puede agregar; uno que se sacó del
-  catálogo y una placa todavía tiene se puede quitar. `kind: "warn"`: el
-  dashboard lo marca y `espbench pick` / `ls --free` no eligen esa placa. El
-  server no bloquea nada por un tag.
+- Propiedades: categorías **fijas** (CATEGORIES, acá en el código) con valores
+  **editables por bench** (properties.json en ESP_BASE, sembrado con los valores
+  iniciales). Se agregan valores a una categoría existente, nunca categorías; un
+  valor se borra solo si ninguna placa lo usa. Por placa: `props` =
+  {"chip": "esp32-s3", "conectividad": ["wifi", "lte"]} (`multi`: lista).
+  `exclude_pick` (en `estado`): `espbench pick` / `ls --free` no eligen esa placa;
+  `warn`: estilo de advertencia en el dashboard. El server no bloquea nada por
+  una propiedad.
 """
+import contextlib
+import copy
 import difflib
+import fcntl
 import json
-import pathlib
+import os
 import re
-from typing import List, Optional
+import tempfile
+from typing import Dict, List, Optional
 
-CATALOG_FILE = pathlib.Path(__file__).with_name("tags.json")
+from server import paths
+
 NOTE_MAX = 200
 USER_MAX = 64
-TAG_MAX = 24
-TAGS_PER_BOARD = 12
-TAG_RE = re.compile(r"[a-z0-9][a-z0-9._:-]*")
+VALUE_MAX = 24
+LABEL_MAX = 40
+DESC_MAX = 120
+VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def _v(id_: str, desc: str, label: Optional[str] = None, warn: bool = False) -> dict:
+    out = {"id": id_, "label": label or id_, "desc": desc}
+    if warn:
+        out.update(warn=True, exclude_pick=True)
+    return out
+
+
+# Categorías fijas (no se agregan desde la API). `values`: el set inicial de cada bench.
+CATEGORIES = [
+    {"id": "estado", "label": "estado", "multi": False, "values": [
+        _v("no-tocar", "Nadie la usa sin preguntar (ni agentes)", "no tocar", warn=True),
+        _v("testeando", "Alguien está probando algo en esta placa"),
+        _v("roto", "Hardware o conexión con problemas", warn=True)]},
+    {"id": "uso", "label": "uso", "multi": True, "values": [
+        _v("agentes", "Libre para que la usen agentes"),
+        _v("ci", "La usa la integración continua", "CI"),
+        _v("demo", "Reservada para demos")]},
+    {"id": "chip", "label": "chip", "multi": False, "values": [
+        _v("esp32", "ESP32 clásico", "ESP32"), _v("esp32-s3", "ESP32-S3", "ESP32-S3"),
+        _v("esp32-c3", "ESP32-C3", "ESP32-C3")]},
+    {"id": "conectividad", "label": "conectividad", "multi": True, "values": [
+        _v("wifi", "WiFi disponible", "WiFi"), _v("lte", "Módem LTE con SIM", "LTE"),
+        _v("ble", "Bluetooth LE", "BLE")]},
+    {"id": "perifericos", "label": "periféricos", "multi": True, "values": [
+        _v("modbus", "Conectada a un bus Modbus", "Modbus"), _v("rs485", "Bus RS-485 cableado", "RS-485"),
+        _v("sensores", "Sensores conectados")]},
+]
+CATEGORY_IDS = [c["id"] for c in CATEGORIES]
+# Solo en estas categorías un valor puede ser warn / exclude_pick.
+FLAG_CATEGORIES = ("estado",)
 
 
 class MetaError(ValueError):
     """Pedido inválido (400 bad_request)."""
 
 
-def catalog(path: Optional[pathlib.Path] = None) -> List[dict]:
-    """Tags del catálogo: [{id, label, group, desc, kind?, color?}]. Las entradas
-    inválidas se saltean (un error de tipeo en tags.json no tira el dashboard)."""
-    try:
-        data = json.loads(pathlib.Path(path or CATALOG_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    out, seen = [], set()
-    entries = data.get("tags") if isinstance(data, dict) else None
-    for t in entries if isinstance(entries, list) else []:
-        if not isinstance(t, dict):
-            continue
-        tid = str(t.get("id") or "")
-        if not TAG_RE.fullmatch(tid) or len(tid) > TAG_MAX or tid in seen:
-            continue
-        seen.add(tid)
-        entry = {"id": tid, "label": str(t.get("label") or tid), "group": str(t.get("group") or "otros"),
-                 "desc": str(t.get("desc") or "")}
-        for k in ("kind", "color"):
-            if t.get(k):
-                entry[k] = str(t[k])
-        out.append(entry)
-    return out
+class InUseError(ValueError):
+    """Valor en uso por alguna placa (409)."""
 
+
+class NotFoundError(LookupError):
+    """Valor que no existe (404)."""
+
+
+# ---------- texto ----------
 
 def _has_control(s: str) -> bool:
     return any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in s)
 
 
-def clean_note(text) -> str:
-    """Nota normalizada ("" = borrar). MetaError si es larga o tiene caracteres de control."""
+def _clean_text(text, what: str, max_len: int) -> str:
     if text is None:
         return ""
     if not isinstance(text, str):
-        raise MetaError("note tiene que ser texto")
+        raise MetaError(f"{what} tiene que ser texto")
     text = text.strip()
-    if len(text) > NOTE_MAX:
-        raise MetaError(f"la nota tiene más de {NOTE_MAX} caracteres")
+    if len(text) > max_len:
+        raise MetaError(f"{what} tiene más de {max_len} caracteres")
     if _has_control(text):
-        raise MetaError("la nota no puede tener caracteres de control (saltos de línea, tabs...)")
+        raise MetaError(f"{what} no puede tener caracteres de control (saltos de línea, tabs...)")
     return text
 
 
+def clean_note(text) -> str:
+    """Nota normalizada ("" = borrar). MetaError si es larga o tiene caracteres de control."""
+    return _clean_text(text, "la nota", NOTE_MAX)
+
+
 def clean_user(user) -> Optional[str]:
-    user = str(user or "").strip()
-    if not user:
-        return None
-    if len(user) > USER_MAX or _has_control(user):
-        raise MetaError(f"user inválido (hasta {USER_MAX} caracteres, sin caracteres de control)")
-    return user
+    return _clean_text(None if user is None else str(user), "user", USER_MAX) or None
 
 
-def normalize_tags(tags) -> List[str]:
-    """trim + minúsculas + sin repetidos (en orden). MetaError si no es una lista de textos."""
-    if tags is None:
-        return []
-    if isinstance(tags, str) or not isinstance(tags, (list, tuple)):
-        raise MetaError("los tags van en una lista")
-    out = []
-    for t in tags:
-        if not isinstance(t, str):
-            raise MetaError("cada tag es un texto")
-        t = t.strip().lower()
-        if t and t not in out:
-            out.append(t)
+# ---------- catálogo (properties.json) ----------
+
+def _seed() -> Dict[str, list]:
+    return {c["id"]: copy.deepcopy(c["values"]) for c in CATEGORIES}
+
+
+def _read_values() -> Dict[str, list]:
+    """Valores por categoría: los del archivo, o el set inicial si no existe. Una
+    categoría que falta en el archivo (agregada al código después) toma su set inicial;
+    una que ya no está en el código se ignora."""
+    try:
+        data = json.loads(paths.properties_file().read_text(encoding="utf-8"))
+        values = data.get("values") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        values = None
+    seed = _seed()
+    if not isinstance(values, dict):
+        return seed
+    out = {}
+    for cat in CATEGORY_IDS:
+        vals = values.get(cat)
+        out[cat] = [v for v in vals if isinstance(v, dict) and VALUE_RE.fullmatch(str(v.get("id") or ""))] \
+            if isinstance(vals, list) else seed[cat]
     return out
 
 
-def suggest(tag: str, ids: List[str]) -> Optional[str]:
-    """El id del catálogo más parecido a `tag`, o None."""
-    m = difflib.get_close_matches(tag, ids, n=1, cutoff=0.5)
+def catalog() -> List[dict]:
+    """Categorías con sus valores: [{id, label, multi, values: [{id, label, desc, warn?, exclude_pick?}]}]."""
+    values = _read_values()
+    return [{"id": c["id"], "label": c["label"], "multi": c["multi"], "values": values[c["id"]]}
+            for c in CATEGORIES]
+
+
+@contextlib.contextmanager
+def _locked():
+    path = paths.properties_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path.with_name(path.name + ".lck")), os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        try:
+            os.fchmod(fd, 0o666)
+        except OSError:
+            pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _write_values(values: Dict[str, list]) -> None:
+    path = paths.properties_file()
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".properties.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"values": values}, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o666)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _category(cat: str) -> dict:
+    for c in CATEGORIES:
+        if c["id"] == cat:
+            return c
+    raise MetaError(f"categoría '{cat}' no existe. Categorías: {', '.join(CATEGORY_IDS)}")
+
+
+def add_value(cat: str, value: str, label=None, desc=None, warn: bool = False, exclude_pick: bool = False) -> dict:
+    """Agrega un valor a una categoría existente. MetaError si es inválido o ya existe."""
+    _category(cat)
+    vid = str(value or "").strip().lower()
+    if not VALUE_RE.fullmatch(vid) or len(vid) > VALUE_MAX:
+        raise MetaError(f"valor inválido: {value!r} (minúsculas, números, '.', '_', '-'; hasta {VALUE_MAX})")
+    if (warn or exclude_pick) and cat not in FLAG_CATEGORIES:
+        raise MetaError(f"warn / exclude_pick solo en: {', '.join(FLAG_CATEGORIES)}")
+    entry = {"id": vid, "label": _clean_text(label, "label", LABEL_MAX) or vid,
+             "desc": _clean_text(desc, "desc", DESC_MAX)}
+    if warn:
+        entry["warn"] = True
+    if exclude_pick:
+        entry["exclude_pick"] = True
+    with _locked():
+        values = _read_values()
+        if any(v["id"] == vid for v in values[cat]):
+            raise MetaError(f"'{vid}' ya existe en {cat}")
+        values[cat].append(entry)
+        _write_values(values)
+    return entry
+
+
+def remove_value(cat: str, value: str, in_use) -> None:
+    """Borra un valor si ninguna placa lo usa. `in_use(cat, value)` → lista de placas que lo
+    tienen (se llama con el lock del catálogo tomado). InUseError / NotFoundError."""
+    _category(cat)
+    with _locked():
+        values = _read_values()
+        if not any(v["id"] == value for v in values[cat]):
+            raise NotFoundError(f"'{value}' no es un valor de {cat}")
+        users = in_use(cat, value)
+        if users:
+            raise InUseError(f"'{cat}={value}' lo usan: {', '.join(users)}. Sacáselo primero")
+        values[cat] = [v for v in values[cat] if v["id"] != value]
+        _write_values(values)
+
+
+# ---------- props de una placa ----------
+
+def suggest(value: str, ids: List[str]) -> Optional[str]:
+    m = difflib.get_close_matches(value, ids, n=1, cutoff=0.5)
     return m[0] if m else None
 
 
-def check_known(tags: List[str], cat: List[dict]) -> None:
-    """MetaError si algún tag no está en el catálogo (con el más parecido y la lista válida)."""
-    ids = [t["id"] for t in cat]
-    bad = [t for t in tags if t not in ids]
-    if not bad:
-        return
-    hints = [f"'{t}'" + (f" (¿'{suggest(t, ids)}'?)" if suggest(t, ids) else "") for t in bad]
-    raise MetaError(f"tag fuera del catálogo: {', '.join(hints)}. Válidos: {', '.join(ids)}")
+def _values_list(raw, cat: str) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)) or not all(isinstance(x, str) for x in raw):
+        raise MetaError(f"{cat}: un valor o una lista de valores")
+    out = []
+    for x in raw:
+        x = x.strip().lower()
+        if x and x not in out:
+            out.append(x)
+    return out
 
 
-def merge_tags(current: List[str], set_to: Optional[List[str]], add: List[str], remove: List[str]) -> List[str]:
-    """Lista nueva: `set_to` (si viene) o la actual, + add, - remove. MetaError si pasa el tope."""
-    new = list(set_to) if set_to is not None else list(current)
-    new += [t for t in add if t not in new]
-    new = [t for t in new if t not in remove]
-    if len(new) > TAGS_PER_BOARD:
-        raise MetaError(f"máximo {TAGS_PER_BOARD} tags por placa")
-    return new
+def _check_values(cat: str, vals: List[str], cat_values: Dict[str, list]) -> None:
+    ids = [v["id"] for v in cat_values[cat]]
+    for x in vals:
+        if x not in ids:
+            near = suggest(x, ids)
+            raise MetaError(f"{cat}: '{x}' no es un valor válido" + (f" (¿'{near}'?)" if near else "") +
+                            f". Válidos: {', '.join(ids)} (o agregalo al catálogo)")
 
 
-def warn_ids(cat: List[dict]) -> List[str]:
-    return [t["id"] for t in cat if t.get("kind") == "warn"]
+def plan_props(props=None, add=None, remove=None) -> dict:
+    """Valida un pedido de cambios y lo deja en {cat: ("set", [vals]) | ("add", [..]) | ("remove", [..])}.
+    props: {cat: valor | [valores] | null/""/[] (= quitar)}; add/remove: {cat: valor | [valores]}.
+    Los valores a poner tienen que estar en el catálogo; quitar vale para cualquiera."""
+    ops = {}
+    cat_values = _read_values()
+    for kind, src in (("set", props), ("add", add), ("remove", remove)):
+        if src is None:
+            continue
+        if not isinstance(src, dict):
+            raise MetaError("props / props_add / props_remove van como {categoría: valor(es)}")
+        for cat, raw in src.items():
+            c = _category(cat)
+            vals = _values_list(raw, cat)
+            if kind != "remove":
+                _check_values(cat, vals, cat_values)
+            if kind == "set" and not c["multi"] and len(vals) > 1:
+                raise MetaError(f"{cat} admite un solo valor")
+            if kind == "add" and not c["multi"]:
+                if len(vals) > 1:
+                    raise MetaError(f"{cat} admite un solo valor")
+                kind_ = "set"
+            else:
+                kind_ = kind
+            if cat in ops:
+                raise MetaError(f"{cat} aparece dos veces en el pedido")
+            ops[cat] = (kind_, vals)
+    return ops
+
+
+def apply_props(current: dict, ops: dict) -> tuple:
+    """(props nuevas, cambios {cat: {"from", "to"}}) aplicando `ops` de plan_props."""
+    new = {k: (list(v) if isinstance(v, list) else v) for k, v in (current or {}).items()}
+    multi = {c["id"]: c["multi"] for c in CATEGORIES}
+    changes = {}
+    for cat, (kind, vals) in ops.items():
+        old = new.get(cat)
+        old_list = old if isinstance(old, list) else ([old] if old else [])
+        if kind == "set":
+            res = vals
+        elif kind == "add":
+            res = old_list + [v for v in vals if v not in old_list]
+        else:
+            res = [v for v in old_list if v not in vals]
+        value = (res if multi[cat] else (res[0] if res else None)) if res else None
+        if value is None:
+            new.pop(cat, None)
+        else:
+            new[cat] = value
+        if value != (old or None):
+            changes[cat] = {"from": old, "to": value}
+    return new, changes
+
+
+def excluded_values(cat_list: List[dict]) -> Dict[str, List[str]]:
+    """{categoría: [valores con exclude_pick]} (lo que pick / --free no eligen)."""
+    return {c["id"]: [v["id"] for v in c["values"] if v.get("exclude_pick")] for c in cat_list
+            if any(v.get("exclude_pick") for v in c["values"])}

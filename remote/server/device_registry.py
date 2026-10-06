@@ -84,13 +84,11 @@ class DevicesFile:
                 data[mac_up]["device_key"] = device_key
         self._update(_do, silent=False)
 
-    def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, tags=None,
-                 tags_add=(), tags_remove=(), now: Optional[dt.datetime] = None) -> dict:
-        """Nota y/o tags de una placa (ya validados: board_meta), en un solo
-        leer-modificar-escribir con el flock. note: None = no tocarla, "" = borrarla.
-        tags: lista entera (reemplaza) o None; tags_add / tags_remove sobre la actual.
-        Devuelve {"entry", "note_changed", "added", "removed"}. KeyError si la MAC no
-        está en devices.json; board_meta.MetaError si pasa el tope de tags."""
+    def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, props_ops: Optional[dict] = None,
+                 now: Optional[dt.datetime] = None) -> dict:
+        """Nota y/o propiedades de una placa (ya validadas: board_meta.plan_props), en un
+        solo leer-modificar-escribir con el flock. note: None = no tocarla, "" = borrarla.
+        Devuelve {"entry", "note_changed", "props_changes"}. KeyError si la MAC no está."""
         out = {}
         stamp = (now or dt.datetime.now().astimezone()).isoformat(timespec="seconds")
 
@@ -108,17 +106,24 @@ class DevicesFile:
                 else:
                     for k in ("note", "note_by", "note_at"):
                         entry.pop(k, None)
-            old = list(entry.get("tags") or [])
-            new = board_meta.merge_tags(old, tags, list(tags_add), list(tags_remove))
+            new, changes = board_meta.apply_props(entry.get("props") or {}, props_ops or {})
             if new:
-                entry["tags"] = new
+                entry["props"] = new
             else:
-                entry.pop("tags", None)
-            out["added"] = [t for t in new if t not in old]
-            out["removed"] = [t for t in old if t not in new]
+                entry.pop("props", None)
+            out["props_changes"] = changes
             out["entry"] = dict(entry)
         self._update(_do, silent=False)
         return out
+
+    def props_in_use(self, cat: str, value: str) -> list:
+        """Placas (device_key o MAC) que tienen `cat=value`."""
+        users = []
+        for mac, entry in self.get_all().items():
+            v = (entry.get("props") or {}).get(cat)
+            if v == value or (isinstance(v, list) and value in v):
+                users.append(entry.get("device_key") or mac)
+        return users
 
     def get_all(self) -> dict:
         with self._lock:
@@ -203,11 +208,11 @@ class DeviceInfo:
     # vencido no aparece.
     lock_expires: Optional[str] = None
     lock_expires_epoch: Optional[int] = None
-    # Nota y tags de la placa (devices.json, por MAC; board_meta). note_at: ISO con la zona de la Pi.
+    # Nota y propiedades de la placa (devices.json, por MAC; board_meta). note_at: ISO con la zona de la Pi.
     note: Optional[str] = None
     note_by: Optional[str] = None
     note_at: Optional[str] = None
-    tags: list = dataclasses.field(default_factory=list)
+    props: dict = dataclasses.field(default_factory=dict)
 
 
 class DeviceRegistry:
@@ -311,7 +316,7 @@ class DeviceRegistry:
             note=entry.get("note"),
             note_by=entry.get("note_by"),
             note_at=entry.get("note_at"),
-            tags=list(entry.get("tags") or []),
+            props=dict(entry.get("props") or {}),
         )
 
     @staticmethod

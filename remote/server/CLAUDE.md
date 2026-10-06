@@ -18,8 +18,8 @@ Código Python que corre en la Pi. Hay dos tipos de proceso: **uno por device** 
 | `flash.py` | device | esptool: buscarlo, armar comandos, correrlos (`run_cmd`), leer MAC |
 | `logrange.py` | dashboard | Rangos del log de una placa para `/api/board/{key}/log` y `/events`: anchors, `until`, `around`, filtros, truncado. Solo lee disco; `events.jsonl` una vez por pedido y de atrás para adelante |
 | `api.py` | dashboard | FastAPI: REST + WebSocket + estáticos. Antes `dashboard.py` |
-| `device_registry.py` | dashboard (+ device) | `DeviceRegistry` (vista de lectura de los devices), `DevicesFile` (`devices.json`, con `flock`; `set_meta`: nota y tags) |
-| `board_meta.py` + `tags.json` | dashboard | Nota y tags por placa: validación, catálogo de tags fijos (`tags.json`, se lee en cada pedido: editarlo ahí), sugerencia del más parecido |
+| `device_registry.py` | dashboard (+ device) | `DeviceRegistry` (vista de lectura de los devices), `DevicesFile` (`devices.json`, con `flock`; `set_meta`: nota y propiedades) |
+| `board_meta.py` | dashboard | Nota y propiedades por placa: categorías fijas (`CATEGORIES`, editar acá), valores por bench (`properties.json`, alta/baja), validación con el más parecido |
 | `history.py` | dashboard | Historial por device: jobs (`result.json`, `job.log`) y sesiones de log rotadas; valida nombres que llegan por URL |
 | `log_streamer.py` | dashboard | Tail del log de cada device → WebSocket (solo transmite: el firmware lo publica `SerialWatch`) |
 | `auth.py` | ambos | Token opcional `/opt/esp/api_token`: escrituras del API (`Bearer`) y token del flash si no hay `--token` |

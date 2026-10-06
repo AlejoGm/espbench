@@ -797,38 +797,40 @@ def test_post_update_needs_token_and_reports_launch_failure(tmux, monkeypatch):
     assert err(e) == (502, "update_unavailable") and "password" in e.value.detail["message"]
 
 
-# ---------- nota y tags por placa (PATCH /api/devices/{mac}) ----------
+# ---------- nota y propiedades por placa (PATCH /api/devices/{mac}, /api/properties) ----------
 
-def test_patch_note_and_tags_records_events_and_shows_in_devices():
+def test_patch_note_and_props_records_events_and_shows_in_devices():
     log = board()
     registered("mi-placa")
     req = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.9"))
-    r = run(api.patch_device(MAC, {"note": " testeando, no tocar ", "user": "alejo", "tags_add": ["LTE", "no-tocar"]},
-                             request=req))
-    assert (r["note"], r["note_by"], r["tags"]) == ("testeando, no tocar", "alejo", ["lte", "no-tocar"])
+    r = run(api.patch_device(MAC, {"note": " testeando, no tocar ", "user": "alejo",
+                                   "props": {"chip": "esp32-s3", "estado": "no-tocar"},
+                                   "props_add": {"conectividad": ["LTE"]}}, request=req))
+    assert (r["note"], r["note_by"]) == ("testeando, no tocar", "alejo")
+    assert r["props"] == {"chip": "esp32-s3", "estado": "no-tocar", "conectividad": ["lte"]}
     assert r["note_at"][-6] in "+-"                                  # ISO con la zona de la Pi
-    evs = [e for e in api_events() if e["type"] in ("note", "tags")]
+    evs = [e for e in api_events() if e["type"] in ("note", "props")]
     assert [(e["type"], e["detail"]) for e in evs] == [
         ("note", {"text": "testeando, no tocar", "user": "alejo"}),
-        ("tags", {"added": ["lte", "no-tocar"], "removed": [], "user": "alejo"})]
+        ("props", {"changes": {"chip": {"from": None, "to": "esp32-s3"}, "estado": {"from": None, "to": "no-tocar"},
+                               "conectividad": {"from": None, "to": ["lte"]}}, "user": "alejo"})]
     assert evs[0]["cursor"].startswith("c:" + SID)
     from server.device_registry import DeviceRegistry
     d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
-    assert (d.note, d.note_by, d.tags) == ("testeando, no tocar", "alejo", ["lte", "no-tocar"])
-    # sin user: el host del pedido; nota vacía la borra; tags_remove
-    r = run(api.patch_device(MAC, {"note": "", "tags_remove": ["lte"]}, request=req))
-    assert r["note"] is None and r["tags"] == ["no-tocar"]
-    assert api_events()[-1]["detail"] == {"added": [], "removed": ["lte"], "user": "10.0.0.9"}
-    assert api_events()[-2]["detail"] == {"text": "", "user": "10.0.0.9"}
+    assert (d.note, d.note_by, d.props["chip"]) == ("testeando, no tocar", "alejo", "esp32-s3")
+    # sin user: el host del pedido; nota vacía la borra; props_remove
+    r = run(api.patch_device(MAC, {"note": "", "props_remove": {"conectividad": "lte"}}, request=req))
+    assert r["note"] is None and "conectividad" not in r["props"]
+    assert api_events()[-1]["detail"]["user"] == "10.0.0.9"
     n = len(api_events())
-    run(api.patch_device(MAC, {"tags_add": ["no-tocar"]}))         # sin cambios: sin evento
+    run(api.patch_device(MAC, {"props": {"chip": "esp32-s3"}}))      # sin cambios: sin evento
     assert len(api_events()) == n
 
 
 @pytest.mark.parametrize("body,msg", [
-    ({"note": "a\nb"}, "control"), ({"note": "x" * 201}, "200"), ({"tags_add": ["modbsu"]}, "modbus"),
-    ({"tags": "lte"}, "lista"), ({"user": "a\tb", "note": "x"}, "user"), ({"device_key": ""}, "device_key"),
-    ({"tags": [f"t{i}" for i in range(13)]}, "catálogo"),
+    ({"note": "a\nb"}, "control"), ({"note": "x" * 201}, "200"), ({"props": {"chip": "esp32-s4"}}, "esp32-s3"),
+    ({"props": {"color": "x"}}, "categoría"), ({"user": "a\tb", "note": "x"}, "user"),
+    ({"device_key": ""}, "device_key"), ({"props_add": {"chip": ["esp32", "esp32-c3"]}}, "un solo"),
 ])
 def test_patch_rejects_bad_meta(body, msg):
     board()
@@ -852,9 +854,28 @@ def test_patch_rename_still_works_and_meta_needs_token(tmux):
         run(api.patch_device(MAC, {"note": "x"}))
     assert err(e) == (401, "auth")
     assert run(api.patch_device(MAC, {"note": "x"}, authorization="Bearer s3cret"))["note"] == "x"
+    for call in (lambda a: api.add_property_value("uso", {"id": "x"}, authorization=a),
+                 lambda a: api.delete_property_value("uso", "ci", authorization=a)):
+        with pytest.raises(HTTPException) as e:
+            run(call(None))
+        assert err(e) == (401, "auth")
 
 
-def test_tags_catalog_endpoint():
-    tags = run(api.get_tags())["tags"]
-    assert {"id": "no-tocar", "label": "no tocar", "group": "estado", "kind": "warn",
-            "desc": "Nadie la usa sin preguntar (ni agentes)"} in tags
+def test_properties_endpoints():
+    cats = run(api.get_properties())["categories"]
+    assert [c["id"] for c in cats] == ["estado", "uso", "chip", "conectividad", "perifericos"]
+    r = run(api.add_property_value("chip", {"id": "esp32-p4", "desc": "P4"}))
+    assert r["value"] == {"id": "esp32-p4", "label": "esp32-p4", "desc": "P4"}
+    with pytest.raises(HTTPException) as e:
+        run(api.add_property_value("chip", {"id": "esp32-p4"}))
+    assert err(e) == (400, "bad_request")
+    registered("mi-placa")
+    run(api.patch_device(MAC, {"props": {"chip": "esp32-p4"}}))
+    with pytest.raises(HTTPException) as e:
+        run(api.delete_property_value("chip", "esp32-p4"))
+    assert err(e) == (409, "in_use") and "mi-placa" in e.value.detail["message"]
+    run(api.patch_device(MAC, {"props": {"chip": None}}))
+    assert run(api.delete_property_value("chip", "esp32-p4"))["ok"]
+    with pytest.raises(HTTPException) as e:
+        run(api.delete_property_value("chip", "esp32-p4"))
+    assert err(e) == (404, "not_found")
