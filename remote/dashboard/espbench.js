@@ -59,7 +59,8 @@
                pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
     }
 
-    // output_<YYYYMMDD_HHMMSS_pid>.log → inicio de esa sesión (ISO local), o null.
+    // output_<YYYYMMDD_HHMMSS_pid>.log → inicio de esa sesión (ISO local), o null. El id lo arma
+    // device_log.make_session_id y el nombre lo valida history.SESSION_RE: tests/test_contract_parity.py.
     // Los logs viejos (output_<ts>.log, sin pid) llevaban la hora de rotación: null.
     function sessionStart(name) {
         var m = /^output_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)_\d+\.log$/.exec(name);
@@ -121,7 +122,8 @@
 
     // Prefijo que pone DeviceLog a cada línea del archivo:
     // "2026-10-05 16:02:03.123 > " — origen: > serial, | taglog, ↪ continuación
-    // de una línea serial que salió partida. Los logs viejos no lo tienen.
+    // de una línea serial que salió partida. Los logs viejos no lo tienen. Copia de
+    // logrange._PREFIX_RE: tests/test_contract_parity.py.
     var PREFIX_RE = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3}) ([>|\u21aa]) /;
 
     // {date, time, origin, prefix, body}. Sin prefijo: date/time/origin null, body = línea.
@@ -379,10 +381,20 @@
         return '';
     }
 
+    // Cursor del log: c:<sesión>:<offset>. Copia de events._CURSOR_RE (Python):
+    // tests/test_contract_parity.py corre los mismos casos en los dos lados.
+    var CURSOR_RE = /^c:(\d{8}_\d{6}_\d+):(\d+)$/;
+
+    // c:<sesión>:<offset> → [sesión, offset], o null.
+    function parseCursor(cursor) {
+        var m = CURSOR_RE.exec(cursor || '');
+        return m ? [m[1], +m[2]] : null;
+    }
+
     // c:<sesión>:<offset> → sesión, o null.
     function cursorSession(cursor) {
-        var m = /^c:(\d{8}_\d{6}_\d+):\d+$/.exec(cursor || '');
-        return m ? m[1] : null;
+        var c = parseCursor(cursor);
+        return c ? c[0] : null;
     }
 
     // 20261005_160203_812 → "2026-10-05 16:02:03"
@@ -442,10 +454,7 @@
             var k = e.type + '|' + e.cursor + '|' + e.ts;
             if (!seen[k]) { seen[k] = true; out.push(e); }
         });
-        function key(e) {
-            var m = /^c:(\d{8}_\d{6}_\d+):(\d+)$/.exec(e.cursor || '');
-            return m ? [m[1], +m[2]] : ['', 0];
-        }
+        function key(e) { return parseCursor(e.cursor) || ['', 0]; }
         return out.sort(function (x, y) {
             var a1 = key(x), b1 = key(y);
             return a1[0] < b1[0] ? -1 : a1[0] > b1[0] ? 1 : a1[1] - b1[1];
@@ -505,8 +514,8 @@
 
     // Offset de un cursor c:<sesión>:<offset>, o null.
     function cursorOffset(cursor) {
-        var m = /^c:\d{8}_\d{6}_\d+:(\d+)$/.exec(cursor || '');
-        return m ? +m[1] : null;
+        var c = parseCursor(cursor);
+        return c ? c[1] : null;
     }
 
     // ── Marcas de eventos en el log en vivo ───────────────────────────────
@@ -643,7 +652,7 @@
         fmtDur: fmtDur, secondsUntil: secondsUntil, expiresText: expiresText, lockInfo: lockInfo,
         forceConfirmText: forceConfirmText, searchMatch: searchMatch,
         EVENT_TYPES: EVENT_TYPES, EVENT_ORDER: EVENT_ORDER, eventDetail: eventDetail, eventView: eventView,
-        eventCounts: eventCounts, eventContext: eventContext, cursorSession: cursorSession,
+        eventCounts: eventCounts, eventContext: eventContext, cursorSession: cursorSession, parseCursor: parseCursor,
         safeType: safeType, mergeEvents: mergeEvents, backoffMs: backoffMs,
         sessionLabel: sessionLabel, sessionFile: sessionFile, expandRangeLine: expandRangeLine, findLine: findLine,
         cursorOffset: cursorOffset,
