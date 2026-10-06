@@ -6,7 +6,7 @@ Todo real salvo los bordes:
   devices/<MAC>/output.log, events.jsonl). El "firmware" es un hilo que escribe
   serial: boot, prompt de esp_console, eco de lo que se teclea, respuestas,
   panic.
-- tmux falso: api.subprocess.run → send-keys le escribe a la SimBoard (eco +
+- tmux falso: el subprocess.run de api.py → send-keys le escribe a la SimBoard (eco +
   respuesta), C-t C-r la resetea, devremote --reset la "re-enchufa" (sesión
   nueva).
 - Flash: protocol.serve_connection real en un socket TCP, con esptool falso.
@@ -23,6 +23,7 @@ import json
 import os
 import pathlib
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -348,10 +349,12 @@ class Bench:
     # ----- ciclo de vida -----
 
     def start(self) -> "Bench":
-        self._saved = {"registry": api.registry, "run": api.subprocess.run,
+        self._saved = {"registry": api.registry, "subprocess": api.subprocess,
                        "sid": device_log.make_session_id}
         api.registry = DeviceRegistry(dev_dir=str(self.dev_dir))
-        api.subprocess.run = self.run
+        # Solo el subprocess que ve api.py: api.subprocess es el módulo global, y
+        # pisar su .run rompería todo subprocess del proceso (los tests del CLI).
+        api.subprocess = types.SimpleNamespace(run=self.run, PIPE=subprocess.PIPE)
         orig = self._saved["sid"]
 
         def unique_sid(epoch, pid):
@@ -393,7 +396,7 @@ class Bench:
             self._httpd.server_close()
         if self._saved:
             api.registry = self._saved["registry"]
-            api.subprocess.run = self._saved["run"]
+            api.subprocess = self._saved["subprocess"]
             device_log.make_session_id = self._saved["sid"]
         taglog.reset_default_sinks()
 
