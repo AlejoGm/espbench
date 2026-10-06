@@ -238,18 +238,18 @@ Comunes: `--json`, `--host`, `--profile`, `--expect-panic` (un panic en la venta
 | Código | `error` (JSON) | Causa | ¿Reintentar? |
 |---|---|---|---|
 | 0 | — | ok | |
-| 1 | `unexpected` | error interno | |
+| 1 | `unexpected` / `bad_request` | error interno, o pedido inválido (regex, parámetros) | |
 | 2 | `flash_failed` | esptool falló | según `error_hint` |
 | 3 | `crashed` | panic, boot loop o reinicio en la ventana | |
 | 4 | `timeout` | no apareció `until` | |
-| 5 | `busy` | flasheando/borrando | sí, en segundos |
-| 6 | `locked` / `reservation_lost` | lock o reserva de otro | no |
-| 7 | `not_found` | placa inexistente o desconectada para escritura | |
+| 5 | `busy` | flasheando/borrando, o placa todavía sin MAC (409) | sí, en segundos |
+| 6 | `locked` / `reservation_lost` / `token_mismatch` | lock o reserva de otro (423/409); la reserva ya no es tuya (423); par user/token incorrecto (403) | no |
+| 7 | `not_found` / `device_changed` | placa inexistente o desconectada para escritura; en el tty hay otra placa (`expect_mac`, 409) | no (resolver de nuevo con `/api/devices`) |
 | 8 | `bad_anchor` / `cursor_expired` | anchor o cursor inválido | |
 | 9 | `session_ended` | la placa se desconectó o el proceso se relanzó durante la espera | |
-| 10 | `network` / `auth` | sin conexión o 401 | |
+| 10 | `network` / `auth` / `auth_config` | sin conexión, 401, o el token de la Pi ilegible (500) | |
 
-El string `error` del JSON es el contrato; el exit code es el resumen.
+El string `error` del JSON es el contrato; el exit code es el resumen. Hay varios 409 (`busy`, `device_changed`, `locked`) y varios 423 (`locked`, `reservation_lost`): el cliente los distingue **por el string `error`**, nunca por el status HTTP. Los errores llegan como `{"detail": {"error", "message"}}`.
 
 ### 8.4 Skill para agentes
 
@@ -312,6 +312,10 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - El `until` no depende de `src` ni de `grep` (definen qué se muestra, no el rango).
 - **`echo=<texto>`** en `/log` (para `send --until`): la primera línea lógica que termina con ese texto no cuenta para el match. Es como el server excluye el eco (§8.2), ya que el `until` lo evalúa solo él.
 - `--around`: los bordes son las líneas `rst:` (también en un boot loop, donde no hay eventos `boot` sueltos).
+- **Línea lógica partida entre polls**: el `until` arranca sembrado con la línea lógica abierta en `since` (el `>` anterior y sus `↪`). Si lo de antes de `since` ya matcheaba o era el eco, no vuelve a contar; si no, un `↪` que llega en el poll siguiente (o la respuesta pegada al prompt previo al send) completa la línea y matchea. `match` es la línea lógica entera.
+- **`echo_seen`** en la respuesta: cursor de la línea lógica que se tomó como eco (o `null`). El eco no tiene estado en el server.
+- `grep` y `until=re:`: hasta 256 caracteres, primeros 4096 de cada línea, timeout con el módulo `regex` (sin él, se rechazan los cuantificadores anidados) → `bad_request`.
+- `/events`: `limit` = los **últimos** N (en orden cronológico), `more: true` si quedaron afuera; `order=asc` = los primeros N desde `since` (inclusive: para paginar, descartar los ya vistos).
 - `partial` es siempre `null`: la línea en curso vive en la memoria del proceso del device; sale al archivo a los 150 ms / 1 s.
 - `since` default = `session`; `until_found` = `null` si no se pidió `until`.
 - Una hora sin fecha (`23:50`) posterior a ahora (más de 1 min) es de ayer.
@@ -319,6 +323,18 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - `events` de la respuesta incluye `detail` (motivo del boot, tipo de panic).
 - `/events?since=<tiempo>` compara la hora del evento (cruza sesiones); con otro anchor, (sesión, offset).
 - **Errores**: `{"detail": {"error", "message"}}` en las escrituras y en `/api/board`. `bad_anchor`/`bad_request` 400, `cursor_expired` 410, `not_found` 404, `device_changed` 409, `busy` 409, `locked` (423 en `send`/`command`, 409 en `reserve`), `token_mismatch` 403, `auth` 401.
-- **Reserva**: `ttl_s` default 1800, máximo 7 días; reservar de nuevo renueva. `release` suelta cualquier lock del par (también el del flash), como `unlock`. `force: true` en `send`/`command` saltea una reserva ajena (el dashboard lo manda después de confirmar). `user` y `token` no pueden tener `:`.
+- **Reserva**: `ttl_s` default 1800, máximo 7 días; reservar de nuevo renueva; exige que la placa tenga MAC (si no, 409 `busy`); contra un lock permanente ajeno el mensaje sugiere `unlock`. `release` suelta cualquier lock del par (también el del flash), como `unlock`. `user` y `token` no pueden tener `:`. Un lock vencido se ignora (no se borra al leerlo) y todo leer-decidir-escribir va bajo `flock` (`locks/<tty>.lck`).
+- **`force: true`** (solo el booleano) en `send`/`command` saltea una reserva ajena: lo manda el dashboard después de confirmar; **el CLI nunca lo manda**. Queda `forced: true` y el `user` en el evento. `reserve` no tiene `force`.
+- **`require_reservation: true`** en `send`/`command`: la escritura sale solo si el par tiene la reserva vigente, chequeado en el mismo pedido → 423 `reservation_lost`. Es lo que implementa `reservation_lost` (el server no lo detecta solo).
+- `/command` registra un evento **`command`** (tipo nuevo: command, user, forced?) y devuelve su `cursor`; 409 `busy` si flashea/borra, 502 si tmux falla.
 - **Token**: se lee en cada pedido (API) y en cada conexión (flash): crearlo no requiere reiniciar nada.
 - El evento `send` solo se registra si tmux lo mandó; su cursor se toma antes de mandar.
+
+### 12.1 Notas para el cliente (fase 3)
+
+- **Pollear siempre desde `end`** de la respuesta anterior, y mandar `echo` hasta que llegue `echo_seen` (después, sin `echo`).
+- `session_ended` es terminal **solo si `until_found` es falso**: si el `until` apareció antes de que la sesión terminara, el resultado vale.
+- **Placas USB-Serial-JTAG (S3/C3)**: el reset después del flash re-enumera el USB y arranca una sesión nueva del proceso. `--verify` tiene que seguir en la sesión nueva (`since=session` de la nueva, esperando `state == monitoring`) en vez de salir con exit 9.
+- Las escrituras de un agente reservado van con `require_reservation: true` (→ `reservation_lost`, exit 6) y `expect_mac` (→ `device_changed`).
+- Cada línea de panic es un evento: un `assert failed` seguido de `abort() was called` son 2 `panic`.
+- El texto de los `send` queda en `events.jsonl` y las lecturas no piden token: cualquiera en la red lo ve. No mandar secretos por la consola.

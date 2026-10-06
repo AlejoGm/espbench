@@ -362,6 +362,9 @@ boot ─────► devremote.service ────────────�
   vacío) es "sin token"; si existe y no se puede leer (permisos, directorio, no es
   UTF-8) las escrituras dan 500 `auth_config` y el flash `auth_config`. Las
   comparaciones son en tiempo constante (sobre bytes).
+- **Las lecturas no piden token**: `/api/board/{key}/log|events`, el WebSocket y los
+  `GET` exponen el log entero y el texto de cada `send` (queda en `events.jsonl`)
+  a cualquiera en la red. No mandar secretos por la consola serie.
 - **Errores** de las escrituras (y de `/api/board`): `{"detail": {"error", "message"}}`.
   `error` es el contrato del CLI (spec §8.3): `bad_request`, `busy` (409),
   `device_changed` (409: `expect_mac` no es la MAC del tty), `locked` (423: placa

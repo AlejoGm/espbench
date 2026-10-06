@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.22.9
+**Version:** 0.22.10
 
 ---
 
@@ -152,6 +152,9 @@ it in the browser.
 > ⚠️ The same file is the **flash token** (unless the session runs with `--token`): as soon as it exists, every
 > `.flashcfg.json` without `remote.token` (or with a different one) **stops being able to flash** (`unauthorized`).
 > Set `remote.token` in each project before creating the file. Delete the file (or leave it empty) to go back to no auth.
+>
+> Reads stay open on purpose: the serial log, the events and the text of every console `send` are visible to anyone
+> on the network. Don't type secrets in the serial console.
 
 ---
 
