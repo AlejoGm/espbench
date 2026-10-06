@@ -7,6 +7,10 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 
 `espbench` maneja placas ESP32 enchufadas a una Raspberry Pi (el banco): flash, consola serie, log con hora por línea y eventos por placa. Corre en esta máquina; la Pi la decide la config (`ESPBENCH_HOST` / `~/.config/espbench.json` / `remote.host` del `.flashcfg.json` del proyecto). `espbench <cmd> --help` tiene todas las opciones.
 
+## Configuración (una vez, antes de reservar)
+
+`ESPBENCH_USER` y `ESPBENCH_LOCK_TOKEN` son tu identidad en el banco: **uno por agente**. Dos agentes con el mismo par comparten la reserva y se pisan sin enterarse. Si el entorno no los tiene, pedíselos al usuario (o usá `<usuario>-<tarea>` con un token propio). `espbench who <dev> --json` muestra quién tiene la placa (`mine: true` = vos).
+
 ## Reglas
 
 - **Siempre `--json`.** Cada comando imprime un solo objeto JSON. Decidí por el **exit code** y el string `error`, nunca parseando texto.
@@ -38,10 +42,19 @@ description: Flashear y observar placas ESP32 reales en la Pi de espbench con el
 - En `send` el eco del comando nunca cuenta para el match: `--until status` sobre `send status` espera la respuesta.
 - Un panic o boot loop durante la espera la corta con exit 3. Si el panic es lo que estás probando: `--expect-panic` (exit 0, `reason: "panic"`).
 - `--verify=D` cambia la ventana de asentamiento; `flash`/`reset` con `--until X` además esperan X después del boot.
+- `idle:D` en `send` cuenta desde la primera línea **después del eco**: elegí D mayor que la pausa más larga entre líneas de la respuesta.
 
 ## Anchors (`--since`, `--around`)
 
 `now`, `session` (default), un evento con ordinal (`boot` = el último de la sesión, `boot~1` = el anterior, `panic`, `flash`, `send`), tiempo (`5m`, `30s`, `16:02`, `2026-10-05T16:02`, hora de la Pi) o un cursor `c:<sesión>:<offset>` de una respuesta anterior (`start`, `end`, `cursor`, `boot_cursor`). Un rango no cruza sesiones.
+
+Los anchors de evento (`panic`, `boot~1`) buscan **solo en la sesión actual**. Después de un cambio de sesión (replug, `restart-session`, S3/C3 tras el flash) `--around panic` da `bad_anchor` aunque el panic exista: tomá su cursor de `events`, que cruza sesiones.
+
+```
+$ espbench events mi-board --type panic --limit 1 --json
+{"ok": true, "events": [{"type": "panic", "cursor": "c:20261006_015217_10574001:760", ...}], ...}
+$ espbench logs mi-board --around c:20261006_015217_10574001:760 --max-lines 80 --json
+```
 
 ## Cuidar el contexto
 
@@ -63,13 +76,13 @@ Los logs se comen tokens. Pedí lo justo:
 | 3 | `crashed` | el firmware crasheó: mirá `crash` y `lines`, después `logs --around panic`. Es un bug del firmware, no del banco |
 | 4 | `timeout` | no apareció el `until`: mirá `lines` (¿salió otra cosa?) antes de subir el `--timeout` |
 | 5 | `busy` | la placa está flasheando o sin MAC todavía: reintentá en unos segundos |
-| 6 | `locked`, `reservation_lost`, `token_mismatch` | otra persona tiene la placa, o tu reserva venció. Pará y avisale al usuario: `espbench who <dev> --json` dice quién |
+| 6 | `locked`, `reservation_lost`, `token_mismatch` | `locked`: otra persona tiene la placa: pará y avisale al usuario (`espbench who <dev> --json` dice quién). `reservation_lost`: tu reserva venció o la soltaron; `message` dice cuál. Si venció y nadie la tomó, `espbench reserve <dev> --json` y reintentá la escritura una vez; si la tiene otro, pará y avisá |
 | 7 | `not_found`, `device_changed`, `session_down` | la placa no está o en su puerto hay otra: `espbench ls --json` y resolvé de nuevo. `session_down`: el proceso de la placa en la Pi no corre: `espbench restart-session <dev> --json` y reintentá una vez |
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |
 | 9 | `session_ended` | la placa se desconectó o su proceso se relanzó: `espbench ls --json`; si volvió, seguí desde `--since session` |
 | 10 | `network`, `auth`, `auth_config` | sin conexión con la Pi o token de la API faltante/incorrecto (`ESPBENCH_TOKEN`): avisale al usuario |
 
-Con exit 6 o 10 no reintentes en loop: lo resuelve una persona.
+Salvo el `reserve` de una reserva vencida, con exit 6 o 10 no reintentes en loop: lo resuelve una persona. Si un error llega **después** de escribir, el JSON trae lo que ya salió (`sent`, `cursor`, `job_id`): no repitas la escritura a ciegas, leé desde ese `cursor`.
 
 ## Ejemplos (salidas reales, recortadas)
 
@@ -86,7 +99,7 @@ $ espbench send sim-board panic --until OK --timeout 5s --json        # exit 3
 $ espbench flash sim-board --verify=2s --json
 {"ok": true, "status": "exitoso", "cursor": "c:...:1553",
  "verify": {"ok": true, "boot": "01:52:52.332 > rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)",
-            "window_s": 2.0, "new_session": null, "reason": "for", "lines": [...]}}
+            "boot_cursor": "c:...:1714", "window_s": 2.0, "end": "c:...:2065", "reason": "for"}}
 ```
 
 Formato de línea: `HH:MM:SS.mmm <origen> <texto>`; origen `>` serial, `↪` continuación de la línea serial anterior (un prompt sin `\n`, el eco), `|` línea del server. `date` trae la fecha.

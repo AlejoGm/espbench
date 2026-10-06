@@ -28,9 +28,9 @@ pytest tests/
 | `test_dashboard_js.py` | Corre `tests/js/test_*.js` con `node --test` (lógica del frontend en `espbench.js`); se saltea sin node |
 | `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos; `devremote.service` espera a `time-sync.target` |
 | `test_espbench_lib.py` | `client/espbench_lib.py` contra `benchsim`: config, resolve, esperas (idle, `--for`, patrón, eco en el 2º poll, línea lógica partida, timeout), panic → `crashed` (también como `↪` del prompt y con el evento tarde), `--expect-panic`, `session_ended`, errores del contrato (busy, locked, reservation_lost, token_mismatch, device_changed, auth, auth_config, not_found, bad_anchor, cursor_expired, network), flash + verify (sesión nueva, panic/reboot en la ventana, until), reset; uno con uvicorn |
-| `test_espbench_cli.py` | El CLI por `subprocess` con `--json`: un objeto por comando, exit codes, ciclo reserve → send → logs/events → release, flash `--verify`, salida humana, `install.sh` |
+| `test_espbench_cli.py` | El CLI con `--json` (`main(argv)` en el proceso; por `subprocess` el contrato, `python -m` e `install.sh`): un objeto por comando, exit codes, ciclo reserve → send → logs/events → release, flash `--verify`, argumentos validados antes de escribir, salida humana |
 | `test_deploy.py` | `deploy.py` importa el flash de la lib y su salida no cambió; `flash_one` contra el protocolo real |
-| `benchsim.py` | No es un test: la Pi simulada (API real por un adaptador `http.server` o uvicorn, `SimBoard` con `DeviceManager`/`DeviceLog` reales, tmux y esptool falsos). También se corre a mano: `ESP_BASE=$(mktemp -d) python -m tests.benchsim` |
+| `benchsim.py` | No es un test: la Pi simulada (API real por un adaptador `http.server` o uvicorn, `SimBoard` con `DeviceManager`/`DeviceLog` reales con el hold de la línea parcial en 30 ms, tmux y esptool falsos). También se corre a mano: `ESP_BASE=$(mktemp -d) python -m tests.benchsim` |
 | `test_flash.py`, `test_common.py`, `test_artifact.py`, `test_paths.py`, `test_taglog.py` | Utilidades |
 
 ## Criterio

@@ -519,12 +519,14 @@ espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py �
 - **Crash durante una espera** (panic, boot loop): sale de `/events`, no de los `events` de cada respuesta de
   `/log`. El cursor de un evento es el inicio de su **línea lógica**: un panic que llega como `↪` de un prompt
   `esp> ` queda con el cursor del prompt, anterior al poll que lo trae (y a veces al inicio del rango). Por eso
-  cuenta todo crash con cursor en el rango y todo crash **nuevo** (no estaba al empezar la espera) de la misma
-  sesión. También cubre el evento escrito un instante después de su línea.
+  cuenta todo crash con cursor en el rango y todo `panic` **nuevo** (no estaba en la foto tomada antes de
+  escribir) de la misma sesión. Solo `panic`: un `boot` tiene su propia línea `rst:`, y el boot recién encontrado
+  por su línea (evento atrasado) no es un reinicio. También cubre el evento escrito un instante después de su línea.
+- **`idle:`** en `send`: el eco no es la respuesta; el silencio cuenta desde la primera línea después del eco.
 - **Verify** (`flash`/`reset --verify`): el primer `boot` desde el cursor del flash/command; si la sesión termina
   sin boot (S3/C3: el reset re-enumera el USB y arranca otro proceso), espera la sesión nueva (`/events` →
   `session`) y sigue ahí. Después, una ventana de asentamiento: otro `boot`, un `panic` o un `boot_loop` = `crashed`.
-- **Reserva**: el cliente que reservó guarda un registro local (`~/.cache/espbench/reservations.json`) y desde ahí
+- **Reserva**: el cliente que reservó guarda un registro local por MAC (`~/.cache/espbench/reservations.json`) y desde ahí
   sus escrituras van con `require_reservation` → `reservation_lost` si venció o la soltó otro. `expect_mac` en
   todas las escrituras. `force` nunca.
 - **Config**: flags > env > `~/.config/espbench.json` (perfiles) > `.flashcfg.json`.
