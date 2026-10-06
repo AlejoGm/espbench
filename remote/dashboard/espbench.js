@@ -673,14 +673,15 @@
         return b ? '<span class="badge ' + b[0] + '">' + b[1] + '</span>' : '';
     }
 
-    // "app v1.2.3 · IDF v5.3.2", con lo que haya.
-    function firmwareHtml(device) {
-        var parts = [];
-        if (device.fw_project) parts.push(escapeHtml(device.fw_project));
-        if (device.fw_version) parts.push('<span class="fw-version nowrap">' + escapeHtml(device.fw_version) + '</span>');
-        var main = parts.join(' ');
-        if (device.fw_idf) main += (main ? ' <span class="dim">·</span> ' : '') + '<span class="dim nowrap">IDF ' + escapeHtml(device.fw_idf) + '</span>';
-        return main;
+    // Filas de firmware de la card: versión de la app (el proyecto en el tooltip: suele repetir
+    // el HW) y ESP-IDF, cada una en su fila. [{label, html, title}]
+    function fwRows(device) {
+        var rows = [];
+        var app = device.fw_version || device.fw_project;
+        if (app) rows.push({label: 'App', html: '<span class="fw-version">' + escapeHtml(app) + '</span>',
+                            title: device.fw_project ? 'Proyecto: ' + device.fw_project : ''});
+        if (device.fw_idf) rows.push({label: 'ESP-IDF', html: escapeHtml(device.fw_idf), title: ''});
+        return rows;
     }
 
     function lastFlashHtml(device, now) {
@@ -744,7 +745,7 @@
         healthBadges: healthBadges, healthLevel: healthLevel,
         splitPrefix: splitPrefix, stripAnsi: stripAnsi, lineClass: lineClass, isProblem: isProblem,
         ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer,
-        cardState: cardState, stateBadgeHtml: stateBadgeHtml, firmwareHtml: firmwareHtml,
+        cardState: cardState, stateBadgeHtml: stateBadgeHtml, fwRows: fwRows,
         lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl
     };
 });

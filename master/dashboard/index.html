@@ -78,9 +78,9 @@
         var benchFilter = null;   // nombre del bench elegido, o null = todos
         var lastBenches = [], lastDevices = [], updates = {};   // updates: GET bench/<n>/api/update
 
-        function row(label, value) {
+        function row(label, value, title) {
             return '<div class="card-row"><span class="card-label">' + label + '</span>' +
-                   '<span class="card-value">' + value + '</span></div>';
+                   '<span class="card-value"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + value + '</span></div>';
         }
 
         function healthHtml(device) {
@@ -106,7 +106,6 @@
             var title = device.device_key || device.tty_name;
             var proxied = 'bench/' + encodeURIComponent(device.bench) + '/device.html?tty=' + encodeURIComponent(device.tty_name);
             var direct = device.bench_url + '/device.html?tty=' + encodeURIComponent(device.tty_name);
-            var fw = EB.firmwareHtml(device);
 
             var card = document.createElement('div');
             card.className = 'device-card ' + EB.cardState(device) + (device.mac ? '' : ' card-unknown') +
@@ -128,9 +127,9 @@
                 healthHtml(device) +
                 '<div class="card-body">' +
                     (device.hw_model ? row('HW', esc(device.hw_model)) : '') +
-                    (fw ? row('Firmware', fw) : '') +
+                    EB.fwRows(device).map(function(r) { return row(r.label, r.html, r.title); }).join('') +
                     row('Último flash', EB.lastFlashHtml(device)) +
-                    (device.sn ? row('SN', esc(device.sn)) : '') +
+                    (device.sn && device.sn !== title ? row('SN', esc(device.sn)) : '') +
                     row('Puerto', esc(device.tty_name) + ' <span class="dim">· tcp ' + esc(String(device.port_tcp)) + '</span>') +
                 '</div>' +
                 '<div class="card-footer">' +

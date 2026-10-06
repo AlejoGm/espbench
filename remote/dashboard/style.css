@@ -323,7 +323,7 @@ body.device-page {
 
 .card-value {
     color: #aaa;
-    word-break: break-all;
+    overflow-wrap: anywhere;      /* corta solo lo que no entra (break-all partía "v5.3.2" en dos) */
     font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 

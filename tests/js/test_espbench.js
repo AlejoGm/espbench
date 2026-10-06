@@ -440,11 +440,16 @@ test('summarize: sin MAC solo cuenta en el total; reservas y locks del flash apa
                          who: ['juan → b1 (hasta 16:20)']});
 });
 
-test('stateBadgeHtml / firmwareHtml / lastFlashHtml', () => {
+test('stateBadgeHtml / fwRows / lastFlashHtml', () => {
     assert.equal(EB.stateBadgeHtml({state: 'monitoring'}), '');
     assert.match(EB.stateBadgeHtml({state: 'erasing'}), /BORRANDO/);
-    assert.equal(EB.firmwareHtml({}), '');
-    assert.match(EB.firmwareHtml({fw_project: 'a<b', fw_version: 'v1', fw_idf: 'v5.3'}), /a&lt;b <span[^>]*>v1<\/span>.*IDF v5\.3/);
+    assert.deepEqual(EB.fwRows({}), []);
+    const rows = EB.fwRows({fw_project: 'SFY1-56_1', fw_version: '56.1', fw_idf: 'v5.3.2'});
+    assert.deepEqual(rows.map(r => r.label), ['App', 'ESP-IDF']);
+    assert.match(rows[0].html, />56\.1</);
+    assert.equal(rows[0].title, 'Proyecto: SFY1-56_1');
+    assert.equal(rows[1].html, 'v5.3.2');
+    assert.match(EB.fwRows({fw_project: 'a<b'})[0].html, /a&lt;b/);       // sin versión: el proyecto
     assert.match(EB.lastFlashHtml({}), /nunca/);
     const now = new Date(2026, 9, 5, 16, 0, 0).getTime();
     assert.match(EB.lastFlashHtml({last_flash_ts: '2026-10-05T15:55:00', last_flash_ok: false, last_flash_user: 'ana'}, now),

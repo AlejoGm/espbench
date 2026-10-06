@@ -54,7 +54,6 @@
             }).join('') + '</div>';
         }
 
-        var firmwareText = EB.firmwareHtml;
         var lastFlashHtml = function(device) { return EB.lastFlashHtml(device); };
         var stateBadge = EB.stateBadgeHtml;
 
@@ -105,10 +104,11 @@
                                    device.fw_project, device.fw_version, device.last_flash_user, device.lock_user]
                                   .filter(Boolean).join(' ').toLowerCase();
 
-            var fw = firmwareText(device);
             var hwModelRow = device.hw_model ? row('HW', escapeHtml(device.hw_model)) : '';
-            var fwRow = fw ? row('Firmware', fw) : '';
-            var snRow = device.sn ? row('SN', escapeHtml(device.sn)) : '';
+            var fwRow = EB.fwRows(device).map(function(r) {
+                return row(r.label, r.html, r.title ? ' title="' + escapeHtml(r.title) + '"' : '');
+            }).join('');
+            var snRow = device.sn && device.sn !== title ? row('SN', escapeHtml(device.sn)) : '';   // el título ya es el SN
             var ttyRow = row('Puerto', escapeHtml(device.tty_name) + ' <span class="dim">· tcp ' + escapeHtml(String(device.port_tcp)) + '</span>');
 
             var renameHtml = device.mac

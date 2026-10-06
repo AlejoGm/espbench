@@ -15,7 +15,7 @@ Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests
 ## index.html
 
 - Header con contadores (devices, ok, ocupados, con problemas, caídos, **reservadas** —tooltip con quién y hasta qué hora— y **con lock de flash**) y búsqueda (`/`): filtra por nombre, tty, SN, MAC, firmware, deployer, lock. `@usuario` filtra solo por el usuario del lock (`@` solo: cualquier placa con lock); `lock:reserva` / `lock:flash` (click en cada contador) solo esas; click en el badge de una card pone `@usuario`.
-- Card por device: nombre (renombrable, `PATCH /api/devices/{mac}`), HW, firmware (`proyecto versión · IDF`), último flash relativo con ✓/✗ (de `result.json`) y deployer, SN, puerto.
+- Card por device: nombre (renombrable, `PATCH /api/devices/{mac}`), HW, `App` (versión; el proyecto en el tooltip) y `ESP-IDF` en filas separadas, último flash relativo con ✓/✗ (de `result.json`) y deployer, SN (si no es ya el título), puerto.
 - Franja izquierda de color: verde ok, ámbar reset anormal o lock, rojo panic/boot loop, azul pulsando flasheando/borrando/iniciando, gris sin MAC, rojo apagado caído.
 - Badges de salud (`health`, de `SerialWatch`): **BOOT LOOP**, `⚠ N panics` (tooltip con el último), `↯ <reset anormal>`, `↻ N` reinicios. Se resetean al flashear.
 - Badges de estado: `status` (RUNNING/DOWN) y `state` de la FSM (**FLASHEANDO** / **BORRANDO** / **INICIANDO** / **SIN MAC** / **DESCONECTADO**; `monitoring` no lleva badge).
@@ -40,6 +40,6 @@ Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests
 ## Notas
 
 - Todas las URLs son **relativas** a la página (`api/...`, `device.html`, `style.css`; WebSocket con `EB.wsUrl`). Nada empieza con `/`: bench-master sirve este mismo frontend bajo `/bench/<nombre>/`.
-- `espbench.js` también tiene la lógica de cards (`cardState`, `summarize`, `firmwareHtml`...) que reusa bench-master (`master/dashboard/`).
+- `espbench.js` también tiene la lógica de cards (`cardState`, `summarize`, `fwRows`...) que reusa bench-master (`master/dashboard/`).
 - Autenticación opcional: si la Pi tiene `/opt/esp/api_token`, toda escritura va por `EBAuth.fetch` (si no, da 401). Las lecturas y el WebSocket siguen abiertos. Sin el archivo, la consola serie permite escribirle a cualquier device desde la red interna. El token se guarda en `localStorage` por bench: a través de bench-master todos comparten origen, así que la clave lleva el `/bench/<nombre>/`.
 - Para probarlo sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --uvicorn` (placa simulada con eventos reales; necesita `uvicorn[standard]` o `websockets`: sin eso el WebSocket del vivo falla y el resto anda).
