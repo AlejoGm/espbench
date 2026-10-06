@@ -138,3 +138,11 @@ test('errorText / errorCode: detail string u objeto', () => {
     assert.equal(EB.errorCode({detail: {error: 'locked'}}), 'locked');
     assert.equal(EB.errorCode({detail: 'texto'}), null);
 });
+
+test('withToken: agrega Authorization sin pisar headers ni mutar opts', () => {
+    const opts = {method: 'POST', headers: {'Content-Type': 'application/json'}};
+    const out = EB.withToken(opts, 's3cret');
+    assert.deepEqual(out.headers, {'Content-Type': 'application/json', 'Authorization': 'Bearer s3cret'});
+    assert.deepEqual(opts.headers, {'Content-Type': 'application/json'});
+    assert.deepEqual(EB.withToken(undefined, ''), {});
+});

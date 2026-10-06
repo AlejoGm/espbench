@@ -885,6 +885,36 @@ body.hide-ts .terminal .ln-ts { display: none; }
 }
 .toast-error { background: #2a1515; border-color: #f85149; color: #ffc1bc; }
 
+/* ── Token de la API (auth.js) ── */
+
+.token-bar {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 32px);
+    background: #1c1c1c;
+    border: 1px solid #d29922;
+    color: #e6e6e6;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    z-index: 40;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+}
+.token-bar input {
+    background: #0d0d0d;
+    border: 1px solid #333;
+    color: #e6e6e6;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+
 @media (max-width: 760px) {
     .side-panel { position: fixed; right: 0; top: 0; bottom: 0; width: 88vw; z-index: 15; }
     .filter-input { width: 140px; }

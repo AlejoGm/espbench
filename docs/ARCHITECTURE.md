@@ -337,6 +337,12 @@ boot ─────► devremote.service ────────────�
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 
+- **Token (opcional)**: si existe `/opt/esp/api_token` (`auth.py`, se lee en cada
+  pedido), las escrituras (POST/PATCH) exigen `Authorization: Bearer <token>` →
+  401 `auth`; las lecturas siguen abiertas. Es también el token del flash si la
+  sesión no recibe `--token` (A2): con el archivo creado, un `.flashcfg.json` sin
+  `token` deja de flashear. El dashboard (`auth.js`) lo pide una vez ante un 401 y
+  lo guarda en `localStorage`.
 - **Errores** de las escrituras (y de `/api/board`): `{"detail": {"error", "message"}}`.
   `error` es el contrato del CLI (spec §8.3): `bad_request`, `busy` (409),
   `device_changed` (409: `expect_mac` no es la MAC del tty), `locked` (423: placa
@@ -382,6 +388,7 @@ boot ─────► devremote.service ────────────�
 │   └── jobs/<job_id>/     artefacto extraído + job.log
 ├── devices/unknown-<tty>/ log y eventos de un device sin MAC
 ├── locks/<tty>            "user:token[:expires[:mac]]" (lock del flash / reserva)
+├── api_token              (opcional) token de las escrituras del API y del flash
 └── jobs/, logs/, current_<tty>.elf   esquema anterior / devices sin MAC
 ```
 

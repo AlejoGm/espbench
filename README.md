@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.18.0
+**Version:** 0.19.0
 
 ---
 
@@ -143,6 +143,16 @@ python client/deploy.py
 
 Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and real-time serial logs via WebSocket.
 
+### API token (optional)
+
+Create `/opt/esp/api_token` (one line, the token) to require `Authorization: Bearer <token>` on every write of the
+dashboard API (send, reset, reserve, unlock, rename...). Reads stay open. The dashboard asks for the token once and keeps
+it in the browser.
+
+> ⚠️ The same file is the **flash token** (unless the session runs with `--token`): as soon as it exists, every
+> `.flashcfg.json` without `remote.token` (or with a different one) **stops being able to flash** (`unauthorized`).
+> Set `remote.token` in each project before creating the file. Delete the file (or leave it empty) to go back to no auth.
+
 ---
 
 ## Configuration Reference (`.flashcfg.json`)
@@ -156,7 +166,7 @@ Web UI at `http://<pi-ip>:8080`. Shows all connected devices, firmware info, and
 | `local.monitor` | Open monitor after flash |
 | `remote.host` | Pi IP or hostname |
 | `remote.port` | TCP port (`5000 + device index`) |
-| `remote.token` | Server auth token |
+| `remote.token` | Server auth token (= `/opt/esp/api_token` on the Pi, if it exists) |
 | `remote.lock_user` | Username for device locking |
 | `remote.lock_token` | Token for device locking |
 | `chip` | ESP chip model (`esp32`, `esp32s3`, etc.) |
@@ -226,6 +236,7 @@ espbench/
 │   ├── last_user
 │   └── jobs/<job_id>/            extracted artifact + job.log
 ├── locks/<tty>                   device lock (user:token[:expires[:mac]])
+├── api_token                     (optional) API + flash token
 └── VERSION
 ```
 

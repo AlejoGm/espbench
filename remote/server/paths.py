@@ -56,6 +56,11 @@ def version_file() -> pathlib.Path:
     return esp_base() / "VERSION"
 
 
+def api_token_file() -> pathlib.Path:
+    """Token opcional de la API y del flash (auth.py)."""
+    return esp_base() / "api_token"
+
+
 def run_dir() -> pathlib.Path:
     return esp_base() / "run"
 

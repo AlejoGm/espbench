@@ -26,7 +26,7 @@ import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy
-from server import locks, paths, runstate, taglog
+from server import auth, locks, paths, runstate, taglog
 from server.device import Device, DeviceManager, DeviceState
 from server.device_registry import DevicesFile
 from server.erase import erase_region_interactive
@@ -107,8 +107,9 @@ def main(argv=None):
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _on_signal)
 
+    token_src = "--token" if args.token else ("api_token" if auth.read_token() else "no")
     taglog.info(TAG, f"inicio: tty={args.port_tty} tcp={args.control_port} chip={args.chip} "
-                     f"baud={args.serial_baud}/{args.flash_baud} token={'sí' if args.token else 'no'} "
+                     f"baud={args.serial_baud}/{args.flash_baud} token={token_src} "
                      f"base={paths.esp_base()}")
 
     # MAC con esptool antes de arrancar el monitor: el puerto tiene que estar libre.

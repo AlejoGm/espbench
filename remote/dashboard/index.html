@@ -6,6 +6,7 @@
     <title>espbench</title>
     <link rel="stylesheet" href="/style.css">
     <script src="/espbench.js"></script>
+    <script src="/auth.js"></script>
 </head>
 <body>
     <header class="home-header">
@@ -213,7 +214,7 @@
             var newKey = inp.value.trim();
             if (!newKey) return;
 
-            fetch('/api/devices/' + mac, {
+            EBAuth.fetch('/api/devices/' + mac, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({device_key: newKey})
@@ -223,7 +224,7 @@
                   if (d.ok) {
                       fetchDevices();
                   } else {
-                      alert('Error al renombrar: ' + (d.detail || JSON.stringify(d)));
+                      alert('Error al renombrar: ' + EB.errorText(d, 'error'));
                   }
               })
               .catch(function() { _renamingTty = null; alert('Error de conexión'); });

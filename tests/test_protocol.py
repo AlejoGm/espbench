@@ -138,6 +138,16 @@ def test_unauthorized():
     assert msgs == [{"ok": False, "error": "unauthorized"}]
 
 
+def test_api_token_file_is_the_flash_token(esp_base):
+    """A2: sin --token, el token del flash es /opt/esp/api_token."""
+    (esp_base / "api_token").write_text("s3cret\n")
+    assert request({"action": "upload_and_flash"}) == [{"ok": False, "error": "unauthorized"}]
+    assert request({"action": "xyz", "token": "s3cret"}) == [{"ok": False, "error": "bad_action"}]
+    # --token explícito manda sobre el archivo
+    msgs = request({"action": "xyz", "token": "otro"}, cfg={**CFG, "token": "otro"})
+    assert msgs == [{"ok": False, "error": "bad_action"}]
+
+
 def test_bad_action():
     """deploy.py hace auth_ping con action 'xyz': tiene que recibir bad_action."""
     assert request({"action": "xyz"}) == [{"ok": False, "error": "bad_action"}]

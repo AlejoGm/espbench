@@ -38,7 +38,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import recv_msg, send_msg, sha256_file
-from server import locks, paths, taglog
+from server import auth, locks, paths, taglog
 from server.flash import build_esptool_cmd, find_esptool_cmd, read_mac, run_cmd
 from server.device import Device, DeviceState, InvalidTransition
 
@@ -392,7 +392,8 @@ def handle_control(sock, cfg: dict, mon, device: Device, tools: Optional[FlashTo
 
     try:
         header = recv_msg(sock)
-        authenticate(header, str(cfg.get("token") or ""))
+        # --token manda; si no, el de /opt/esp/api_token (el mismo del API, A2)
+        authenticate(header, str(cfg.get("token") or "") or auth.read_token())
         action = validate_action(header)
         lock_store = LockStore(device.tty_name)
         user = header.get("lock_user", "").strip()

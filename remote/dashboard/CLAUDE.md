@@ -7,6 +7,7 @@ Frontend del dashboard. Lo sirve `server/api.py` (montaje estático de FastAPI, 
 | `index.html` | Grilla de cards, una por device. Pollea `/api/devices` cada 5 s |
 | `device.html` | Log del device en vivo (`/ws/device/{tty}`), historial, consola serie, botones reset/boot/sesión/unlock |
 | `espbench.js` | Lógica sin DOM (`window.EB`): tiempos relativos, badges de salud, prefijo de línea (`splitPrefix`), clasificación de líneas, ANSI → HTML, `LineBuffer`. Tests: `tests/js/test_espbench.js` (node) |
+| `auth.js` | `EBAuth.fetch`: escrituras con el token de la API (`localStorage`); ante un 401 lo pide en una barra inline y reintenta |
 | `style.css` | Tema oscuro, grilla responsive |
 
 Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests/js/`. Las páginas solo arman DOM.
@@ -35,5 +36,5 @@ Lo que se pueda testear sin navegador va en `espbench.js`, con su test en `tests
 ## Notas
 
 - Las llamadas usan el mismo host/puerto que la página (no hay URLs hardcodeadas).
-- No tiene autenticación: es solo para uso en la red interna. Ojo: la consola serie permite escribirle a cualquier device.
+- Autenticación opcional: si la Pi tiene `/opt/esp/api_token`, toda escritura va por `EBAuth.fetch` (si no, da 401). Las lecturas y el WebSocket siguen abiertos. Sin el archivo, la consola serie permite escribirle a cualquier device desde la red interna.
 - Para probarlo sin Pi: levantar `server.api` con devices simulados en `run/<tty>.json` (necesita `uvicorn[standard]`, que es el que trae soporte de WebSocket).

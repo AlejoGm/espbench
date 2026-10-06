@@ -17,11 +17,11 @@ import time
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from fastapi import Body, FastAPI, HTTPException, WebSocket
+from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import events, history, locks, paths, runstate
+from server import auth, events, history, locks, paths, runstate
 from server.device_registry import DeviceRegistry, DevicesFile
 from server.log_streamer import LogStreamer
 
@@ -75,6 +75,14 @@ def _fail(status: int, error: str, message: str):
     """Error con `error` estable (el contrato del CLI, docs/specs/agents-cli.md
     §8.3) y un mensaje para humanos: {"detail": {"error", "message"}}."""
     raise HTTPException(status_code=status, detail={"error": error, "message": message})
+
+
+def _require_auth(authorization) -> None:
+    """Escrituras: si hay /opt/esp/api_token, `Authorization: Bearer <token>`.
+    Llamado directo (tests), el default de Header() no es un str: cuenta como
+    ausente."""
+    if not auth.bearer_ok(authorization if isinstance(authorization, str) else None):
+        _fail(401, "auth", "falta el token de la API (Authorization: Bearer <token>) o es incorrecto")
 
 
 def _check_tty(tty: str) -> None:
@@ -175,10 +183,11 @@ def send_keys_cmds(session: str, text: str, enter: bool) -> list:
 
 
 @app.post("/api/device/{tty}/send")
-async def device_send(tty: str, body: dict = Body(...)):
+async def device_send(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
     """Manda texto por el serial del device (a través del monitor en tmux).
     Devuelve el cursor del log previo al envío (desde ahí se busca la
     respuesta) y lo registra como evento `send`."""
+    _require_auth(authorization)
     _check_tty(tty)
     text = str(body.get("text", ""))
     enter = bool(body.get("enter", True))
@@ -209,9 +218,10 @@ async def device_send(tty: str, body: dict = Body(...)):
 
 
 @app.post("/api/device/{tty}/reserve")
-async def device_reserve(tty: str, body: dict = Body(...)):
+async def device_reserve(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
     """Reserva con vencimiento (docs/specs/agents-cli.md §6), con el mismo par
     lock_user/lock_token que el flash. Volver a reservar renueva el vencimiento."""
+    _require_auth(authorization)
     _check_tty(tty)
     user, token = _creds(body)
     try:
@@ -235,8 +245,9 @@ async def device_reserve(tty: str, body: dict = Body(...)):
 
 
 @app.post("/api/device/{tty}/release")
-async def device_release(tty: str, body: dict = Body(...)):
+async def device_release(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
     """Suelta el lock (reserva o el del flash) con el mismo par, como unlock."""
+    _require_auth(authorization)
     _check_tty(tty)
     user, token = _creds(body)
     lock = locks.read(tty)
@@ -261,7 +272,8 @@ _devices_file = DevicesFile()
 
 
 @app.patch("/api/devices/{mac:path}")
-async def patch_device(mac: str, body: dict = Body(...)):
+async def patch_device(mac: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    _require_auth(authorization)
     device_key = body.get("device_key", "").strip()
     if not device_key:
         raise HTTPException(status_code=400, detail="device_key requerido")
@@ -274,7 +286,8 @@ async def patch_device(mac: str, body: dict = Body(...)):
 
 
 @app.post("/api/device/{tty}/unlock")
-async def device_unlock(tty: str, body: dict = Body(...)):
+async def device_unlock(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    _require_auth(authorization)
     _check_tty(tty)
     lock_user = body.get("lock_user", "").strip()
     lock_token = body.get("lock_token", "").strip()
@@ -295,9 +308,11 @@ _COMMANDS = {
 }
 
 @app.post("/api/device/{tty}/command/{command}")
-async def device_command(tty: str, command: str, body: Optional[dict] = Body(None)):
+async def device_command(tty: str, command: str, body: Optional[dict] = Body(None),
+                         authorization: Optional[str] = Header(None)):
     """Teclas al monitor (reset / bootloader). Body opcional: expect_mac,
     lock_user/lock_token (dueño de la reserva), force."""
+    _require_auth(authorization)
     _check_tty(tty)
     if command not in _COMMANDS:
         _fail(400, "bad_request", f"Comando desconocido: {command}")
@@ -312,7 +327,8 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
 
 
 @app.post("/api/device/{tty}/devremote-reset")
-async def devremote_reset(tty: str):
+async def devremote_reset(tty: str, authorization: Optional[str] = Header(None)):
+    _require_auth(authorization)
     _check_tty(tty)   # ttyUSBN o esp-slotK: devremote resuelve el nombre.
     result = subprocess.run(
         ["/usr/local/bin/devremote", "--reset", tty],

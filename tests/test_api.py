@@ -275,3 +275,45 @@ def test_unlock_validates_tty():
     with pytest.raises(HTTPException) as e:
         run(api.device_unlock("../devices.json", {"lock_user": "a", "lock_token": "b"}))
     assert e.value.status_code == 400
+
+
+# ---------- token (A2) ----------
+
+def set_token(text):
+    paths.api_token_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.api_token_file().write_text(text)
+
+
+def test_without_token_file_writes_are_open(tmux):
+    assert run(api.device_send("ttyUSB0", {"text": "x"}))["ok"]
+
+
+def test_empty_token_file_is_no_token(tmux):
+    set_token("\n")
+    assert run(api.device_send("ttyUSB0", {"text": "x"}))["ok"]
+
+
+@pytest.mark.parametrize("call", [
+    lambda a: api.device_send("ttyUSB0", {"text": "x"}, authorization=a),
+    lambda a: api.device_reserve("ttyUSB0", {"lock_user": "u", "lock_token": "t"}, authorization=a),
+    lambda a: api.device_release("ttyUSB0", {"lock_user": "u", "lock_token": "t"}, authorization=a),
+    lambda a: api.device_unlock("ttyUSB0", {"lock_user": "u", "lock_token": "t"}, authorization=a),
+    lambda a: api.device_command("ttyUSB0", "reset", None, authorization=a),
+    lambda a: api.devremote_reset("ttyUSB0", authorization=a),
+    lambda a: api.patch_device(MAC, {"device_key": "X"}, authorization=a),
+])
+def test_token_required_on_writes(tmux, call, monkeypatch):
+    from server.device_registry import DevicesFile
+    monkeypatch.setattr(api, "_devices_file", DevicesFile(paths.devices_file()))   # el del módulo es de /opt/esp
+    set_token("s3cret\n")
+    for bad in (None, "s3cret", "Bearer otro", "Basic s3cret"):
+        with pytest.raises(HTTPException) as e:
+            run(call(bad))
+        assert err(e) == (401, "auth")
+    assert tmux == []
+    run(call("Bearer s3cret"))          # pasa la auth (lo que haga después no importa acá)
+
+
+def test_token_does_not_close_reads():
+    set_token("s3cret")
+    assert run(api.device_jobs("ttyUSB0")) == []

@@ -237,8 +237,16 @@
         return d && typeof d === 'object' && d.error ? d.error : null;
     }
 
+    // Opciones de fetch con `Authorization: Bearer <token>` (sin token, igual).
+    function withToken(opts, token) {
+        var out = Object.assign({}, opts || {});
+        if (!token) return out;
+        out.headers = Object.assign({}, out.headers || {}, {'Authorization': 'Bearer ' + token});
+        return out;
+    }
+
     return {
-        errorText: errorText, errorCode: errorCode,
+        errorText: errorText, errorCode: errorCode, withToken: withToken,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         isoLocal: isoLocal, sessionStart: sessionStart,
         healthBadges: healthBadges, healthLevel: healthLevel,
