@@ -100,8 +100,8 @@ def test_session_and_now(b):
 
 def test_response_shape_and_server_time(b):
     r = rr(since="panic")
-    assert set(r) == {"date", "lines", "start", "end", "until_found", "match", "partial", "truncated",
-                      "session_ended", "events", "server_time"}
+    assert set(r) == {"date", "lines", "start", "end", "until_found", "match", "echo_seen", "partial",
+                      "truncated", "session_ended", "events", "server_time"}
     assert r["partial"] is None and r["session_ended"] is False
     assert dt.datetime.fromisoformat(r["server_time"]).utcoffset() is not None   # con zona
     assert r["server_time"].startswith("2026-10-05T16:10:00.000")
@@ -254,7 +254,7 @@ def test_pattern_on_clean_logical_line():
     b.add("16:00:01.400", ">", "\x1b[0;32mI (9) app: progreso 10%\r50%\r100% listo\x1b[0m", key="pr")
     r = rr(since="session", until="esp> status")                         # unido > + ↪
     assert r["until_found"] and r["end"] == b.cursor("pr")
-    assert r["match"] == "16:00:01.000 > esp> "
+    assert r["match"] == "16:00:01.000 > esp> status"                   # la línea lógica entera
     r = rr(since="session", until="re:^100% listo$")         # sin ANSI y con el \r aplicado (pisa la línea)
     assert r["until_found"] and r["end"] == f"c:{SID}:{b.size}"
     assert rr(since="session", until="re:progreso")["until_found"] is False   # lo pisó el \r
@@ -270,6 +270,61 @@ def test_echo_does_not_count_for_match():
     assert rr(since="session", until="version")["end"] == b.cursor("v")       # sin echo: el eco
     r = rr(since="session", until="version", echo="version")
     assert r["until_found"] and r["match"] == "16:00:01.300 > version: v2.4.1"
+
+
+def test_logical_line_split_between_polls():
+    """El poll 1 ve `> result=`; el `↪ OK` llega después: el poll 2 desde end lo encuentra."""
+    b = Board()
+    b.add("16:00:01.000", ">", "I (5) app: result=", key="h")
+    r1 = rr(since="session", until="result=OK")
+    assert r1["until_found"] is False
+    b.add("16:00:01.500", "|", "INFO  | protocol       | otro hilo")
+    b.add("16:00:02.000", "↪", "OK", key="c")
+    r2 = rr(since=r1["end"], until="result=OK")
+    assert r2["until_found"] is True and r2["match"] == "16:00:01.000 > I (5) app: result=OK"
+    assert r2["end"] == f"c:{SID}:{b.size}"
+    assert [l.split(" ", 2)[1] for l in r2["lines"]] == ["|", "↪"]      # la salida: solo lo del rango
+
+
+def test_response_as_continuation_of_prompt_before_send():
+    b = Board()
+    b.add("16:00:01.000", ">", "esp> ", key="prompt")
+    before_send = f"c:{SID}:{b.size}"
+    b.add("16:00:05.000", "↪", "OK done", key="c")
+    r = rr(since=before_send, until="OK done")
+    assert r["until_found"] and r["match"] == "16:00:01.000 > esp> OK done"
+
+
+def test_seeded_line_that_already_matched_does_not_match_again():
+    b = Board()
+    b.add("16:00:01.000", ">", "ready ", key="h")
+    end = f"c:{SID}:{b.size}"
+    b.add("16:00:02.000", "↪", "y algo más")
+    assert rr(since=end, until="ready")["until_found"] is False
+
+
+def test_echo_seen_lets_the_client_stop_sending_echo():
+    """Eco en el poll 1, respuesta que termina igual en el poll 2: con echo_seen el
+    cliente deja de mandar echo y la respuesta matchea."""
+    b = Board()
+    b.add("16:00:00.500", ">", "esp> ", key="p")                        # prompt antes del send
+    r1 = rr(since=f"c:{SID}:{b.size}", until="version", echo="version")
+    assert r1["until_found"] is False and r1["echo_seen"] is None       # el eco todavía no llegó
+    b.add("16:00:01.000", "↪", "version", key="e")
+    r2 = rr(since=r1["end"], until="version", echo="version")
+    assert r2["until_found"] is False and r2["echo_seen"] == b.cursor("p")   # `esp> ` + `↪ version`
+    b.add("16:00:01.100", ">", "fw version", key="resp")
+    r3 = rr(since=r2["end"], until="version")                           # ya sin echo
+    assert r3["until_found"] and r3["match"] == "16:00:01.100 > fw version"
+
+
+def test_echo_and_response_in_the_same_poll():
+    b = Board()
+    start = f"c:{SID}:{b.size}"
+    b.add("16:00:01.000", ">", "esp> version", key="e")
+    b.add("16:00:01.100", ">", "app version", key="resp")
+    r = rr(since=start, until="version", echo="version")
+    assert r["echo_seen"] == b.cursor("e") and r["match"] == "16:00:01.100 > app version"
 
 
 def test_until_does_not_cross_sessions(b):

@@ -65,7 +65,7 @@ class RangeError(Exception):
 # ---------- líneas ----------
 
 class Line:
-    __slots__ = ("offset", "end", "date", "time", "origin", "body")
+    __slots__ = ("offset", "end", "date", "time", "origin", "body", "_clean")
 
     def __init__(self, offset: int, raw: bytes):
         self.offset = offset
@@ -78,13 +78,16 @@ class Line:
         else:
             self.date = self.time = self.origin = None
             self.body = text
+        self._clean = None
 
     @property
     def serial(self) -> bool:
         return self.origin in (">", "↪", None)
 
     def clean(self) -> str:
-        return clean_text(self.body)
+        if self._clean is None:
+            self._clean = clean_text(self.body)
+        return self._clean
 
     def ts(self) -> Optional[float]:
         if self.date is None:
@@ -351,17 +354,45 @@ def parse_until(until: str):
 
 class _LogicalMatcher:
     """Evalúa patrones / tipos de línea sobre líneas lógicas: un `>` más sus
-    `↪` (con taglog intercalado). Devuelve la línea donde se completó el match
-    y la línea `>` donde empieza."""
+    `↪` (con taglog intercalado). feed() devuelve (línea `>` donde empieza,
+    texto lógico) cuando matchea.
+
+    Una línea lógica puede quedar partida entre dos polls (el poll 1 vio
+    `> result=`, el `↪ OK` llega después) o la respuesta de un send puede ser
+    la continuación de un prompt anterior al send: seed() arranca con la línea
+    lógica abierta en `start` (el `>` anterior y sus `↪`), ya evaluada."""
+
+    SEED_LINES = 200          # cuánto se mira hacia atrás buscando el `>` abierto
 
     def __init__(self, kind: str, what, skip_at: Optional[int], echo: Optional[str]):
         self.kind, self.what, self.skip_at = kind, what, skip_at
-        self.echo = echo.strip() if echo else None
+        self.echo = echo.strip() if echo and echo.strip() else None
+        self.echo_seen: Optional[int] = None     # offset de la línea lógica del eco
         self.head: Optional[Line] = None
         self.text = ""
-        self.done = False          # la línea lógica actual ya matcheó o es el eco
+        self.done = False          # la línea lógica actual ya matcheó, es el eco o ya se evaluó
 
-    def feed(self, line: Line) -> Optional[Line]:
+    def seed(self, f, start: int) -> None:
+        segs = []
+        for i, line in enumerate(_backward(f, start)):
+            if i >= self.SEED_LINES:
+                return
+            if line.origin == "↪":
+                segs.append(line.body)
+            elif line.serial:
+                self.head, self.text = line, line.body + "".join(reversed(segs))
+                break
+        else:
+            return
+        # Lo de antes de start ya lo vio el poll anterior: si ya era el eco o ya
+        # matcheaba, no vuelve a contar; si no, sigue abierta para los `↪` del rango.
+        text = clean_text(self.text)
+        if self.echo and text.rstrip().endswith(self.echo):
+            self.echo, self.echo_seen, self.done = None, self.head.offset, True
+        else:
+            self.done = self._test(text)
+
+    def feed(self, line: Line):
         if line.origin == "↪":
             if self.head is None:
                 return None
@@ -369,16 +400,16 @@ class _LogicalMatcher:
         elif line.serial:
             self.head, self.text, self.done = line, line.body, False
         else:                      # taglog: línea propia, no corta la serial en curso
-            return line if self.kind == "pattern" and self._test(line.clean()) else None
+            return (line, line.clean()) if self.kind == "pattern" and self._test(line.clean()) else None
         if self.done or self.head.offset == self.skip_at:
             return None
         text = clean_text(self.text)
         if self.echo and text.rstrip().endswith(self.echo):
-            self.echo, self.done = None, True      # el eco del comando no cuenta
+            self.echo, self.echo_seen, self.done = None, self.head.offset, True   # el eco no cuenta
             return None
         if self._test(text):
             self.done = True
-            return self.head
+            return (self.head, text)
         return None
 
     def _test(self, text: str) -> bool:
@@ -482,28 +513,47 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
     with BoardLog(home) as board:
         current = board.current_session()
         evs = board.read_events()
+        until_found = match = matcher = None
         if around:
-            start, stop = _around(board, around, before, after, now, evs)
-            until_found, match_line, end = None, None, stop
+            start, limit = _around(board, around, before, after, now, evs)
         else:
             start = resolve(board, since or "session", now, evs)
-            until_found, match_line, end = None, None, start.sess.size
+            limit = start.sess.size
             if until:
-                # events.jsonl se relee después de fijar el tamaño del log (ver docstring)
-                until_found, match_line, end = _find_until(board, start, until, echo)
+                until_found = False
+                kind, what = parse_until(until)
+                skip_at = start.offset if start.etype == until else None
+                if kind == "event":
+                    # events.jsonl se relee después de fijar el tamaño del log (ver docstring)
+                    hit = _find_event(board, start, what, skip_at)
+                    if hit is not None:
+                        until_found, limit, match_line = True, hit[0], hit[1]
+                        if match_line is not None:
+                            match = match_line.render(None, raw)
+                else:
+                    matcher = _LogicalMatcher(kind, what, skip_at, echo)
+                    matcher.seed(start.sess.f, start.offset)
         sess = start.sess
         out = _Output(max_lines, grep_re, src, raw)
-        for line in _forward(sess.f, start.offset, end):
+        end = limit
+        for line in _forward(sess.f, start.offset, limit):
             out.add(line)
+            hit = matcher.feed(line) if matcher is not None else None
+            if hit is not None:
+                until_found, end = True, line.end
+                match = _render_logical(hit[0], hit[1], raw, line)
+                break
         lines, truncated = out.finish()
+        if match is not None and out.date is not None:
+            match = match if not match.startswith(out.date + " ") else match[len(out.date) + 1:]
         evs_in = [compact_event(e) for e in sort_events(board.read_events())
                   if _event_key(e)[0] == sess.sid and start.offset <= _event_key(e)[1] < end]
-        if until_found and match_line is None and until in events.TYPES:
+        if until_found and until in events.TYPES and not any(e["cursor"] == sess.cursor(end) for e in evs_in):
             evs_in += [compact_event(e) for e in board.read_events()
                        if e.get("type") == until and e.get("cursor") == sess.cursor(end)]
-        match = None
-        if match_line is not None:
-            match = match_line.render(match_line.date if out.date is None else out.date, raw)
+        echo_seen = None
+        if matcher is not None and matcher.echo_seen is not None:
+            echo_seen = sess.cursor(matcher.echo_seen)
         return {
             "date": out.date,
             "lines": lines,
@@ -511,6 +561,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
             "end": sess.cursor(end),
             "until_found": until_found,
             "match": match,
+            "echo_seen": echo_seen,
             "partial": None,
             "truncated": truncated,
             "session_ended": sess.sid != current or not live,
@@ -519,29 +570,30 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
         }
 
 
-def _find_until(board: BoardLog, start: Point, until: str, echo: Optional[str]):
-    """→ (until_found, línea del match o None, fin del rango)."""
+def _render_logical(head: Line, text: str, raw: bool, last: Line) -> str:
+    """El match como línea lógica: hora y origen del `>` y el texto unido (con
+    raw, los segmentos crudos)."""
+    if head is last or head.origin == "|":
+        return head.render(None, raw)
+    if head.date is None:
+        return text
+    return f"{head.date} {head.time} {head.origin} {text}"
+
+
+def _find_event(board: BoardLog, start: Point, etype: str, skip_at: Optional[int]):
+    """Primer evento `etype` desde start → (fin del rango, línea o None)."""
     sess = start.sess
-    kind, what = parse_until(until)
-    skip_at = start.offset if start.etype == until else None
-    if kind == "event":
-        for ev in sort_events(board.read_events()):
-            sid, off = _event_key(ev)
-            if ev.get("type") != what or sid != sess.sid or off < start.offset or off == skip_at:
-                continue
-            if off > sess.size:
-                break                     # después del tamaño fijado: lo ve el próximo poll
-            off = _align_start(sess.f, off)
-            for line in _forward(sess.f, off, sess.size):
-                return True, line, line.end
-            return True, None, off        # apunta a la próxima línea, que todavía no está
-        return False, None, sess.size
-    matcher = _LogicalMatcher(kind, what, skip_at, echo)
-    for line in _forward(sess.f, start.offset, sess.size):
-        head = matcher.feed(line)
-        if head is not None:
-            return True, line if head is line else head, line.end
-    return False, None, sess.size
+    for ev in sort_events(board.read_events()):
+        sid, off = _event_key(ev)
+        if ev.get("type") != etype or sid != sess.sid or off < start.offset or off == skip_at:
+            continue
+        if off > sess.size:
+            return None                   # después del tamaño fijado: lo ve el próximo poll
+        off = _align_start(sess.f, off)
+        for line in _forward(sess.f, off, sess.size):
+            return line.end, line
+        return off, None                  # apunta a la próxima línea, que todavía no está
+    return None
 
 
 def _around(board: BoardLog, anchor: str, before, after, now: float, evs: list):
