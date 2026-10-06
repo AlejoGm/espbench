@@ -51,27 +51,31 @@ def parse_cursor(cursor: Optional[str]):
     return (m.group(1), int(m.group(2))) if m else None
 
 
+def _session_from_header(first: bytes) -> Optional[str]:
+    m = _SESSION_RE.search(first.decode("utf-8", errors="replace"))
+    return m.group(1) if m else None
+
+
 def read_session_id(log_path) -> Optional[str]:
     """session_id del header de un output.log, o None (log viejo o vacío)."""
     try:
         with open(log_path, "rb") as f:
-            first = f.readline(1024).decode("utf-8", errors="replace")
+            return _session_from_header(f.readline(1024))
     except OSError:
         return None
-    m = _SESSION_RE.search(first)
-    return m.group(1) if m else None
 
 
 def log_end_cursor(log_path) -> Optional[str]:
     """Cursor del fin de la última línea completa del log, o None si el log no
-    tiene header de sesión. Lo usa el proceso que no escribe el log (api)."""
-    session = read_session_id(log_path)
-    if session is None:
-        return None
+    tiene header de sesión. Lo usa el proceso que no escribe el log (api).
+    Header y cola se leen del mismo fd: si el log rota en el medio, la sesión y
+    el offset siguen siendo del mismo archivo."""
     try:
         with open(log_path, "rb") as f:
-            end = f.seek(0, os.SEEK_END)
-            pos = end
+            session = _session_from_header(f.readline(1024))
+            if session is None:
+                return None
+            pos = f.seek(0, os.SEEK_END)
             while pos > 0:
                 start = max(0, pos - 8192)
                 f.seek(start)

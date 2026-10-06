@@ -155,8 +155,10 @@ llegaron (el dashboard y `SerialWatch` se quedan con el último segmento).
 2026-10-05 16:02:09.950 ↪ help
 ```
 
-- **Línea parcial**: la línea serial en curso se retiene en memoria hasta el `\n`
-  o hasta 150 ms sin bytes nuevos (un prompt de `esp_console` no termina en `\n`).
+- **Línea parcial**: la línea serial en curso se retiene en memoria hasta el `\n`,
+  hasta 150 ms sin bytes nuevos (un prompt de `esp_console` no termina en `\n`) o
+  hasta 1 s desde su primer byte aunque sigan llegando (`MAX_HOLD`: una línea que
+  gotea no queda retenida, y el desorden de horas queda acotado a ~1 s).
   Lo que llegue después de esa línea sale con `↪`. Así una línea de taglog de otro
   hilo nunca queda pegada a una serial. El flush por tiempo lo hace un hilo por
   `DeviceLog` que duerme en una `Condition` hasta el vencimiento (no hay que
@@ -195,16 +197,21 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 |---|---|---|
 | `session` | `DeviceLog`, al abrir el archivo (cursor = offset 0) | tty, tcp_port, pid |
 | `boot` | `SerialWatch`, en cada línea `rst:` | reason, abnormal |
-| `fw` | `SerialWatch`, solo si cambió (al ver la línea `ESP-IDF:`, o en el siguiente `rst:`) | project, version, idf |
+| `fw` | `SerialWatch`: el primero de cada sesión y cada vez que cambia (al ver la línea `ESP-IDF:`, o en el siguiente `rst:`) | project, version, idf |
 | `panic` | `SerialWatch` | kind, reason, line |
-| `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots |
-| `state` | `Device` (FSM), en cada transición | from, to |
+| `boot_loop` | `SerialWatch` | phase (`start`/`end`), boots; `end`: ts = último boot + ventana, `last_boot` {ts, cursor} |
+| `state` | `Device` (FSM), en cada transición; evento y línea taglog bajo el lock del `DeviceLog` (`atomic()`) | from, to |
 | `flash` | `protocol.py`, al armar la respuesta final | job_id, ok, status, error, user |
 | `send` / `reserve` / `release` | api (fase 2, `events.record`) | |
 
 - **Boot loop**: mientras está activo no se registran los `boot` sueltos (solo
   `start` con el conteo y `end`). El `end` se registra con la primera línea que
-  llega después de que el loop venció, o al empezar un flash/erase.
+  llega después de que el loop venció, con el tick de cada segundo del proceso
+  (`DeviceManager.tick` → `SerialWatch.poll`, así una placa muda también lo
+  cierra y se republica la salud) o al empezar un flash/erase.
+- `panic.kind`: `guru`, `abort`, `brownout`, `task_wdt`, `stack_overflow`, `assert`.
+- Después de `close()` (desconexión) los eventos se descartan: no hay línea a la
+  que apuntar.
 - **Antes de la MAC** los eventos se retienen con su posición en el buffer y se
   recalculan al volcarlo. En la migración `unknown-<tty>` → MAC pasan **solo los
   eventos de la sesión actual** (el provisorio puede tener sesiones de otra placa).

@@ -63,14 +63,14 @@ taglog ──────────→ DeviceLog.write_taglog(level, tag, msg)
 2026-10-05 16:02:05.100 ↪ ...continuación de la línea serial cortada
 ```
 
-- `YYYY-MM-DD HH:MM:SS.mmm` + espacio + origen + espacio (26 bytes fijos). Origen: `>` serial, `|` taglog, `↪` continuación serial.
+- `YYYY-MM-DD HH:MM:SS.mmm` + espacio + origen + espacio: **26 caracteres** (28 bytes con `↪`, que ocupa 3 en UTF-8). Origen: `>` serial, `|` taglog, `↪` continuación serial. **Parsear siempre con la regex de 3.5, nunca cortando por bytes.**
 - Taglog dentro del archivo: el cuerpo es `INFO  | tag            | msg` (sin `|` inicial: el del origen ya está). En stdout/tmux sigue con el formato de siempre.
 - Mensajes taglog multilínea: cada línea con su prefijo `|`.
 - Hora = cuando llega el primer byte de la línea a la Pi.
 
 ### 3.3 Línea serial parcial vs taglog
 
-El monitor lee de a 4 KB (`monitor.py:33`) y un prompt de esp_console no termina en `\n`. La línea serial en curso se **retiene en memoria** (no se escribe) hasta `\n` o hasta **150 ms** sin bytes nuevos; ahí se escribe con su `\n`. Si después llega más de esa misma línea, sale con origen `↪`. Así una línea taglog de otro hilo nunca queda pegada a una serial y toda línea del archivo empieza con prefijo.
+El monitor lee de a 4 KB (`monitor.py:33`) y un prompt de esp_console no termina en `\n`. La línea serial en curso se **retiene en memoria** (no se escribe) hasta `\n`, hasta **150 ms** sin bytes nuevos o hasta **1 s (MAX_HOLD) desde su primer byte** aunque sigan llegando (una línea que gotea, `Connecting.....`); ahí se escribe con su `\n`. Si después llega más de esa misma línea, sale con origen `↪`. Así una línea taglog de otro hilo nunca queda pegada a una serial y toda línea del archivo empieza con prefijo.
 
 ### 3.4 Sesión y cursor
 
@@ -91,7 +91,7 @@ El monitor lee de a 4 KB (`monitor.py:33`) y un prompt de esp_console no termina
 La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones tras un boot arrancan con la hora de fake-hwclock y después NTP salta.
 - `devremote.service`: `After=time-sync.target` + `Wants=time-sync.target`, y habilitar `systemd-time-wait-sync`.
 - Anchors de tiempo **resueltos en el server**; toda respuesta trae `server_time` con zona horaria. `16:02` se interpreta en la zona de la Pi.
-- La búsqueda por tiempo es lineal hacia atrás desde el final (no binaria): tolera saltos y logs sin prefijo.
+- La búsqueda por tiempo es lineal hacia atrás desde el final (no binaria): tolera saltos y logs sin prefijo. Las horas del archivo **no son monótonas**: la de una línea serial es la de su primer byte, pero se escribe al completarse (hasta MAX_HOLD después), así que una línea taglog posterior puede quedar antes. Algoritmo para "primera línea con ts ≥ T": escanear hacia atrás hasta una línea con ts < T − 2 s (SLACK, > MAX_HOLD) o el inicio de la sesión, y desde ahí avanzar hasta la primera con ts ≥ T.
 
 ## 4. Registro de eventos
 
@@ -108,9 +108,9 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 |---|---|---|
 | `session` | device (DeviceLog al abrir) | tty, tcp_port, pid |
 | `boot` | device (SerialWatch, línea `rst:0x…`, que la ROM imprime siempre) | reason, abnormal |
-| `fw` | device (SerialWatch, `app_init`, solo si cambió) | project, version, idf |
+| `fw` | device (SerialWatch, `app_init`): el primero visto en cada sesión + cada vez que cambia | project, version, idf |
 | `panic` | device (SerialWatch) | kind, reason, line |
-| `boot_loop` | device (SerialWatch) | `start`/`end`, boots |
+| `boot_loop` | device (SerialWatch) | phase `start`/`end`, boots; el `end` lleva ts = último boot + ventana y `last_boot` {ts, cursor} |
 | `state` | device (FSM) | from, to (incluye `disconnected`) |
 | `flash` | device (protocol) | job_id, ok, status, error, user |
 | `send` | api | text, enter, user |
@@ -123,7 +123,8 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 ### 4.2 Escritura
 
 - Device: conoce el cursor exacto (lo lleva `DeviceLog`).
-- Api (`send`, `reserve`, `release`): cursor = fin de la última línea completa del `output.log` en ese momento.
+- Api (`send`, `reserve`, `release`): cursor = fin de la última línea completa del `output.log` en ese momento (`events.record` → `log_end_cursor`, que lee header y cola con un solo fd: si el log rota en el medio, sesión y offset son del mismo archivo).
+- `panic.kind`: `guru`, `abort`, `brownout`, `task_wdt`, `stack_overflow`, `assert`.
 - Concurrencia: append `O_APPEND`, **un solo `write()`** por línea (< 4 KB): atómico en Linux para archivos locales. Sin flock.
 - **Sin ids y sin rotación** en v1 (con dos escritores, un rename es una carrera; ~200 B por evento, sin boot loop es chico). Un evento se referencia por tipo+ordinal (`panic~1`) o por su cursor.
 
@@ -139,11 +140,12 @@ La Pi no tiene RTC y `devremote.service` no espera a NTP: las primeras sesiones 
 | `16:02`, `16:02:03`, `2026-10-05T16:02` | primera línea con ts ≥ esa hora (zona de la Pi) |
 | `c:<session>:<offset>` | directo |
 
+- **Ordinales** (`panic~1`): sobre los eventos de ese tipo ordenados por (sesión, offset del cursor), **no** por orden en el archivo: device y api escriben en paralelo y un evento puede quedar escrito después de otro con cursor anterior.
 - `--since P` → el punto P.
 - `--until X` → **el primer X después de `since`**, evaluado en el server. X puede ser un tipo de evento (`boot`, `panic`, `flash`…) o un patrón (`"re:<regex>"`, o cualquier string que no sea un tipo). Si existe → `until_found: true`. Si no → el cliente vuelve a preguntar desde `end`.
 - Solo cliente: `idle:<dur>` (sin bytes nuevos por dur), `--for <dur>` (ventana fija, para firmware que loguea seguido y nunca queda idle), `--timeout <dur>`.
 - `--around E`: desde el `boot` anterior a E hasta el `boot` siguiente (exclusive), o `--before N` / `--after N` líneas.
-- Los patrones matchean el **texto sin prefijo, sin ANSI y después de aplicar `\r`**.
+- Los patrones matchean el **texto sin prefijo, sin ANSI y después de aplicar `\r`**, sobre la **línea lógica**: una línea `>` más sus `↪` siguientes se unen antes de matchear (un prompt partido por el timeout o MAX_HOLD sigue siendo una línea).
 - Un rango no cruza sesiones: si la sesión cambia durante una espera → `session_ended: true` (exit 9).
 
 ## 6. Locks y reservas
@@ -228,7 +230,7 @@ Sin `input()`, sin `rich`, sin `print` (callback de log). HTTP con `urllib` (sin
 
 Comunes: `--json`, `--host`, `--profile`, `--expect-panic` (un panic en la ventana es el resultado buscado: exit 0).
 
-- **`flash`**: el "done" del protocolo hoy sale **dentro** de `monitor_paused`, antes de relanzar el monitor y de `finish_flash` (`protocol.py:433,457`); un `send` inmediato da 409. v2: el server responde después de salir de `monitor_paused`, con el `cursor` del evento `flash`. El CLI igual espera `state == monitoring` antes de verificar.
+- **`flash`**: el "done" del protocolo hoy sale **dentro** de `monitor_paused`, antes de relanzar el monitor y de `finish_flash` (`protocol.py:433,457`); un `send` inmediato da 409. v2: el server responde después de salir de `monitor_paused`, con el `cursor` del evento `flash`. El CLI igual espera `state == monitoring` antes de verificar. Al moverlo, **`record_flash_event` tiene que seguir antes de reanudar el monitor**: si no, el primer `boot` del firmware nuevo puede quedar con un cursor anterior al del `flash` y `--verify` (que busca el boot *después* del flash) no lo ve.
 - **`--verify[=10s]`**: espera el primer `boot` después del flash y además una **ventana de asentamiento** (default 10 s); falla si en la ventana hay otro `boot`, un `panic` o `boot_loop`. Con `--until X` además espera X.
 
 ### 8.3 Exit codes

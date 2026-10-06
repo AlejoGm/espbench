@@ -123,3 +123,26 @@ def test_migrate_keeps_remaining_file_writable_by_api(tmp_path):
     events.append(src, events.make("boot", f"c:{S2}:1"))
     events.migrate_session(src, dst, S2)
     assert src.stat().st_mode & 0o777 == 0o666
+
+
+def test_log_end_cursor_uses_one_fd_across_rotation(monkeypatch, tmp_path):
+    """El log rota (rename + archivo nuevo) entre la lectura del header y la de la
+    cola: sesión y offset tienen que ser del mismo archivo."""
+    log = tmp_path / "output.log"
+    head1 = f"2026-10-05 16:00:00.000 | INFO  | devicelog      | sesión {S1} tty=ttyUSB0\n".encode()
+    log.write_bytes(head1 + b"2026-10-05 16:00:01.000 > corta\n")
+    real_open = open
+    calls = []
+
+    def rotating_open(path, *a, **kw):
+        calls.append(path)
+        if len(calls) == 2:          # segunda apertura: ya rotó
+            log.rename(tmp_path / f"output_{S1}.log")
+            log.write_bytes(f"2026-10-05 17:00:00.000 | INFO  | devicelog      | sesión {S2} tty=ttyUSB0\n"
+                            .encode() + b"x" * 5000 + b"\n")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(events, "open", rotating_open, raising=False)
+    cursor = events.log_end_cursor(log)
+    session, offset = events.parse_cursor(cursor)
+    assert (session, offset) == (S1, len(head1) + len(b"2026-10-05 16:00:01.000 > corta\n"))
