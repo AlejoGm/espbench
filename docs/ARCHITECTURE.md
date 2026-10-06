@@ -465,4 +465,10 @@ los offsets de los cursores caigan en la línea correcta con `esp_idf_monitor` r
 (sus `\r\n`, colores y líneas decodificadas de backtrace), que el prompt de
 `esp_console` salga a los 150 ms y el eco con `↪`, que el `boot` coincida con cada
 reset real, y que tras un reboot sin red `devremote.service` arranque igual
-(drop-in de 90 s a `systemd-time-wait-sync`) y con red espere a NTP.
+(drop-in de 90 s a `systemd-time-wait-sync`) y con red espere a NTP. De la API
+(fase 2): que la concurrencia de eventos device + api deje líneas válidas en
+`events.jsonl` (sfypi escribiendo un archivo creado por root), que una reserva
+sobreviva un replug real (y se borre si en el puerto quedó otra placa), que el
+`send` con `until` vea la respuesta y no el eco de `esp_console`, que el
+`--since flash --until boot` encuentre el primer `rst:` del firmware nuevo, y que
+el dashboard pida el token y siga escribiendo con `/opt/esp/api_token` creado.

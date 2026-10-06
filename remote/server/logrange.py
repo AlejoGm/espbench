@@ -434,7 +434,8 @@ class _Output:
         if self.count <= self.max:
             return render(self.head) + render(self.tail), False
         omitted = self.count - len(self.head) - len(self.tail)
-        return render(self.head) + [f"… {omitted} líneas omitidas …"] + render(self.tail), True
+        marker = "… 1 línea omitida …" if omitted == 1 else f"… {omitted} líneas omitidas …"
+        return render(self.head) + [marker] + render(self.tail), True
 
 
 def _server_time(now: float) -> str:

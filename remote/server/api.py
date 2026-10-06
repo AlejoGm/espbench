@@ -372,7 +372,10 @@ async def device_command(tty: str, command: str, body: Optional[dict] = Body(Non
     _check_reservation(tty, body)
     session = f"esp32_{tty}"
     for key in _COMMANDS[command]:
-        subprocess.run(["tmux", "send-keys", "-t", session, key], check=False)
+        try:
+            subprocess.run(["tmux", "send-keys", "-t", session, key], check=False)
+        except FileNotFoundError:
+            _fail(502, "unexpected", "tmux no disponible")
         await asyncio.sleep(0.05)
     return {"ok": True, "command": command, "session": session}
 

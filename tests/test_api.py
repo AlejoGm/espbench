@@ -86,13 +86,16 @@ def test_history_routes_are_not_shadowed_by_device_path_route():
         assert paths_in_order.index(p) < catch_all
 
 
-def test_send_without_tmux_is_502(monkeypatch):
+def test_send_and_command_without_tmux_are_502(monkeypatch):
     def no_tmux(cmd, **kw):
         raise FileNotFoundError("tmux")
     monkeypatch.setattr(api.subprocess, "run", no_tmux)
     with pytest.raises(HTTPException) as e:
         run(api.device_send("ttyUSB0", {"text": "x"}))
     assert e.value.status_code == 502
+    with pytest.raises(HTTPException) as e:
+        run(api.device_command("ttyUSB0", "reset"))
+    assert e.value.detail["error"] == "unexpected" and e.value.status_code == 502
 
 
 def test_static_files_are_revalidated():

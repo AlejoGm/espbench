@@ -301,3 +301,24 @@ Ninguno. A1–A4 confirmados por Alejo (2026-10-05):
 - **A2** — token del flash = token de la API (`/opt/esp/api_token`). Avisar en el README: los `.flashcfg` sin `token` dejan de flashear cuando se crea el archivo.
 - **A3** — reservas con vencimiento bloquean `send`/`reset` ajenos (423); locks del flash no.
 - **A4** — una sola Pi por comando; perfiles en `~/.config/espbench.json`.
+
+## 12. Fase 2 (API): decisiones de implementación
+
+Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.py`, `auth.py`, `api.py`):
+
+- **Anchors de evento solo en la sesión actual**, ordinales incluidos (`boot~3` no salta a una sesión anterior). A una sesión anterior se llega con un cursor sacado de `/events`.
+- **`until boot|panic` se busca en las líneas** (`serial_watch.line_kind`, la misma detección de `SerialWatch`), no en `events.jsonl`: el evento se escribe un instante después de su línea, y un poll que viera la línea sin el evento seguiría desde un `end` posterior y no lo encontraría nunca. Los demás tipos salen de `events.jsonl`, leído después de fijar el tamaño del log.
+- `--since T --until T` (mismo tipo): el siguiente, no el mismo.
+- El `until` no depende de `src` ni de `grep` (definen qué se muestra, no el rango).
+- **`echo=<texto>`** en `/log` (para `send --until`): la primera línea lógica que termina con ese texto no cuenta para el match. Es como el server excluye el eco (§8.2), ya que el `until` lo evalúa solo él.
+- `--around`: los bordes son las líneas `rst:` (también en un boot loop, donde no hay eventos `boot` sueltos).
+- `partial` es siempre `null`: la línea en curso vive en la memoria del proceso del device; sale al archivo a los 150 ms / 1 s.
+- `since` default = `session`; `until_found` = `null` si no se pidió `until`.
+- Una hora sin fecha (`23:50`) posterior a ahora (más de 1 min) es de ayer.
+- `max_lines` < 100: la cabeza es `max_lines // 2`. Una línea de otra fecha que `date` lleva la fecha completa.
+- `events` de la respuesta incluye `detail` (motivo del boot, tipo de panic).
+- `/events?since=<tiempo>` compara la hora del evento (cruza sesiones); con otro anchor, (sesión, offset).
+- **Errores**: `{"detail": {"error", "message"}}` en las escrituras y en `/api/board`. `bad_anchor`/`bad_request` 400, `cursor_expired` 410, `not_found` 404, `device_changed` 409, `busy` 409, `locked` (423 en `send`/`command`, 409 en `reserve`), `token_mismatch` 403, `auth` 401.
+- **Reserva**: `ttl_s` default 1800, máximo 7 días; reservar de nuevo renueva. `release` suelta cualquier lock del par (también el del flash), como `unlock`. `force: true` en `send`/`command` saltea una reserva ajena (el dashboard lo manda después de confirmar). `user` y `token` no pueden tener `:`.
+- **Token**: se lee en cada pedido (API) y en cada conexión (flash): crearlo no requiere reiniciar nada.
+- El evento `send` solo se registra si tmux lo mandó; su cursor se toma antes de mandar.
