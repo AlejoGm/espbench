@@ -338,3 +338,30 @@ Donde la spec no alcanzaba (implementado en `remote/server/logrange.py`, `locks.
 - Las escrituras de un agente reservado van con `require_reservation: true` (→ `reservation_lost`, exit 6) y `expect_mac` (→ `device_changed`).
 - Cada línea de panic es un evento: un `assert failed` seguido de `abort() was called` son 2 `panic`.
 - El texto de los `send` queda en `events.jsonl` y las lecturas no piden token: cualquiera en la red lo ve. No mandar secretos por la consola.
+
+## 12.2 Fase 3 (cliente): decisiones de implementación
+
+Implementado en `client/espbench_lib.py`, `client/espbench.py`, `client/agent/SKILL.md`. Tests contra `tests/benchsim.py` (Pi simulada: API real + `DeviceManager`/`DeviceLog` reales, tmux y esptool falsos).
+
+**Contrato real vs spec** (manda el server):
+- El flash (TCP) no habla el contrato de la API: `_FLASH_ERRORS` traduce `unauthorized`→`auth`, `auth_config`, `device_locked`→`locked`, `token_mismatch`, `device_busy`→`busy`, `device_changed`, `lock_credentials_required`→`bad_request`; esptool con rc≠0 y `exception`/`esptool_not_found`/`flash_critical_error` → `flash_failed` (con `error_hint` y `log_tail`); socket caído → `network`.
+- Respuestas sin `{"detail": {"error"}}` (`/api/device/{tty}` viejo, validación 422 de FastAPI) se traducen por status: 400/422 `bad_request`, 401 `auth`, 403 `token_mismatch`, 404 `not_found`, 409 `busy`, 410 `cursor_expired`, 423 `locked`; el resto `unexpected`.
+- **Fix en el server** (v0.22.12): el `cursor` de `/command` se tomaba después de mandar las teclas; el `rst:` de un reset sale en milisegundos y quedaba antes, así que `reset --verify` no lo veía. Ahora se toma antes, como en `send`.
+- `ESPBENCH_LOCK_TOKEN` se agrega a la precedencia de §8.1 (faltaba el token del par), más `ESPBENCH_PROFILE`, `ESPBENCH_CONFIG` (ruta del archivo de perfiles) y `ESPBENCH_STATE_DIR`.
+
+**Decisiones**:
+- **`require_reservation`**: el CLI necesita saber si "está reservado". `reserve` guarda un registro local (`~/.cache/espbench/reservations.json`, por host + MAC) y `release` lo borra; mientras existe, `send`/`command` van con `require_reservation: true`. Así una reserva vencida o soltada por otro da `reservation_lost` en la próxima escritura. El flash (TCP, sin ese campo) lo chequea antes contra `/api/devices` (`lock_user` propio y `lock_expires`).
+- **Crash durante una espera**: sale de `/events` (`type=panic,boot_loop`), no de los `events` de cada `/log`. Encontrado con la placa simulada: el cursor de un evento es el inicio de su **línea lógica**, y un panic que llega como `↪` del prompt `esp> ` (que ya salió solo a los 150 ms) queda con el cursor del prompt: antes del `start` del poll que lo trae, y a veces antes del inicio del rango. Regla: cuenta un crash con cursor en `[start, end)` o uno **nuevo** (no estaba en la foto tomada al empezar la espera) de la misma sesión con cursor < `end`. Se consulta en los polls con actividad (este o el anterior) y una vez al cerrar (evento escrito después del último poll).
+- Un crash en el rango corta la espera con `crashed` aunque el `until` aparezca más adelante en el mismo poll; con `until=panic|boot_loop` no es crash. `--expect-panic` vale solo para `panic` (un `boot_loop` o el reboot de la ventana siguen siendo `crashed`).
+- **`idle:D`** = sin líneas nuevas (el eco cuenta). En `send` recién arranca con la primera línea nueva (una placa que tarda no da un rango vacío); en `logs`, desde el primer poll. Sin `--timeout`, 30 s.
+- **`--for D`**: solo, ventana fija que termina ok; con `--until`, es el tope (no encontrado = `timeout`).
+- Las líneas se acumulan entre polls con el mismo cabeza + cola de §7.3 (`max_lines`); una línea de un poll con otra `date` lleva la fecha.
+- **`--verify[=D]`**: (1) primer `boot` desde el cursor del flash/command; si llega `session_ended` sin boot, espera a que `/events` informe otra `session` y sigue con `since=c:<nueva>:0` (S3/C3); (2) ventana D con `fail_on = panic, boot_loop, boot` (`boot` → mensaje "se reinició en la ventana"); `session_ended` en la ventana → exit 9 (no se distingue un replug de un reset); (3) con `--until X`, X desde el boot. Timeout del boot y del until: `--timeout` (default 60 s). Si el server no devuelve cursor, se usa un `now` tomado antes de escribir. `flash --until X` sin `--verify` = verify con ventana 0. Después del flash, antes de verificar, espera `state == monitoring` por MAC (hasta 10 s; si no llega, verifica igual).
+- `reset --bootloader` no se combina con `--verify`/`--until` (`bad_request`): en download mode no hay boot que esperar.
+- `resolve`: una placa que no está en `/api/devices` (desconectada) se lee igual por el nombre (la Pi la resuelve en `/api/board/{key}`); escribir exige que esté viva → `not_found`. La clave de `/api/board` es la MAC sin separadores. `ls` sin `--all` oculta las placas sin MAC.
+- hw_model del build distinto del de la placa: `warnings` en la respuesta, no bloquea (deploy preguntaba y/N; sin TTY seguía).
+- Comunes antes o después del subcomando. Sin `--token` (va por env/perfil/`.flashcfg.json`). `restart-session` = `POST /devremote-reset` (pide token). `events --all` recorre las placas de `/api/devices`.
+- De `deploy.py` pasan a la lib `collect_artifact` (solo el camino del build dir), `flash_one` y `hw_model_from_build`; deploy envuelve los dos primeros con sus prints (salida idéntica) y conserva el modo custom.
+- Python del sistema en la Mac del dev: tiene uvicorn 0.39 (el test con uvicorn corre en los dos intérpretes).
+
+**Para la Pi** (fase 5): eco real de `esp_console` en `send --until`; `flash --verify` en una S3/C3 (tiempo de re-enumeración, tty que cambia, que el boot caiga en la sesión nueva); un panic real con el backtrace decodificado de `esp_idf_monitor`; carga de los polls (hasta 2 pedidos por poll con actividad) con varios agentes.

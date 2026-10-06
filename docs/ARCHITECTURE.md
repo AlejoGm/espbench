@@ -8,6 +8,7 @@ monitorea y muestra todo en un dashboard web.
 Máquina del developer                Raspberry Pi
 ─────────────────────                ─────────────────────────────────────────────
 client/deploy.py ──TCP 5000+K──►  remote_esp32.py   (un proceso por device, en tmux)
+client/espbench (CLI agentes) ─┘
                                     ├─ DeviceManager → TtyPort + Device (FSM) + DeviceLog
                                     ├─ EspMonitor     (esp_idf_monitor en un PTY)
                                     └─ control_server (protocol.py)
@@ -16,7 +17,7 @@ client/deploy.py ──TCP 5000+K──►  remote_esp32.py   (un proceso por de
                                   /opt/esp/devices/<mac>/   log, events.jsonl, jobs, .elf
                                   /opt/esp/run/<tty>.json   estado runtime
                                             │ lee
-Browser ◄──HTTP/WS 8080──────────  api.py (dashboard, proceso aparte)
+Browser, espbench ◄──HTTP/WS 8080─  api.py (dashboard, proceso aparte)
 ```
 
 ---
@@ -491,4 +492,41 @@ reset real, y que tras un reboot sin red `devremote.service` arranque igual
 sobreviva un replug real (y se borre si en el puerto quedó otra placa), que el
 `send` con `until` vea la respuesta y no el eco de `esp_console`, que el
 `--since flash --until boot` encuentre el primer `rst:` del firmware nuevo, y que
-el dashboard pida el token y siga escribiendo con `/opt/esp/api_token` creado.
+el dashboard pida el token y siga escribiendo con `/opt/esp/api_token` creado. Del cliente (fase 3): que
+`send --until` vea la respuesta de `esp_console` real y no el eco, que `flash --verify` siga a la sesión nueva
+en una S3/C3 (tiempo de re-enumeración, tty que cambia) y encuentre su boot, que un panic real (con el
+backtrace decodificado por `esp_idf_monitor`) corte la espera con `crashed`, y la carga de los polls (hasta dos
+pedidos por poll con actividad) con varios agentes contra la misma Pi.
+
+---
+
+## 11. Cliente (`client/`)
+
+Dos entradas sobre una misma librería:
+
+```
+deploy.py (humanos: input(), rich, modo custom) ─┐
+espbench.py (CLI de agentes: --json, exit codes) ─┴─► espbench_lib.py ─┬─ HTTP 8080: /api/devices, /api/board/{key}/log|events,
+                                                                         │             /api/device/{tty}/send|command|reserve|release
+                                                                         └─ TCP 5000+K: flash (collect_artifact + flash_one)
+```
+
+- **El contrato es el string `error`** (spec §8.3): cada error de la API, del protocolo del flash o de red se
+  traduce a uno, y de ahí sale el exit code. El cliente nunca distingue por status HTTP (hay varios 409 y 423).
+- **La espera la lleva el cliente, el `until` lo evalúa el server** (D6): `read_range` hace polls cada 0,3 s
+  desde el `end` anterior, manda `echo` hasta recibir `echo_seen`, y resuelve en el cliente `idle:`, `--for` y
+  `--timeout`.
+- **Crash durante una espera** (panic, boot loop): sale de `/events`, no de los `events` de cada respuesta de
+  `/log`. El cursor de un evento es el inicio de su **línea lógica**: un panic que llega como `↪` de un prompt
+  `esp> ` queda con el cursor del prompt, anterior al poll que lo trae (y a veces al inicio del rango). Por eso
+  cuenta todo crash con cursor en el rango y todo crash **nuevo** (no estaba al empezar la espera) de la misma
+  sesión. También cubre el evento escrito un instante después de su línea.
+- **Verify** (`flash`/`reset --verify`): el primer `boot` desde el cursor del flash/command; si la sesión termina
+  sin boot (S3/C3: el reset re-enumera el USB y arranca otro proceso), espera la sesión nueva (`/events` →
+  `session`) y sigue ahí. Después, una ventana de asentamiento: otro `boot`, un `panic` o un `boot_loop` = `crashed`.
+- **Reserva**: el cliente que reservó guarda un registro local (`~/.cache/espbench/reservations.json`) y desde ahí
+  sus escrituras van con `require_reservation` → `reservation_lost` si venció o la soltó otro. `expect_mac` en
+  todas las escrituras. `force` nunca.
+- **Config**: flags > env > `~/.config/espbench.json` (perfiles) > `.flashcfg.json`.
+
+Tests: contra `tests/benchsim.py`, una Pi simulada con la API real y `DeviceManager`/`DeviceLog` reales (§10).

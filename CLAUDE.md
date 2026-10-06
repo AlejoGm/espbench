@@ -9,7 +9,7 @@ Arquitectura completa: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Leerlo ante
 ```
 espbench/
 ├── common.py          # Compartido cliente/server: framing TCP, SHA256, MAC↔SN
-├── client/            # Máquina del developer: build + flash (deploy.py)
+├── client/            # Máquina del developer: deploy.py (humanos), CLI espbench + espbench_lib (agentes), agent/SKILL.md
 ├── remote/            # Raspberry Pi
 │   ├── server/        # Un proceso por device (remote_esp32.py) + backend del dashboard (api.py)
 │   ├── dashboard/     # Frontend del dashboard (HTML/CSS/JS, sin build)

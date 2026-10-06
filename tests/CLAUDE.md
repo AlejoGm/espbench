@@ -27,10 +27,15 @@ pytest tests/
 | `test_log_streamer.py` | WebSocket: contenido inicial, stream, rotación, `log_path` desde el estado runtime |
 | `test_dashboard_js.py` | Corre `tests/js/test_*.js` con `node --test` (lógica del frontend en `espbench.js`); se saltea sin node |
 | `test_infra.py` | Scripts bash reales (`espbench-name`, `esp32_tmux.sh`, `devremote`) con `tmux`/`udevadm`/`pkill` falsos; `devremote.service` espera a `time-sync.target` |
+| `test_espbench_lib.py` | `client/espbench_lib.py` contra `benchsim`: config, resolve, esperas (idle, `--for`, patrón, eco en el 2º poll, línea lógica partida, timeout), panic → `crashed` (también como `↪` del prompt y con el evento tarde), `--expect-panic`, `session_ended`, errores del contrato (busy, locked, reservation_lost, token_mismatch, device_changed, auth, auth_config, not_found, bad_anchor, cursor_expired, network), flash + verify (sesión nueva, panic/reboot en la ventana, until), reset; uno con uvicorn |
+| `test_espbench_cli.py` | El CLI por `subprocess` con `--json`: un objeto por comando, exit codes, ciclo reserve → send → logs/events → release, flash `--verify`, salida humana, `install.sh` |
+| `test_deploy.py` | `deploy.py` importa el flash de la lib y su salida no cambió; `flash_one` contra el protocolo real |
+| `benchsim.py` | No es un test: la Pi simulada (API real por un adaptador `http.server` o uvicorn, `SimBoard` con `DeviceManager`/`DeviceLog` reales, tmux y esptool falsos). También se corre a mano: `ESP_BASE=$(mktemp -d) python -m tests.benchsim` |
 | `test_flash.py`, `test_common.py`, `test_artifact.py`, `test_paths.py`, `test_taglog.py` | Utilidades |
 
 ## Criterio
 
 - Cada bug que se arregla viene con un test que **falla con el código anterior**. Hay que comprobarlo: un test que pasa en los dos casos no prueba nada.
 - Los fakes van solo en los bordes (esptool, PTY, socket, tmux). El modelo se usa real.
+- `benchsim` pisa `api.subprocess` con un namespace propio, nunca `subprocess.run` global (`api.subprocess` **es** el módulo `subprocess`: pisar su `.run` rompe todo subprocess del proceso).
 - Lo que no se puede probar acá (udev, systemd, esptool/monitor contra hardware) está en `docs/ARCHITECTURE.md` §10.
