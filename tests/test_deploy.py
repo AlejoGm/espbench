@@ -102,3 +102,32 @@ def test_client_works_without_fcntl(tmp_path, monkeypatch, capsys):
         assert "win" in json.dumps(json.loads((tmp_path / "st" / "reservations.json").read_text()))
         assert cli.main(["release", "sim-board", "--json"]) == 0
         assert json.loads((tmp_path / "st" / "reservations.json").read_text()) == {}
+
+
+def _template(tmp_path, sdkconfig=None):
+    if sdkconfig is not None:
+        (tmp_path / "sdkconfig").write_text(sdkconfig, encoding="utf-8")
+    cfg_path = tmp_path / ".flashcfg.json"
+    try:
+        deploy._generate_template(cfg_path)
+    except SystemExit:
+        pass
+    return json.loads(cfg_path.read_text(encoding="utf-8"))
+
+
+def test_template_encrypt_on_when_sdkconfig_has_flash_encryption(tmp_path):
+    assert _template(tmp_path, "CONFIG_SECURE_FLASH_ENC_ENABLED=y\n")["encrypt"] is True
+
+
+def test_template_encrypt_off_when_sdkconfig_has_it_disabled(tmp_path):
+    assert _template(tmp_path, "# CONFIG_SECURE_FLASH_ENC_ENABLED is not set\n")["encrypt"] is False
+
+
+def test_template_encrypt_without_sdkconfig_matches_missing_key_default(tmp_path):
+    # main() lee cfg.get("encrypt", True): el template no puede decir otra cosa que el default
+    assert _template(tmp_path)["encrypt"] is True
+
+
+def test_template_does_not_mutate_the_constant(tmp_path):
+    _template(tmp_path, "# CONFIG_SECURE_FLASH_ENC_ENABLED is not set\n")
+    assert deploy._TEMPLATE_CFG["encrypt"] is True

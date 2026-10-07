@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.46.2
+**Version:** 0.46.3
 
 ---
 
@@ -349,7 +349,7 @@ Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §12](docs/
 | `remote.lock_token` | Token for device locking (may contain `:` again: it is escaped in the lock file) |
 | `chip` | ESP chip model (`esp32`, `esp32s3`, etc.) |
 | `flash_baud` | Flash baud rate |
-| `encrypt` | Flash encryption enabled |
+| `encrypt` | Flash encryption enabled. The generated template takes it from `CONFIG_SECURE_FLASH_ENC_ENABLED` in `sdkconfig` |
 | `erase` | Erase flash before writing |
 
 ---

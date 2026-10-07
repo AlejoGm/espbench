@@ -448,7 +448,7 @@ _TEMPLATE_CFG = {
     "mode": "auto",
     "chip": "auto",
     "flash_baud": 921600,
-    "encrypt": False,
+    "encrypt": True,
     "erase": False,
     "paths": {
         "project_root": ".",
@@ -465,8 +465,26 @@ _TEMPLATE_CFG = {
     ]
 }
 
+def _encrypt_from_sdkconfig(project_root: pathlib.Path):
+    """`encrypt` segun CONFIG_SECURE_FLASH_ENC_ENABLED del sdkconfig, o None si no hay sdkconfig.
+
+    El template decia `False` fijo, y un write_flash sin --encrypt deja sin bootear a una placa con la
+    clave quemada. Mismo dato que usa idf.py para elegir entre flash y encrypted-flash."""
+    sdk = project_root / "sdkconfig"
+    if not sdk.is_file():
+        return None
+    return "CONFIG_SECURE_FLASH_ENC_ENABLED=y" in sdk.read_text(encoding="utf-8", errors="replace").splitlines()
+
+
 def _generate_template(path: pathlib.Path):
-    path.write_text(json.dumps(_TEMPLATE_CFG, indent=2, ensure_ascii=False), encoding="utf-8")
+    cfg = json.loads(json.dumps(_TEMPLATE_CFG))
+    encrypt = _encrypt_from_sdkconfig(path.resolve().parent)
+    if encrypt is None:
+        print("[CONFIG] Sin sdkconfig: encrypt=true, el mismo default que sin la clave")
+    else:
+        cfg["encrypt"] = encrypt
+        print(f"[CONFIG] encrypt={str(encrypt).lower()}, leido de CONFIG_SECURE_FLASH_ENC_ENABLED del sdkconfig")
+    path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"[CONFIG] Template generado en {path}")
     print("[CONFIG] Editá los valores y volvé a ejecutar.")
     sys.exit(0)
