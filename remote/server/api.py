@@ -476,6 +476,7 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     - `note`: texto corto (aviso, no lock); "" o null la borra. Evento `note`.
     - `props` {cat: valor | [valores] | null}, `props_add` / `props_remove` {cat: valor(es)}:
       valores del catálogo (GET /api/properties); quitar vale para cualquiera. Evento `props`.
+    - `ack: true`: da por vistos los panics y reinicios hasta ahora (ack_at, ack_by). Evento `ack`.
     `user`: quién (va en note_by y en los eventos); sin él, `<via>@<host>` (el dashboard
     manda via "dashboard") o el host del pedido."""
     _require_auth(authorization)
@@ -486,8 +487,9 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
     wants_key = "device_key" in body
     wants_note = "note" in body
     wants_props = any(k in body for k in ("props", "props_add", "props_remove"))
-    if not (wants_key or wants_note or wants_props):
-        _fail(400, "bad_request", "nada para cambiar: device_key, note, props, props_add o props_remove")
+    wants_ack = body.get("ack") is True
+    if not (wants_key or wants_note or wants_props or wants_ack):
+        _fail(400, "bad_request", "nada para cambiar: device_key, note, props, props_add, props_remove o ack")
     device_key = str(body.get("device_key") or "").strip()
     if wants_key and not device_key:
         _fail(400, "bad_request", "device_key requerido")
@@ -507,10 +509,11 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
         except Exception as e:
             _fail(500, "unexpected", str(e))
     out = {"ok": True}
-    if wants_note or wants_props:
+    if wants_note or wants_props or wants_ack:
         try:
             r = _devices_file.set_meta(mac_norm, user, note=note, props=body.get("props"),
-                                       props_add=body.get("props_add"), props_remove=body.get("props_remove"))
+                                       props_add=body.get("props_add"), props_remove=body.get("props_remove"),
+                                       ack=wants_ack)
         except KeyError:
             _fail(404, "not_found", f"no hay placa {mac_norm} en devices.json")
         except board_meta.MetaError as e:
@@ -526,10 +529,12 @@ async def patch_device(mac: str, body: dict = Body(...), authorization: Optional
                 events.record(log, "note", {"text": note, "user": user})
             if r["props_changes"]:
                 events.record(log, "props", {"changes": r["props_changes"], "user": user})
+            if wants_ack:
+                events.record(log, "ack", {"user": user})
         except OSError:
             pass        # que no se pueda registrar no rompe la escritura
         out.update(note=entry.get("note"), note_by=entry.get("note_by"), note_at=entry.get("note_at"),
-                   props=dict(entry.get("props") or {}))
+                   props=dict(entry.get("props") or {}), ack_at=entry.get("ack_at"), ack_by=entry.get("ack_by"))
     return out
 
 

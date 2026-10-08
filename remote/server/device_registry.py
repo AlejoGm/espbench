@@ -107,9 +107,9 @@ class DevicesFile:
 
     def set_meta(self, mac: str, user: Optional[str], note: Optional[str] = None, props: Optional[dict] = None,
                  props_add: Optional[dict] = None, props_remove: Optional[dict] = None,
-                 now: Optional[dt.datetime] = None) -> dict:
-        """Nota y/o propiedades de una placa, en un solo leer-modificar-escribir con el
-        flock. Las propiedades se validan contra el catálogo **con el lock tomado**
+                 ack: bool = False, now: Optional[dt.datetime] = None) -> dict:
+        """Nota, propiedades y/o ACK de una placa, en un solo leer-modificar-escribir con el
+        flock. ack: da por vistos los problemas hasta ahora (ack_at, ack_by; ver acked()). Las propiedades se validan contra el catálogo **con el lock tomado**
         (board_meta.plan_props): un valor que otro borra en el medio no se cuela (la baja
         también chequea "en uso" con este lock). note: None = no tocarla, "" = borrarla.
         Devuelve {"entry", "note_changed", "props_changes"}. KeyError si la MAC no está;
@@ -138,6 +138,8 @@ class DevicesFile:
             else:
                 entry.pop("props", None)
             out["props_changes"] = changes
+            if ack:
+                entry.update(ack_at=stamp, ack_by=user)
             out["entry"] = dict(entry)
         self._update(_do, silent=False)
         return out
@@ -242,6 +244,34 @@ class DeviceInfo:
     # Última escritura del log de la sesión (epoch): el dashboard marca "sin log"
     # una placa que monitorea pero no imprime nada hace rato.
     last_log_epoch: Optional[float] = None
+    # ACK de los problemas (devices.json): ack_at ISO con la zona de la Pi. acked: qué de `health`
+    # quedó antes del ACK y ya no cuenta como problema ({"panic": bool, "reset": bool}; ver acked()).
+    ack_at: Optional[str] = None
+    ack_by: Optional[str] = None
+    acked: Optional[dict] = None
+
+
+def _epoch(ts: Optional[str]) -> Optional[float]:
+    """ISO con o sin zona (sin zona = hora local de la Pi, como la escribe SerialWatch) → epoch."""
+    try:
+        return dt.datetime.fromisoformat(ts).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def acked(health: Optional[dict], ack_at: Optional[str]) -> Optional[dict]:
+    """Qué problemas de `health` cubre el ACK: el último panic y el último reset anormal que
+    SerialWatch publica son de antes (o del mismo segundo) que ack_at. None sin ACK. Un boot
+    loop en curso no se cubre: está pasando ahora."""
+    ack = _epoch(ack_at)
+    if ack is None:
+        return None
+    h = health or {}
+
+    def covered(ev):
+        t = _epoch((ev or {}).get("ts"))
+        return t is not None and t <= ack
+    return {"panic": covered(h.get("last_panic")), "reset": covered(h.get("last_reset"))}
 
 
 class DeviceRegistry:
@@ -347,6 +377,9 @@ class DeviceRegistry:
             note_at=entry.get("note_at"),
             props={k: v for k, v in (entry.get("props") or {}).items() if k in board_meta.CATEGORY_IDS},
             last_log_epoch=self._log_mtime(state),
+            ack_at=entry.get("ack_at"),
+            ack_by=entry.get("ack_by"),
+            acked=acked(state.get("health"), entry.get("ack_at")),
         )
 
     @staticmethod

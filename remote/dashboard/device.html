@@ -476,7 +476,7 @@
                         }
                         currentLock = EB.lockInfo(d);
                         if (currentLock) badges.push(lockBadge(currentLock));
-                        $('health-badges').innerHTML = EB.healthBadges(d.health).map(function(x) {
+                        $('health-badges').innerHTML = EB.healthBadges(d.health, d.acked).map(function(x) {
                             return '<span class="hbadge ' + x.cls + '" title="' + EB.escapeHtml(x.title) + '">' + EB.escapeHtml(x.text) + '</span>';
                         }).join('');
                         var busy = d.state === 'flashing' || d.state === 'erasing';

@@ -32,7 +32,7 @@ from typing import Optional
 from server import paths
 
 TYPES = ("session", "boot", "fw", "panic", "boot_loop", "state", "flash", "send", "command", "reserve",
-         "release", "note", "props")
+         "release", "note", "props", "ack")
 MAX_EVENT_BYTES = 4000      # una línea por write(): por debajo de PIPE_BUF/página
 _MAX_STR = 1000             # strings de detail más largos se recortan si la línea no entra
 

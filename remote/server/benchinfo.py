@@ -7,13 +7,15 @@ benchinfo.py — lo que el dashboard muestra del bench entero (no de una placa):
 - `activity()`: cuántos reinicios, panics, flashes, boot loops y reservas tuvo
   cada placa por hora en las últimas N horas, y los eventos recientes que
   merecen un aviso (panic, boot loop, flash). Sale de devices/<mac>/events.jsonl,
-  leído de atrás para adelante hasta la ventana.
+  leído de atrás para adelante hasta la ventana. Con un ACK de la placa (ack_at),
+  `totals` cuenta solo lo de después y `acked` dice cuántas horas quedaron antes.
 """
 import datetime as dt
 import os
 import pathlib
 import shutil
 import functools
+import math
 import socket
 import time
 import uuid
@@ -117,11 +119,16 @@ def _epoch(ts: Optional[str]) -> Optional[float]:
         return None
 
 
-def device_activity(events_path, hours: int, now: float) -> dict:
-    """{"buckets": [{boot, panic, ...} × hours], "recent": [eventos notables]}.
-    El bucket 0 es la hora más vieja; el último termina en `now`."""
+def device_activity(events_path, hours: int, now: float, ack: Optional[float] = None) -> dict:
+    """{"buckets": [{boot, panic, ...} × hours], "totals": {boot, panic, ...}, "acked": n,
+    "recent": [eventos notables]}. El bucket 0 es la hora más vieja; el último termina en
+    `now`. ack (epoch del ACK): totals cuenta solo lo posterior; acked = los primeros n
+    buckets, los que empezaron antes del ACK (el del ACK, solo si no tuvo nada después).
+    Sin ACK, totals = suma de los buckets."""
     start = now - hours * 3600
     buckets = [dict.fromkeys(BUCKET_TYPES, 0) for _ in range(hours)]
+    totals = dict.fromkeys(BUCKET_TYPES, 0)
+    after_ack = set()                       # buckets con algo posterior al ACK
     recent = []
     for raw in events.read_back(events_path):
         ev = events.parse_line(raw)
@@ -138,9 +145,15 @@ def device_activity(events_path, hours: int, now: float) -> dict:
         if typ in BUCKET_TYPES:
             i = min(hours - 1, int((t - start) // 3600))
             buckets[i][typ] += 1
+            if ack is None or t > ack:
+                totals[typ] += 1
+                after_ack.add(i)
         if typ in NOTABLE:
             recent.append({"ts": ev["ts"], "type": typ, "detail": ev.get("detail") or {}})
-    return {"buckets": buckets, "recent": recent[:20]}
+    acked = 0 if ack is None else max(0, min(hours, math.ceil((ack - start) / 3600)))
+    if acked and ack is not None and (acked - 1) in after_ack:
+        acked -= 1
+    return {"buckets": buckets, "totals": totals, "acked": acked, "recent": recent[:20]}
 
 
 def activity(devices: List[dict], hours: int = 24, now: Optional[float] = None) -> dict:
@@ -150,6 +163,6 @@ def activity(devices: List[dict], hours: int = 24, now: Optional[float] = None) 
     for d in devices:
         if not d.get("mac"):
             continue
-        a = device_activity(paths.device_events_file(d["mac"]), hours, now)
+        a = device_activity(paths.device_events_file(d["mac"]), hours, now, _epoch(d.get("ack_at")))
         out[d["tty_name"]] = {"key": d.get("device_key") or d.get("sn") or d["mac"], "mac": d["mac"], **a}
     return {"now": events.iso_ms(now), "hours": hours, "devices": out}

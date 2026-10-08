@@ -4,7 +4,7 @@
  * bench (header de index.html). La lógica sin DOM (chips, validación, qué cambió)
  * está en espbench.js; acá solo se arma DOM.
  *
- * Escrituras por EBAuth.fetch: PATCH api/devices/{mac} {note | props, user},
+ * Escrituras por EBAuth.fetch: PATCH api/devices/{mac} {note | props | ack, user},
  * POST api/properties/{cat}/values (valor nuevo) y PATCH api/bench {location} (override manual).
  * `user` = el lock_user recordado (eb.lockUser); sin él, el server pone el host del pedido.
  */
@@ -60,6 +60,11 @@
         };
         closers.push(close);
         return close;
+    }
+
+    // ACK: da por vistos los panics y reinicios de la placa hasta ahora. Promise (rechaza con el error del api).
+    function ack(device) {
+        return patch(device, {ack: true});
     }
 
     // Cierra los editores abiertos como si se cancelaran (p. ej. click fuera del popover del monitor).
@@ -256,6 +261,6 @@
         loadCatalog: loadCatalog, catalog: function () { return catalog; },
         catalogStatus: function () { return catalogStatus; }, cancel: cancel,
         noteEditor: noteEditor, propsEditor: propsEditor, locationEditor: locationEditor,
-        editing: function () { return open > 0; }
+        ack: ack, editing: function () { return open > 0; }
     };
 })();

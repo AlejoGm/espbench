@@ -328,7 +328,8 @@
             return (groupBy ? EB.groupHeaderHtml(g, groupBy) : '') + g.items.map(function(d) {
                 var act = (((extra[d.bench] || {}).activity || {}).devices || {})[d.tty_name];
                 var tty = encodeURIComponent(d.tty_name);
-                return EB.boardCardHtml(d, {buckets: act && act.buckets, bench: d.bench, location: d.bench_location,
+                return EB.boardCardHtml(d, {buckets: act && act.buckets, totals: act && act.totals, acked: act && act.acked,
+                                            bench: d.bench, location: d.bench_location,
                                             benchTag: groupBy !== 'bench', catalog: catalog,
                                             href: benchUrl(d.bench, 'device.html?tty=' + tty), direct: d.bench_url + '/device.html?tty=' + tty});
             }).join('');

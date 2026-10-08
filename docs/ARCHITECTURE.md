@@ -451,6 +451,10 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 - **Nota**: texto libre ("testeando, no tocar"), hasta 200 caracteres, sin caracteres de control ni de formato
   Unicode (`Cf`: bidi override, espacios de ancho cero); `""`/`null` la borra. `note_by` = `user` del pedido (el CLI
   manda `ESPBENCH_USER`; el dashboard el `lock_user` recordado) o, sin él, `dashboard@<ip>` (`via`) o el host. `note_at`: ISO con la zona de la Pi. Misma nota = sin cambios (ni evento).
+- **ACK** (`PATCH /api/devices/{mac} {ack: true}`, evento `ack`): da por vistos los problemas hasta ahora. Guarda
+  `ack_at`/`ack_by`; `DeviceRegistry` expone `acked` = {panic, reset}: si el último panic / reset de `health` es de
+  antes del ACK (no cuenta como problema; un boot loop en curso sí). `/api/activity` cuenta en `totals` solo lo
+  posterior y dice en `acked` cuántas horas quedaron antes. No toca `health` (los contadores de SerialWatch) ni los eventos.
 - **Propiedades**: categorías **fijas**, en el código (`board_meta.CATEGORIES`): `estado` (un valor), `uso`
   (varios), `chip` (uno), `conectividad` (varios). Una categoría que se saca del código deja de exponerse en
   `props` (`DeviceRegistry` filtra por `CATEGORY_IDS`) aunque quede en `devices.json`. Los **valores** son de cada bench:
@@ -545,7 +549,7 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── server/                código (copia de remote/server/)
 ├── dashboard/             frontend (copia de remote/dashboard/)
 ├── venv/                  Python + esptool + esp-idf-monitor + fastapi
-├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?} (666: se escribe en el lugar)
+├── devices.json           MAC → {device_key, hw_model, note?, note_by?, note_at?, props?, ack_at?, ack_by?} (666: se escribe en el lugar)
 ├── meta/                  777: lo que crea el api (sfypi)
 │   ├── properties.json    valores de las propiedades de este bench (las categorías están en el código)
 │   ├── bench_geo.json     ubicación automática por IP (geo.py): ciudad, región, país, lat/lon, tz, ts, stale

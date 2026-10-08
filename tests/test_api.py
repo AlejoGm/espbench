@@ -888,6 +888,35 @@ def test_patch_note_and_props_records_events_and_shows_in_devices():
     assert len(api_events()) == n
 
 
+def test_patch_ack_records_event_and_covers_the_problems_seen_before():
+    from server.device_registry import DeviceRegistry
+    log = board()
+    registered("mi-placa")
+    health = {"panics": 2, "last_panic": {"ts": "2000-01-01T10:00:00", "kind": "guru"},
+              "last_reset": {"ts": "2000-01-01T10:00:01", "reason": "PANIC", "abnormal": True}}
+    runstate.write("ttyUSB0", {"mac": MAC, "state": "monitoring", "log_path": str(log), "health": health})
+    d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
+    assert (d.ack_at, d.acked) == (None, None)
+    r = run(api.patch_device(MAC, {"ack": True, "user": "alejo"}))
+    assert r["ack_by"] == "alejo" and r["ack_at"][-6] in "+-"
+    assert [(e["type"], e["detail"]) for e in api_events() if e["type"] == "ack"] == [("ack", {"user": "alejo"})]
+    d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
+    assert (d.ack_by, d.acked) == ("alejo", {"panic": True, "reset": True})
+    # un panic después del ACK vuelve a contar
+    health["last_panic"]["ts"] = "2999-01-01T00:00:00"
+    runstate.write("ttyUSB0", {"mac": MAC, "state": "monitoring", "log_path": str(log), "health": health})
+    d = DeviceRegistry(dev_dir=str(log.parent))._build_device_info("ttyUSB0")
+    assert d.acked == {"panic": False, "reset": True}
+
+
+def test_patch_ack_must_be_true():
+    board()
+    registered()
+    with pytest.raises(HTTPException) as e:
+        run(api.patch_device(MAC, {"ack": "yes"}))
+    assert err(e) == (400, "bad_request")
+
+
 def test_props_of_a_removed_category_are_not_exposed():
     """Una categoría que se saca del código (p. ej. la vieja `perifericos`) puede seguir en devices.json:
     no se expone ni aparece como chip huérfano."""

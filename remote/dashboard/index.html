@@ -184,7 +184,8 @@
                 var a = activity[d.tty_name];
                 // bench viejo (sin /api/properties): sin botones de nota ni propiedades
                 var meta = EB.metaSupported(d, EBMeta.catalogStatus()) !== false;
-                return EB.boardCardHtml(d, {buckets: a && a.buckets, rename: true, meta: meta, catalog: catalog});
+                return EB.boardCardHtml(d, {buckets: a && a.buckets, totals: a && a.totals, acked: a && a.acked,
+                                            rename: true, meta: meta, catalog: catalog});
             }).join('');
         }).join('');
         document.getElementById('empty').classList.toggle('hidden', devices.length > 0);
@@ -216,7 +217,7 @@
 
     function setSearch(q) { document.getElementById('search').value = q; syncQuery(); render(); }
 
-    // Acciones de las cards: renombrar, copiar config, nota y propiedades, filtrar por el usuario
+    // Acciones de las cards: renombrar, copiar config, nota y propiedades, ACK, filtrar por el usuario
     // del lock o por una propiedad (chip → cat:valor).
     document.getElementById('boards').addEventListener('click', function(e) {
         var card = e.target.closest('.board');
@@ -230,6 +231,11 @@
         if (!act) return;
         if (act.dataset.act === 'copy') copyConfig(d, act);
         if (act.dataset.act === 'rename') startRename(card, d);
+        if (act.dataset.act === 'ack') {
+            act.disabled = true;
+            EBMeta.ack(d).then(function() { return Promise.all([loadDevices(), loadActivity()]); },
+                               function(err) { act.disabled = false; alert('No se pudo hacer el ACK: ' + err.message); });
+        }
         if ((act.dataset.act === 'note' || act.dataset.act === 'props') && !EBMeta.editing()) {
             var editor = card.querySelector('.meta-editor');
             var done = function(changed) { editor.innerHTML = ''; if (changed) loadDevices(); else render(); };

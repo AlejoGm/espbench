@@ -80,22 +80,26 @@
         task_wdt: 'task watchdog', stack_overflow: 'stack overflow', assert: 'assert'
     };
 
-    // Lista de badges {cls, text, title}, de más grave a menos. Vacía = todo bien.
-    function healthBadges(h) {
+    // acked (/api/devices `acked`): {panic, reset} = el último panic / reset anormal es de antes del ACK.
+    function panicActive(h, acked) { return h.panics > 0 && !(acked && acked.panic); }
+    function resetActive(h, acked) { return !!(h.last_reset && h.last_reset.abnormal) && !(acked && acked.reset); }
+
+    // Lista de badges {cls, text, title}, de más grave a menos. Vacía = todo bien. Lo cubierto por el ACK no va.
+    function healthBadges(h, acked) {
         var out = [];
         if (!h) return out;
         if (h.boot_loop) {
             out.push({cls: 'hb-loop', text: 'BOOT LOOP',
                       title: 'Reinicia en loop: ' + h.boots + ' arranques en poco tiempo'});
         }
-        if (h.panics > 0) {
+        if (panicActive(h, acked)) {
             var p = h.last_panic || {};
             var what = (PANIC_KINDS[p.kind] || p.kind || 'panic') + (p.detail ? ' (' + p.detail + ')' : '');
             out.push({cls: 'hb-panic', text: '⚠ ' + h.panics + (h.panics === 1 ? ' panic' : ' panics'),
                       title: 'Último: ' + what + (p.ts ? ' — ' + p.ts.replace('T', ' ') : '')});
         }
         var r = h.last_reset;
-        if (r && r.abnormal && !h.boot_loop) {
+        if (resetActive(h, acked) && !h.boot_loop) {
             out.push({cls: 'hb-warn', text: '↯ ' + r.reason,
                       title: 'Último reset anormal' + (r.ts ? ' — ' + r.ts.replace('T', ' ') : '')});
         }
@@ -107,10 +111,10 @@
     }
 
     // Peor nivel de salud: 'bad' | 'warn' | 'ok'. Para el color de la card.
-    function healthLevel(h) {
+    function healthLevel(h, acked) {
         if (!h) return 'ok';
-        if (h.boot_loop || h.panics > 0) return 'bad';
-        if (h.last_reset && h.last_reset.abnormal) return 'warn';
+        if (h.boot_loop || panicActive(h, acked)) return 'bad';
+        if (resetActive(h, acked)) return 'warn';
         return 'ok';
     }
 
@@ -511,6 +515,7 @@
         release:   {icon: '🔓', label: 'libera'},
         note:      {icon: '✎', label: 'nota'},
         props:     {icon: '◇', label: 'propiedades'},
+        ack:       {icon: '✓', label: 'ACK'},
         state:     {icon: '⇄', label: 'estado'},
         session:   {icon: '●', label: 'sesión'}
     };
@@ -835,7 +840,7 @@
         if (device.status !== 'RUNNING') return 'st-down';
         if (device.state === 'flashing' || device.state === 'erasing' || device.state === 'discovering') return 'st-busy';
         if (device.state === 'unknown') return 'st-unknown';
-        var lvl = healthLevel(device.health);
+        var lvl = healthLevel(device.health, device.acked);
         return lvl === 'bad' ? 'st-bad' : lvl === 'warn' ? 'st-warn' : avoided(device, catalog) ? 'st-avoid' : 'st-ok';
     }
 
@@ -932,9 +937,10 @@
         if (d.state === 'unknown') return {cls: 'warn', text: 'Sin MAC'};
         var h = d.health || {};
         if (h.boot_loop) return {cls: 'bad', text: 'Boot loop'};
-        if (h.panics > 0) return {cls: 'bad', text: h.panics === 1 ? 'Panic' : h.panics + ' panics'};
+        // Con un ACK, h.panics cuenta también los de antes: sin número.
+        if (panicActive(h, d.acked)) return {cls: 'bad', text: h.panics === 1 || d.acked ? 'Panic' : h.panics + ' panics'};
         if (silentFor(d, nowMs) !== null) return {cls: 'warn', text: 'Sin log'};
-        if (healthLevel(h) === 'warn') return {cls: 'warn', text: 'Reset anormal'};
+        if (healthLevel(h, d.acked) === 'warn') return {cls: 'warn', text: 'Reset anormal'};
         var av = avoidedBy(d, catalog);
         if (av) return {cls: 'avoid', text: av.label.charAt(0).toUpperCase() + av.label.slice(1)};
         return {cls: 'ok', text: 'En línea'};
@@ -974,7 +980,8 @@
     }
 
     // Una barra por hora (la más vieja a la izquierda), coloreada por lo peor que pasó en esa hora.
-    function activityBarsHtml(buckets) {
+    // acked: las primeras `acked` horas terminaron antes del ACK (van atenuadas).
+    function activityBarsHtml(buckets, acked) {
         var n = (buckets || []).length;
         return (buckets || []).map(function (b, i) {
             var k = barKind(b), ago = n - i;
@@ -984,8 +991,9 @@
             if (b.boot_loop) parts.push('boot loop');
             if (b.flash) parts.push(b.flash + (b.flash === 1 ? ' flash' : ' flashes'));
             if (b.reserve) parts.push('reservada');
-            var title = 'Hace ' + ago + ' h' + (parts.length ? ': ' + parts.join(', ') : ': sin novedades');
-            return '<span class="' + (k + (b.reserve ? ' resv' : '')).trim() + '" style="height:' +
+            var title = 'Hace ' + ago + ' h' + (parts.length ? ': ' + parts.join(', ') : ': sin novedades') +
+                        (i < (acked || 0) && parts.length ? ' (antes del ACK)' : '');
+            return '<span class="' + (k + (b.reserve ? ' resv' : '') + (i < (acked || 0) ? ' acked' : '')).trim() + '" style="height:' +
                    (k ? BAR_H[k] : 8) + '%" title="' + escapeHtml(title) + '"></span>';
         }).join('');
     }
@@ -1097,24 +1105,30 @@
     }
 
     /*
-     * Card de una placa. opts: {buckets, href (monitor), direct (link directo, bench-master),
+     * Card de una placa. opts: {buckets, totals y acked (de /api/activity: lo de después del ACK y cuántas
+     * horas quedaron antes), href (monitor), direct (link directo, bench-master),
      * bench (nombre, bench-master), location (del bench), benchTag (false: sin la etiqueta del bench, p. ej.
      * agrupando por bench), rename (bench: lápiz para renombrar), catalog (/api/properties: colorea los chips
-     * y decide "no tocar"), meta (bench: botones para editar nota y propiedades), now}.
-     * Los botones llevan data-act="rename|copy|note|props" para que la página les ponga el handler.
+     * y decide "no tocar"), meta (bench: botones para editar nota y propiedades, y ACK), now}.
+     * Los botones llevan data-act="rename|copy|note|props|ack" para que la página les ponga el handler.
      */
     function boardCardHtml(d, opts) {
         opts = opts || {};
         var st = boardStatus(d, opts.now, opts.catalog);
         var title = d.device_key || d.tty_name;
         var meta = [d.hw_model, d.tty_name].filter(Boolean).join(' · ');
-        var tot = opts.buckets ? activityTotals(opts.buckets) : null;
+        var tot = opts.totals || (opts.buckets ? activityTotals(opts.buckets) : null);
         var boots = tot ? tot.boot : Math.max(0, ((d.health || {}).boots || 1) - 1);
         var panics = tot ? tot.panic : (d.health || {}).panics || 0;
         var silent = silentFor(d, opts.now) !== null;
         var lock = lockInfo(d, opts.now);
         var live = d.state === 'monitoring' && d.status === 'RUNNING';
         var up = uptimeText(uptimeParts(d, opts.now));
+        var ackTitle = d.ack_at ? 'Desde el ACK' + (d.ack_by ? ' de ' + d.ack_by : '') + ', ' + relTime(d.ack_at, opts.now) : '';
+        var h = d.health || {};
+        // ACK: en el bench (meta), con un server que lo soporta ('ack_at' en el device) y algo para dar por visto.
+        var canAck = opts.meta && d.mac && 'ack_at' in d &&
+                     (panics > 0 || panicActive(h, d.acked) || resetActive(h, d.acked));
         var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
         return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
             (opts.bench && opts.benchTag !== false ? '<div class="b-ctx">' + benchTagHtml(opts.bench, opts.location, d.bench_online) + '</div>' : '') +
@@ -1127,10 +1141,12 @@
                 (live && up ? '<span class="fact" title="Encendida desde el último arranque"><i class="ti ti-clock" aria-label="Encendida"></i><b>' + escapeHtml(up) + '</b></span>' : '') +
                 '<span class="fact' + (silent ? ' warn' : '') + '">' + (silent ? '<i class="ti ti-volume-off"></i>' : (live ? '<span class="live"></span>' : '')) +
                     'Último log <b>' + escapeHtml(agoText(d.last_log_epoch, opts.now)) + '</b></span>' +
-                '<span class="fact">Reinicios <b>' + boots + '</b></span>' +
-                '<span class="fact' + (panics ? ' bad' : '') + '">Panics <b>' + panics + '</b></span>' +
+                '<span class="fact"' + (ackTitle ? ' title="' + escapeHtml(ackTitle) + '"' : '') + '>Reinicios <b>' + boots + '</b></span>' +
+                '<span class="fact' + (panics ? ' bad' : '') + '"' + (ackTitle ? ' title="' + escapeHtml(ackTitle) + '"' : '') + '>Panics <b>' + panics + '</b></span>' +
+                (canAck ? '<button class="fact fact-btn" data-act="ack" title="ACK: dar por vistos los panics y reinicios hasta ahora">' +
+                          '<i class="ti ti-checks" aria-hidden="true"></i>ACK</button>' : '') +
             '</div>' +
-            (opts.buckets ? '<div class="bars" aria-label="Actividad por hora, últimas ' + opts.buckets.length + ' h">' + activityBarsHtml(opts.buckets) + '</div>' +
+            (opts.buckets ? '<div class="bars" aria-label="Actividad por hora, últimas ' + opts.buckets.length + ' h">' + activityBarsHtml(opts.buckets, opts.acked) + '</div>' +
                             '<div class="baxis"><span>hace ' + opts.buckets.length + ' h</span><span>ahora</span></div>' : '') +
             '<div class="bf"><span class="fw"' + (fwTitle ? ' title="' + escapeHtml(fwTitle) + '"' : '') + '>Firmware <b>' + escapeHtml(d.fw_version || '—') + '</b></span>' +
                 (lock ? '<span class="lock" title="' + escapeHtml(lock.title) + '"><i class="ti ti-lock"></i>' + escapeHtml(lock.user) +

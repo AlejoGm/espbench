@@ -92,6 +92,22 @@ def test_activity_per_device_skips_unknown_mac():
     assert out["devices"]["ttyUSB0"]["buckets"][23]["panic"] == 1
 
 
+def test_activity_totals_count_only_after_the_ack():
+    write_events([ev("boot", 10), ev("panic", 5, kind="guru"), ev("boot", 4.9),
+                  ev("panic", 0.5, kind="abort"), ev("boot", 0.4)])
+    a = benchinfo.device_activity(paths.device_events_file(MAC), 24, NOW)
+    assert a["acked"] == 0 and (a["totals"]["boot"], a["totals"]["panic"]) == (3, 2)   # sin ACK: todo
+    a = benchinfo.device_activity(paths.device_events_file(MAC), 24, NOW, ack=NOW - 2.5 * 3600)
+    assert (a["totals"]["boot"], a["totals"]["panic"]) == (1, 1)
+    assert a["acked"] == 22                                  # 0..20 antes y la 21 (la del ACK) sin nada después
+    assert sum(b["panic"] for b in a["buckets"]) == 2        # las barras siguen mostrando la historia
+    a = benchinfo.device_activity(paths.device_events_file(MAC), 24, NOW, ack=NOW - 0.45 * 3600)
+    assert a["acked"] == 23 and a["totals"]["boot"] == 1     # la hora del ACK tuvo un boot después: no se atenúa
+    out = benchinfo.activity([{"tty_name": "ttyUSB0", "mac": MAC,
+                               "ack_at": events.iso_ms(NOW - 2.5 * 3600)}], hours=24, now=NOW)
+    assert out["devices"]["ttyUSB0"]["totals"]["panic"] == 1
+
+
 def test_api_endpoints(tmp_path, monkeypatch):
     dev = tmp_path / "dev"
     dev.mkdir()

@@ -22,6 +22,33 @@ test('boardStatus: prioridad de estados', () => {
     assert.equal(EB.boardStatus(dev({health: {last_reset: {abnormal: true, reason: 'X'}}}), NOW).text, 'Reset anormal');
 });
 
+test('ACK: lo cubierto no es problema; lo nuevo sí, sin el número viejo', () => {
+    const h = {panics: 3, last_panic: {ts: '2026-10-06T11:00:00'}, last_reset: {abnormal: true, reason: 'PANIC'}};
+    assert.equal(EB.boardStatus(dev({health: h, acked: {panic: true, reset: true}}), NOW).text, 'En línea');
+    assert.equal(EB.boardStatus(dev({health: h, acked: {panic: true, reset: false}}), NOW).text, 'Reset anormal');
+    assert.deepEqual(EB.boardStatus(dev({health: h, acked: {panic: false, reset: true}}), NOW), {cls: 'bad', text: 'Panic'});
+    assert.equal(EB.boardStatus(dev({health: Object.assign({boot_loop: true}, h), acked: {panic: true, reset: true}}), NOW).text,
+                 'Boot loop');                                         // un loop en curso no se cubre
+    assert.deepEqual(EB.healthBadges(h, {panic: true, reset: true}), []);
+    assert.equal(EB.healthLevel(h, {panic: true, reset: false}), 'warn');
+});
+
+test('ACK en la card: botón solo en el bench con algo para dar por visto; totales desde el ACK', () => {
+    const z = {boot: 0, panic: 0, flash: 0, boot_loop: 0, reserve: 0};
+    const b = [Object.assign({}, z, {panic: 2, boot: 2}), z, z];
+    const d = dev({ack_at: null, acked: null});
+    assert.match(EB.boardCardHtml(d, {buckets: b, meta: true, now: NOW}), /data-act="ack"/);
+    assert.doesNotMatch(EB.boardCardHtml(d, {buckets: b, now: NOW}), /data-act="ack"/);           // master: solo lectura
+    assert.doesNotMatch(EB.boardCardHtml(dev({}), {buckets: b, meta: true, now: NOW}), /data-act="ack"/);  // server sin ACK
+    const acked = dev({ack_at: '2026-10-06T11:50:00-03:00', ack_by: 'alejo', acked: {panic: true, reset: true}});
+    const html = EB.boardCardHtml(acked, {buckets: b, totals: z, acked: 2, meta: true, now: NOW});
+    assert.doesNotMatch(html, /data-act="ack"/);
+    assert.match(html, /Panics <b>0<\/b>/);
+    assert.match(html, /title="Desde el ACK de alejo, /);
+    assert.match(html, /class="panic acked"/);
+    assert.match(EB.activityBarsHtml(b, 1), /title="Hace 3 h: 2 reinicios, 2 panics \(antes del ACK\)"/);
+});
+
 test('silentFor: solo monitoreando y pasado el umbral', () => {
     assert.equal(EB.silentFor(dev({last_log_epoch: NOW / 1000 - 299}), NOW), null);
     assert.equal(Math.round(EB.silentFor(dev({last_log_epoch: NOW / 1000 - 301}), NOW)), 301);
