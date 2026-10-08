@@ -921,7 +921,7 @@
     var SILENT_S = 300;      // monitoreando y sin imprimir nada hace 5 min: "sin log"
 
     function silentFor(d, nowMs) {
-        if (!d || d.status !== 'RUNNING' || d.state !== 'monitoring' || !d.last_log_epoch) return null;
+        if (!d || d.bench_online === false || d.status !== 'RUNNING' || d.state !== 'monitoring' || !d.last_log_epoch) return null;
         var s = ((nowMs === undefined ? Date.now() : nowMs) / 1000) - d.last_log_epoch;
         return s >= SILENT_S ? s : null;
     }
@@ -930,6 +930,8 @@
     // avoid: sana, pero con una propiedad que la excluye de pick (estado no-tocar / roto; catalog
     // = /api/properties, sin él los de siempre). No es "ok": no se elige.
     function boardStatus(d, nowMs, catalog) {
+        // bench-master: el bench no responde y lo que se ve es su último snapshot.
+        if (d.bench_online === false) return {cls: 'off', text: 'Offline'};
         if (d.status !== 'RUNNING') return {cls: 'off', text: d.state === 'disconnected' ? 'Desconectada' : 'Caída'};
         if (d.state === 'flashing') return {cls: 'flash', text: 'Flasheando'};
         if (d.state === 'erasing') return {cls: 'flash', text: 'Borrando'};
@@ -1124,7 +1126,7 @@
         var newPanics = opts.totals ? opts.totals.panic : panics;
         var silent = silentFor(d, opts.now) !== null;
         var lock = lockInfo(d, opts.now);
-        var live = d.state === 'monitoring' && d.status === 'RUNNING';
+        var live = d.state === 'monitoring' && d.status === 'RUNNING' && d.bench_online !== false;
         var up = uptimeText(uptimeParts(d, opts.now));
         var ackTitle = d.ack_at ? 'ACK de ' + (d.ack_by || '?') + ', ' + relTime(d.ack_at, opts.now) +
                                   (opts.totals ? ': ' + newPanics + (newPanics === 1 ? ' panic' : ' panics') + ' después' : '') : '';
@@ -1133,7 +1135,7 @@
         var canAck = opts.meta && d.mac && 'ack_at' in d &&
                      (newPanics > 0 || panicActive(h, d.acked) || resetActive(h, d.acked));
         var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
-        return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
+        return '<article class="board st-' + st.cls + (d.bench_online === false ? ' bench-off' : '') + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
             (opts.bench && opts.benchTag !== false ? '<div class="b-ctx">' + benchTagHtml(opts.bench, opts.location, d.bench_online) + '</div>' : '') +
             '<div class="bh"><div class="bh-name"><div class="name">' + escapeHtml(title) +
                 (opts.rename && d.mac ? ' <button class="icon-btn" data-act="rename" aria-label="Renombrar"><i class="ti ti-pencil"></i></button>' : '') +

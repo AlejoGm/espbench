@@ -52,6 +52,16 @@ test('ACK en la card: botón solo en el bench con algo para dar por visto; conta
     assert.match(EB.activityBarsHtml(b, 1), /title="Hace 3 h: 2 reinicios, 2 panics \(antes del ACK\)"/);
 });
 
+test('bench offline (bench-master): la card se apaga, sin vivo ni "sin log"', () => {
+    const d = dev({bench_online: false, last_log_epoch: NOW / 1000 - 600, health: {panics: 2}});
+    assert.deepEqual(EB.boardStatus(d, NOW), {cls: 'off', text: 'Offline'});
+    assert.equal(EB.silentFor(d, NOW), null);
+    const html = EB.boardCardHtml(d, {bench: 'chile', now: NOW});
+    assert.match(html, /class="board st-off bench-off"/);
+    assert.doesNotMatch(html, /class="live"|ti-clock/);
+    assert.doesNotMatch(EB.boardCardHtml(dev({bench_online: true}), {bench: 'chile', now: NOW}), /bench-off/);
+});
+
 test('silentFor: solo monitoreando y pasado el umbral', () => {
     assert.equal(EB.silentFor(dev({last_log_epoch: NOW / 1000 - 299}), NOW), null);
     assert.equal(Math.round(EB.silentFor(dev({last_log_epoch: NOW / 1000 - 301}), NOW)), 301);
