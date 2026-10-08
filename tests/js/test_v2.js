@@ -33,7 +33,7 @@ test('ACK: lo cubierto no es problema; lo nuevo sí, sin el número viejo', () =
     assert.equal(EB.healthLevel(h, {panic: true, reset: false}), 'warn');
 });
 
-test('ACK en la card: botón solo en el bench con algo para dar por visto; totales desde el ACK', () => {
+test('ACK en la card: botón solo en el bench con algo para dar por visto; contadores intactos, sin rojo', () => {
     const z = {boot: 0, panic: 0, flash: 0, boot_loop: 0, reserve: 0};
     const b = [Object.assign({}, z, {panic: 2, boot: 2}), z, z];
     const d = dev({ack_at: null, acked: null});
@@ -43,8 +43,11 @@ test('ACK en la card: botón solo en el bench con algo para dar por visto; total
     const acked = dev({ack_at: '2026-10-06T11:50:00-03:00', ack_by: 'alejo', acked: {panic: true, reset: true}});
     const html = EB.boardCardHtml(acked, {buckets: b, totals: z, acked: 2, meta: true, now: NOW});
     assert.doesNotMatch(html, /data-act="ack"/);
-    assert.match(html, /Panics <b>0<\/b>/);
-    assert.match(html, /title="Desde el ACK de alejo, /);
+    assert.match(html, /<span class="fact" title="ACK de alejo, [^"]*: 0 panics después">Panics <b>2<\/b>/);   // cuenta, sin rojo
+    assert.match(html, /Reinicios <b>2<\/b>/);
+    const again = EB.boardCardHtml(acked, {buckets: b, totals: Object.assign({}, z, {panic: 1}), acked: 2, meta: true, now: NOW});
+    assert.match(again, /class="fact bad"[^>]*>Panics <b>2<\/b>/);
+    assert.match(again, /data-act="ack"/);
     assert.match(html, /class="panic acked"/);
     assert.match(EB.activityBarsHtml(b, 1), /title="Hace 3 h: 2 reinicios, 2 panics \(antes del ACK\)"/);
 });

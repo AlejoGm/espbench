@@ -1105,8 +1105,8 @@
     }
 
     /*
-     * Card de una placa. opts: {buckets, totals y acked (de /api/activity: lo de después del ACK y cuántas
-     * horas quedaron antes), href (monitor), direct (link directo, bench-master),
+     * Card de una placa. opts: {buckets, totals y acked (de /api/activity: lo de después del ACK, que decide
+     * el rojo de Panics y el botón, y cuántas horas quedaron antes, atenuadas), href (monitor), direct (link directo, bench-master),
      * bench (nombre, bench-master), location (del bench), benchTag (false: sin la etiqueta del bench, p. ej.
      * agrupando por bench), rename (bench: lápiz para renombrar), catalog (/api/properties: colorea los chips
      * y decide "no tocar"), meta (bench: botones para editar nota y propiedades, y ACK), now}.
@@ -1117,18 +1117,21 @@
         var st = boardStatus(d, opts.now, opts.catalog);
         var title = d.device_key || d.tty_name;
         var meta = [d.hw_model, d.tty_name].filter(Boolean).join(' · ');
-        var tot = opts.totals || (opts.buckets ? activityTotals(opts.buckets) : null);
+        // Los contadores son de las 24 h (el ACK no los limpia); lo rojo es solo lo posterior al ACK (opts.totals).
+        var tot = opts.buckets ? activityTotals(opts.buckets) : null;
         var boots = tot ? tot.boot : Math.max(0, ((d.health || {}).boots || 1) - 1);
         var panics = tot ? tot.panic : (d.health || {}).panics || 0;
+        var newPanics = opts.totals ? opts.totals.panic : panics;
         var silent = silentFor(d, opts.now) !== null;
         var lock = lockInfo(d, opts.now);
         var live = d.state === 'monitoring' && d.status === 'RUNNING';
         var up = uptimeText(uptimeParts(d, opts.now));
-        var ackTitle = d.ack_at ? 'Desde el ACK' + (d.ack_by ? ' de ' + d.ack_by : '') + ', ' + relTime(d.ack_at, opts.now) : '';
+        var ackTitle = d.ack_at ? 'ACK de ' + (d.ack_by || '?') + ', ' + relTime(d.ack_at, opts.now) +
+                                  (opts.totals ? ': ' + newPanics + (newPanics === 1 ? ' panic' : ' panics') + ' después' : '') : '';
         var h = d.health || {};
         // ACK: en el bench (meta), con un server que lo soporta ('ack_at' en el device) y algo para dar por visto.
         var canAck = opts.meta && d.mac && 'ack_at' in d &&
-                     (panics > 0 || panicActive(h, d.acked) || resetActive(h, d.acked));
+                     (newPanics > 0 || panicActive(h, d.acked) || resetActive(h, d.acked));
         var fwTitle = [d.fw_project ? 'Proyecto ' + d.fw_project : '', d.fw_idf ? 'ESP-IDF ' + d.fw_idf : ''].filter(Boolean).join(', ');
         return '<article class="board st-' + st.cls + '" data-tty="' + escapeHtml(d.tty_name) + '"' + (opts.bench ? ' data-bench="' + escapeHtml(opts.bench) + '"' : '') + '>' +
             (opts.bench && opts.benchTag !== false ? '<div class="b-ctx">' + benchTagHtml(opts.bench, opts.location, d.bench_online) + '</div>' : '') +
@@ -1141,9 +1144,9 @@
                 (live && up ? '<span class="fact" title="Encendida desde el último arranque"><i class="ti ti-clock" aria-label="Encendida"></i><b>' + escapeHtml(up) + '</b></span>' : '') +
                 '<span class="fact' + (silent ? ' warn' : '') + '">' + (silent ? '<i class="ti ti-volume-off"></i>' : (live ? '<span class="live"></span>' : '')) +
                     'Último log <b>' + escapeHtml(agoText(d.last_log_epoch, opts.now)) + '</b></span>' +
-                '<span class="fact"' + (ackTitle ? ' title="' + escapeHtml(ackTitle) + '"' : '') + '>Reinicios <b>' + boots + '</b></span>' +
-                '<span class="fact' + (panics ? ' bad' : '') + '"' + (ackTitle ? ' title="' + escapeHtml(ackTitle) + '"' : '') + '>Panics <b>' + panics + '</b></span>' +
-                (canAck ? '<button class="fact fact-btn" data-act="ack" title="ACK: dar por vistos los panics y reinicios hasta ahora">' +
+                '<span class="fact">Reinicios <b>' + boots + '</b></span>' +
+                '<span class="fact' + (newPanics ? ' bad' : '') + '"' + (ackTitle ? ' title="' + escapeHtml(ackTitle) + '"' : '') + '>Panics <b>' + panics + '</b></span>' +
+                (canAck ? '<button class="fact fact-btn" data-act="ack" title="ACK: dar por vistos los panics hasta ahora (los contadores siguen)">' +
                           '<i class="ti ti-checks" aria-hidden="true"></i>ACK</button>' : '') +
             '</div>' +
             (opts.buckets ? '<div class="bars" aria-label="Actividad por hora, últimas ' + opts.buckets.length + ' h">' + activityBarsHtml(opts.buckets, opts.acked) + '</div>' +
