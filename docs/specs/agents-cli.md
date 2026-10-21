@@ -244,7 +244,7 @@ Sin `input()`, sin `rich`, sin `print` (callback de log). HTTP con `urllib` (sin
 | `espbench events <dev>\|--all` | `--type a,b` `--since A` `--limit N` (`--all` itera las placas desde el cliente) |
 | `espbench logs <dev>` | `--since A` `--until X` `--around E` `--before N` `--after N` `--grep re` `--src s` `--max-lines N` `--timeout D` `--for D` (`--until idle:D`) |
 | `espbench send <dev> "txt"` | `--no-enter` + `--until/--for/--timeout/--max-lines`; since implícito = cursor previo al envío; **la línea de eco del comando no cuenta para el match** |
-| `espbench flash <dev>` | `--build-dir` `--no-encrypt` `--erase` `--verify[=10s]` `--until X` `--timeout D` |
+| `espbench flash <dev>` | `--build-dir` `--encrypt`/`--no-encrypt` `--erase` `--verify[=10s]` `--until X` `--timeout D` |
 | `espbench reset <dev>` | `--bootloader` `--verify[=D]` `--until X` |
 | `espbench reserve <dev>` | `--ttl 30m` |
 | `espbench release <dev>` / `who <dev>` | |

@@ -287,6 +287,29 @@ def test_flash_verify_crash_is_3(cli, bench, board, tmp_path):
     assert r["status"] == "exitoso"                    # el flash anduvo; lo que falló es el arranque
 
 
+def test_flash_encrypt_flag_beats_flashcfg(cli, bench, board, tmp_path, monkeypatch):
+    """`--encrypt` y `--no-encrypt` le ganan al `encrypt` del .flashcfg.json, que depende del directorio actual."""
+    seen = []
+    orig = lib.Client.flash
+
+    def spy(self, *a, **kw):
+        seen.append(kw.get("encrypt"))
+        return orig(self, *a, **kw)
+
+    monkeypatch.setattr(lib.Client, "flash", spy)
+    write_project(tmp_path)                                  # encrypt: false
+    assert cli("flash", "sim-board", "--encrypt")[0] == 0
+    assert cli("flash", "sim-board")[0] == 0
+    (tmp_path / ".flashcfg.json").write_text(json.dumps({"chip": "esp32", "encrypt": True}))
+    assert cli("flash", "sim-board", "--no-encrypt")[0] == 0
+    assert seen == [True, False, False]
+
+
+def test_flash_encrypt_flags_are_exclusive(cli, bench, tmp_path):
+    code, r = cli("flash", "sim-board", "--encrypt", "--no-encrypt")
+    assert (code, r["error"]) == (1, "bad_request")
+
+
 def test_flash_failed_is_2(cli, bench, board, tmp_path):
     write_project(tmp_path)
     board.flash_rc = 2

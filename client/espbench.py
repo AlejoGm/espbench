@@ -14,7 +14,7 @@ espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
     espbench logs <dev> [--since A] [--until X] [--around E] [--before N] [--after N] [--grep re]
                         [--src s] [--max-lines N] [--timeout D] [--for D]
     espbench send <dev> "txt" [--no-enter] [--until X] [--for D] [--timeout D] [--max-lines N]
-    espbench flash <dev> [--build-dir B] [--no-encrypt] [--erase] [--verify[=10s]] [--until X] [--timeout D]
+    espbench flash <dev> [--build-dir B] [--encrypt|--no-encrypt] [--erase] [--verify[=10s]] [--until X] [--timeout D]
     espbench reset <dev> [--bootloader] [--verify[=10s]] [--until X] [--timeout D]
 
 Comunes: --json, --host, --profile, --bench, --expect-panic. Con --json, un objeto
@@ -654,7 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("flash", cmd_flash, "flashea el build dir (flasher_args.json)")
     sp.add_argument("--build-dir", default="build", help="default build (relativo al project_root)")
-    sp.add_argument("--no-encrypt", dest="encrypt", action="store_false", default=None)
+    # Sin ninguno de los dos, `encrypt` sale del .flashcfg.json que se encuentre desde el directorio actual (default
+    # true). Explícito le gana: quien llama sabe si el build es cifrado (flasher_args.json) y no tiene por qué
+    # depender de dónde se lo corre. Flashear en plano una placa con flash encryption la deja en loop en el ROM.
+    enc = sp.add_mutually_exclusive_group()
+    enc.add_argument("--encrypt", dest="encrypt", action="store_true", default=None)
+    enc.add_argument("--no-encrypt", dest="encrypt", action="store_false", default=None)
     sp.add_argument("--erase", action="store_true")
     sp.add_argument("--verify", nargs="?", const="10s", metavar="D",
                     help="espera el primer boot y una ventana de asentamiento D (default 10s)")
