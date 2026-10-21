@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.47.4
+**Version:** 0.48.0
 
 ---
 
@@ -81,6 +81,10 @@ sudo bash remote/install.sh
 ```
 
 Installs server files to `/opt/esp/`, creates Python venv, registers udev rules and systemd services.
+
+On a Pi 4 it also adds `dtoverlay=gpio-fan,gpiopin=14,temp=70000` to `config.txt` (fan on above 70 °C, applied
+after a reboot) unless a `gpio-fan` line is already there. Only useful if the fan is wired to GPIO14 through a
+transistor; override with `ESPBENCH_FAN_GPIO` / `ESPBENCH_FAN_TEMP` (°C).
 
 ### 6. Start services
 

@@ -18,6 +18,7 @@ Infraestructura de la Pi: sesiones tmux por device, nombres y puertos, udev, sys
 | `espbench-update.service` / `.timer` | systemd | `espbench-update --auto` 3 min después del boot y a las 04:00 (± 20 min) | `/etc/systemd/system/` |
 | `update.sh` | bash | Atajo de `espbench-update` desde el clone: sin args, la rama del clone; `update.sh <ref>`; `--release` | (se corre desde el clone) |
 | `pip-deps.sh` | bash | Dependencias Python del venv (lo llama `install.sh`): `regex` aparte y opcional, su falla avisa y no aborta el install | (se corre desde el clone) |
+| `fan.sh` | bash | Solo Pi 4: agrega `dtoverlay=gpio-fan` (GPIO14, 70 °C; `ESPBENCH_FAN_GPIO`/`ESPBENCH_FAN_TEMP`) al `config.txt` si no hay uno. Lo llama `install.sh`; aplica al reboot y solo sirve con el fan cableado a ese GPIO | (se corre desde el clone) |
 
 ## Nombres y puertos (`espbench-name`)
 

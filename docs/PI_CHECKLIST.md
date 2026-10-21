@@ -93,5 +93,7 @@ bench-master y el bench nuevo (identidad, URLs relativas, proxy, `host: auto`): 
 - [ ] Firmware en boot loop 5 min: `events.jsonl` crece poco (un `boot_loop start` y un `end` con
       `panics`, no un evento por panic) y el poll (`espbench logs <dev> --since now --until x --timeout 2s`)
       no se pone más lento.
+- [ ] Pi 4 con el fan en GPIO14: después del install y un reboot, `grep gpio-fan /boot/firmware/config.txt`
+      muestra la línea y el fan prende recién arriba de 70 °C (`vcgencmd measure_temp`).
 - [ ] `devremote --cleanup` y después `espbench logs <dev> --around <cursor de una sesión borrada>` →
       `cursor_expired` (esperado: los eventos quedan, el log no).

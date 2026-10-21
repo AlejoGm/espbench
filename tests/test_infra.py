@@ -605,3 +605,43 @@ def test_install_required_dependency_failure_still_aborts(tmp_path, fake_pip):
     fake_pip.write_text("#!/bin/bash\nexit 1\n")
     r, _ = _pip_deps(tmp_path, fake_pip)
     assert r.returncode != 0
+
+
+# ---------- install.sh: fan de la Pi 4 ----------
+
+def _fan(tmp_path, model, config="[all]\n", **env):
+    cfg = tmp_path / "config.txt"
+    cfg.write_text(config)
+    mdl = tmp_path / "model"
+    mdl.write_bytes(model.encode() + b"\0")        # /proc/device-tree/model termina en NUL
+    r = subprocess.run(["bash", str(INFRA / "fan.sh"), str(cfg), str(mdl)],
+                       env={**os.environ, **env}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return cfg.read_text()
+
+
+def test_fan_pi4_adds_gpio_fan_once(tmp_path):
+    cfg = _fan(tmp_path, "Raspberry Pi 4 Model B Rev 1.5", config="[cm4]\notg_mode=1\n")
+    assert cfg.endswith("[all]\ndtoverlay=gpio-fan,gpiopin=14,temp=70000\n")   # no queda bajo [cm4]
+    subprocess.run(["bash", str(INFRA / "fan.sh"), str(tmp_path / "config.txt"), str(tmp_path / "model")], check=True)
+    assert (tmp_path / "config.txt").read_text().count("gpio-fan") == 1          # idempotente
+
+
+def test_fan_env_overrides_gpio_and_temp(tmp_path):
+    cfg = _fan(tmp_path, "Raspberry Pi 4 Model B Rev 1.4", ESPBENCH_FAN_GPIO="18", ESPBENCH_FAN_TEMP="65")
+    assert "dtoverlay=gpio-fan,gpiopin=18,temp=65000" in cfg
+
+
+def test_fan_keeps_existing_config(tmp_path):
+    manual = "[all]\ndtoverlay=gpio-fan,gpiopin=23,temp=60000\n"
+    assert _fan(tmp_path, "Raspberry Pi 4 Model B Rev 1.5", config=manual) == manual
+
+
+@pytest.mark.parametrize("model", ["Raspberry Pi 5 Model B Rev 1.0", "Raspberry Pi 3 Model B Plus Rev 1.3", ""])
+def test_fan_other_models_untouched(tmp_path, model):
+    assert _fan(tmp_path, model) == "[all]\n"
+
+
+def test_install_runs_fan_script():
+    install = (INFRA.parent / "install.sh").read_text()
+    assert 'infra/fan.sh" "$BOOT_CONFIG" /proc/device-tree/model' in install

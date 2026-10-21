@@ -258,7 +258,17 @@ if systemctl cat systemd-time-wait-sync.service &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# 12. Summary
+# 12. Fan por temperatura (solo Pi 4; no pisa una config existente). Ver fan.sh.
+# ---------------------------------------------------------------------------
+BOOT_CONFIG=/boot/firmware/config.txt
+[ -f "$BOOT_CONFIG" ] || BOOT_CONFIG=/boot/config.txt
+if [ -f "$BOOT_CONFIG" ] && [ -f /proc/device-tree/model ]; then
+    bash "$REMOTE_DIR/infra/fan.sh" "$BOOT_CONFIG" /proc/device-tree/model \
+        || warn "no se pudo configurar el fan en $BOOT_CONFIG"
+fi
+
+# ---------------------------------------------------------------------------
+# 13. Summary
 # ---------------------------------------------------------------------------
 echo ""
 echo "========================================"
