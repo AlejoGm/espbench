@@ -839,3 +839,11 @@ def test_pick_order_excludes_mine_by_default():
     free = lib.summarize_device({**base, "device_key": "f"}, "yo")
     assert [s["key"] for s in lib.pick_order([mine, free], me="yo")] == ["f"]
     assert [s["key"] for s in lib.pick_order([mine, free], me="yo", include_mine=True)] == ["m", "f"]
+
+
+def test_locate_without_any_bench_says_why(tmp_path):
+    """Sin ningún bench el not_found trae el diagnóstico, no solo "ninguno"."""
+    found = lib.Benches(state_dir=tmp_path, scan=lambda *a, **k: ([], False), why=lambda: "Tailscale caído")
+    with pytest.raises(lib.EspbenchError) as e:
+        found.locate("NVC3")
+    assert e.value.error == "not_found" and "no se encontró ningún bench. Tailscale caído" in e.value.message

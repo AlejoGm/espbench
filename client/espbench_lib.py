@@ -458,8 +458,9 @@ class Benches:
     viejos (sin `app: espbench`) se ignoran. `only`: solo el bench con ese nombre."""
 
     def __init__(self, state_dir: Optional[pathlib.Path] = None, only: Optional[str] = None,
-                 scan: Optional[Callable] = None, ttl_s: Optional[float] = None):
+                 scan: Optional[Callable] = None, ttl_s: Optional[float] = None, why: Optional[Callable] = None):
         self.cache_path = pathlib.Path(state_dir or default_state_dir()) / "benches.json"
+        self._why = why or bench_discovery.diagnose
         self.only = only
         self._scan = scan or bench_discovery.scan_cached
         self.ttl_s = BENCHES_TTL_S if ttl_s is None else ttl_s
@@ -488,6 +489,15 @@ class Benches:
                 return self.usable()
             raise
 
+    def why_empty(self) -> str:
+        """Por qué no se encontró ningún bench (bench_discovery.diagnose)."""
+        return self._why()
+
+    def _not_found(self, e, dev: str) -> "EspbenchError":
+        if e.kind == "not_found" and not self.found:
+            return EspbenchError("not_found", f"'{dev}': no se encontró ningún bench. {self.why_empty()}")
+        return _resolve_error(e)
+
     def locate(self, dev: str):
         """(Bench, device) de la placa entre todos los benches. Si la lista de benches
         salió de la cache y la placa no está, escanea de nuevo una vez (puede haber
@@ -500,11 +510,11 @@ class Benches:
             return bench_discovery.resolve(dev, found)
         except bench_discovery.ResolveError as e:
             if e.kind != "not_found" or not self.cached:
-                raise _resolve_error(e)
+                raise self._not_found(e, dev)
         try:
             return bench_discovery.resolve(dev, self.list(fresh=True))
         except bench_discovery.ResolveError as e:
-            raise _resolve_error(e)
+            raise self._not_found(e, dev)
 
 
 def _resolve_error(e) -> "EspbenchError":

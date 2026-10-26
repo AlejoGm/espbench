@@ -202,6 +202,31 @@ def candidates(cfg: dict, status: Optional[dict] = None) -> List[Candidate]:
     return out
 
 
+def diagnose(cfg: Optional[dict] = None, status_fn: Optional[Callable] = None,
+             ts_bin: Optional[Callable] = None) -> str:
+    """Por qué un scan no encontró ningún bench, en una frase: sin eso, "ninguno" no distingue un Tailscale
+    caído de una tailnet donde ningún peer contestó a tiempo. Solo se llama cuando el scan vino vacío."""
+    cfg = cfg if cfg is not None else load_config()
+    timeout = float(cfg.get("timeout_s", DEFAULT_TIMEOUT_S))
+    parts = []
+    if cfg.get("tailscale", True):
+        st = (status_fn or tailscale_status)()
+        if st is None:
+            parts.append("`tailscale status --json` no respondió (¿Tailscale caído o sin login?)"
+                         if (ts_bin or _tailscale_bin)() else "no hay Tailscale instalado")
+        else:
+            peers = tailscale_candidates(st)
+            parts.append(f"ningún peer online de la tailnet ({', '.join(c.label or c.address for c in peers)}) "
+                         f"contestó como espbench en {timeout:g} s"
+                         if peers else "la tailnet no tiene ningún peer online")
+    hosts = cfg.get("hosts") or []
+    if hosts:
+        parts.append(f"ningún host del config ({', '.join(hosts)}) contestó en {timeout:g} s")
+    elif not cfg.get("tailscale", True):
+        parts.append("el config apaga Tailscale y no lista hosts")
+    return "; ".join(parts) + ". Para saltear el discovery: ESPBENCH_HOST=<ip del bench>"
+
+
 def scan(cfg: Optional[dict] = None, status: Optional[dict] = None,
          get_json: Callable = http_get_json) -> List[Bench]:
     """Todos los benches que contestan, con sus devices. Sondea en paralelo."""
@@ -256,14 +281,17 @@ def scan_cached(cache_path, ttl_s: float = CACHE_TTL_S, fresh: bool = False, cfg
     cfg = cfg if cfg is not None else load_config()
     if not fresh:
         cached = _load_cache(cache_path, ttl_s, now())
-        if cached is not None:
+        if cached:
             timeout = float(cfg.get("timeout_s", DEFAULT_TIMEOUT_S))
             if cached:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(cached))) as ex:
                     list(ex.map(lambda b: fetch_devices(b, timeout, get_json), cached))
             return cached, True
     found = scan(cfg, status, get_json)
-    _save_cache(cache_path, found, now())
+    # Un scan vacío no se guarda: casi siempre es Tailscale o la red en un mal momento, y cacheado dejaba
+    # "ningún bench" pegado por ttl_s aunque la red ya hubiera vuelto.
+    if found:
+        _save_cache(cache_path, found, now())
     return found, False
 
 
