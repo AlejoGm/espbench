@@ -95,7 +95,7 @@ test('activityBarsHtml / activityTotals', () => {
     assert.match(html, /class="panic" style="height:100%" title="Hace 3 h: 1 reinicio, 1 panic"/);
     assert.match(html, /class="flash resv"/);
     assert.match(html, /title="Hace 1 h: sin novedades"/);
-    assert.deepEqual(EB.activityTotals(b), {boot: 3, panic: 1, flash: 1, boot_loop: 0, reserve: 1});
+    assert.deepEqual(EB.activityTotals(b), {boot: 3, panic: 1, flash: 1, boot_loop: 0, reserve: 1, test: 0, test_fail: 0});
 });
 
 test('benchChips: valores, RAM y niveles', () => {

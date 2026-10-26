@@ -8,11 +8,12 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from common import mac_to_sn_sfy, hw_model_from_project_name
-from server import board_meta, history, locks, paths, runstate
+from server import board_meta, history, locks, paths, runstate, testrun
 
 
 class DevicesFileCorrupt(ValueError):
@@ -249,6 +250,9 @@ class DeviceInfo:
     ack_at: Optional[str] = None
     ack_by: Optional[str] = None
     acked: Optional[dict] = None
+    # Última corrida de `espbench test` (testrun.view: status running | done | aborted | interrupted, progreso y
+    # resultado). Sus reinicios y panics también van en `acked`: no son problemas de la placa.
+    test: Optional[dict] = None
 
 
 def _epoch(ts: Optional[str]) -> Optional[float]:
@@ -259,19 +263,24 @@ def _epoch(ts: Optional[str]) -> Optional[float]:
         return None
 
 
-def acked(health: Optional[dict], ack_at: Optional[str]) -> Optional[dict]:
-    """Qué problemas de `health` cubre el ACK: el último panic y el último reset anormal que
-    SerialWatch publica son de antes (o del mismo segundo) que ack_at. None sin ACK. Un boot
-    loop en curso no se cubre: está pasando ahora."""
+def acked(health: Optional[dict], ack_at: Optional[str], test_windows=(), now: Optional[float] = None) -> Optional[dict]:
+    """Qué problemas de `health` no cuentan: el último panic y el último reset anormal que SerialWatch publica son
+    de antes (o del mismo segundo) que ack_at, o pasaron durante una corrida de tests (test_windows, de
+    testrun.windows: un multietapa reinicia a propósito, un test puede esperar un panic). None sin ACK ni corridas.
+    Un boot loop en curso no lo cubre el ACK (está pasando ahora), sí una corrida en curso o recién terminada."""
     ack = _epoch(ack_at)
-    if ack is None:
+    wins = list(test_windows or [])
+    if ack is None and not wins:
         return None
     h = health or {}
 
     def covered(ev):
         t = _epoch((ev or {}).get("ts"))
-        return t is not None and t <= ack
-    return {"panic": covered(h.get("last_panic")), "reset": covered(h.get("last_reset"))}
+        return t is not None and ((ack is not None and t <= ack) or testrun.in_windows(t, wins))
+    out = {"panic": covered(h.get("last_panic")), "reset": covered(h.get("last_reset"))}
+    if wins:
+        out["boot_loop"] = testrun.loop_covered(wins, time.time() if now is None else now)
+    return out
 
 
 class DeviceRegistry:
@@ -329,6 +338,7 @@ class DeviceRegistry:
 
     def _build_device_info(self, tty_name: str) -> DeviceInfo:
         state = runstate.read(tty_name) or {}
+        now = time.time()
         # El puerto lo decide la capa de infra y llega por --control-port; el
         # proceso lo publica. Derivarlo del nombre es solo el fallback.
         port_tcp = state.get("tcp_port") or 5000 + self._parse_tty_number(tty_name)
@@ -379,7 +389,8 @@ class DeviceRegistry:
             last_log_epoch=self._log_mtime(state),
             ack_at=entry.get("ack_at"),
             ack_by=entry.get("ack_by"),
-            acked=acked(state.get("health"), entry.get("ack_at")),
+            acked=acked(state.get("health"), entry.get("ack_at"), testrun.windows(mac, now) if mac else (), now),
+            test=testrun.view(mac, now) if mac else None,
         )
 
     @staticmethod

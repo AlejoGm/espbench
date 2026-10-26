@@ -516,6 +516,7 @@
         note:      {icon: '✎', label: 'nota'},
         props:     {icon: '◇', label: 'propiedades'},
         ack:       {icon: '✓', label: 'ACK'},
+        test:      {icon: '⚗', label: 'test'},
         state:     {icon: '⇄', label: 'estado'},
         session:   {icon: '●', label: 'sesión'}
     };
@@ -557,12 +558,130 @@
                                           (forcedBy(d) ? ' por ' + forcedBy(d) : '') : '';
         case 'session': return [d.tty, d.pid ? 'pid ' + d.pid : ''].filter(Boolean).join(' · ');
         case 'note': return d.text ? '"' + d.text + '"' : 'borrada';
+        case 'test': return testEventDetail(d);
         case 'props': return Object.keys(d.changes || {}).map(function (cat) {
             var to = propValues(d.changes[cat].to);
             return cat + (to.length ? '=' + to.join(',') : ' quitada');
         }).join(' · ');
         }
         return '';
+    }
+
+    // ── Corridas de tests (espbench test; remote/server/testrun.py) ───────────
+
+    var TEST_RESULTS = {
+        pass:    {icon: '✓', label: 'pasó', many: 'pasaron', cls: 'pass'},
+        fail:    {icon: '✗', label: 'falló', many: 'fallaron', cls: 'fail'},
+        timeout: {icon: '⏱', label: 'timeout', many: 'timeout', cls: 'fail'},
+        panic:   {icon: '⚠', label: 'panic', many: 'panic', cls: 'fail'},
+        ignored: {icon: '–', label: 'ignorado', many: 'ignorados', cls: 'skip'},
+        skipped: {icon: '–', label: 'salteado', many: 'salteados', cls: 'skip'}
+    };
+    var TEST_FAILED = ['fail', 'timeout', 'panic'];
+
+    function fmtSecs(s) {
+        s = +s || 0;
+        return s < 10 ? s.toFixed(1).replace('.', ',') + ' s' : fmtDur(s);
+    }
+
+    function caseLabel(c) {
+        return c ? (c.number != null ? '(' + c.number + ') ' : '') + (c.name || '?') : '';
+    }
+
+    // Detalle de un evento `test` según su fase.
+    function testEventDetail(d) {
+        var c = d.case || {};
+        switch (d.phase) {
+        case 'start': return (d.total || 0) + (d.total === 1 ? ' test' : ' tests') + (d.project ? ' · ' + d.project : '');
+        case 'case': return '▶ ' + caseLabel(c);
+        case 'result':
+            var r = TEST_RESULTS[c.result] || {label: c.result || '?'};
+            return r.label + ' ' + caseLabel(c) + (c.duration_s != null ? ' · ' + fmtSecs(c.duration_s) : '') +
+                   (c.message && TEST_FAILED.indexOf(c.result) >= 0 ? ' · ' + c.message : '');
+        case 'end':
+            if (d.status === 'aborted') return 'cortada' + (d.message ? ' · ' + d.message : '') + ' · ' + (d.done || 0) + '/' + (d.total || 0);
+            return d.failed ? d.failed + ' de ' + (d.total || 0) + ' fallaron' : (d.passed || 0) + '/' + (d.total || 0) + ' pasaron';
+        }
+        return d.phase || '';
+    }
+
+    // Ícono de un evento `test`: la fase y el resultado.
+    function testEventIcon(d) {
+        if (d.phase === 'case') return '▶';
+        if (d.phase === 'result') return (TEST_RESULTS[(d.case || {}).result] || {icon: '·'}).icon;
+        if (d.phase === 'end') return d.status === 'aborted' ? '■' : d.failed ? '✗' : '✓';
+        return '⚗';
+    }
+
+    function testEventBad(d) {
+        return (d.phase === 'result' && TEST_FAILED.indexOf((d.case || {}).result) >= 0) ||
+               (d.phase === 'end' && (d.status === 'aborted' || d.failed > 0));
+    }
+
+    var TEST_SHOW_S = 24 * 3600;     // una corrida terminada se muestra en la card hasta 24 h después
+
+    /*
+     * La última corrida de la placa (device.test de /api/devices) para la card y el monitor, o null (nunca corrió,
+     * o terminó hace más de 24 h y no es all). {status: running|done|aborted|interrupted, cls: run|ok|bad|warn,
+     * text, sub (test en curso, o hace cuánto), title, done, total, segs: [{cls: pass|fail|skip|cur, n}], pct}.
+     */
+    function testView(t, nowMs, all) {
+        if (!t || !t.run_id) return null;
+        var now = (nowMs === undefined ? Date.now() : nowMs) / 1000;
+        var running = t.status === 'running';
+        if (!running && !all && t.ended && now - t.ended > TEST_SHOW_S) return null;
+        if (!running && !all && !t.ended && t.updated && now - t.updated > TEST_SHOW_S) return null;
+        var total = Math.max(t.total || 0, t.done || 0), done = t.done || 0;
+        var counts = t.counts || {};
+        var failed = t.failed || 0, passed = t.passed || 0;
+        var skip = (counts.ignored || 0) + (counts.skipped || 0);
+        var segs = [{cls: 'pass', n: passed}, {cls: 'fail', n: failed}, {cls: 'skip', n: skip}];
+        if (running && t.current) segs.push({cls: 'cur', n: 1});
+        var v = {status: t.status, done: done, total: total, failed: failed, passed: passed, user: t.user || '',
+                 project: t.project || '', pct: total ? Math.round(100 * done / total) : 0,
+                 segs: segs.filter(function (s) { return s.n > 0; })};
+        var who = [t.project, t.user].filter(Boolean).join(' · ');
+        var parts = Object.keys(TEST_RESULTS).filter(function (k) { return counts[k]; })
+            .map(function (k) { return counts[k] + ' ' + TEST_RESULTS[k].many; });
+        if (running) {
+            v.cls = 'run';
+            v.text = 'Tests ' + done + '/' + total;
+            v.sub = t.current ? '▶ ' + caseLabel(t.current) : 'empezando…';
+            if (failed) v.text += ' · ' + failed + ' ✗';
+        } else if (t.status === 'done') {
+            v.cls = failed ? 'bad' : 'ok';
+            v.text = failed ? failed + ' de ' + total + ' fallaron' : passed + '/' + total + ' pasaron';
+            v.sub = 'hace ' + agoText(t.ended, nowMs);
+        } else {
+            v.cls = 'warn';
+            v.text = (t.status === 'aborted' ? 'Corrida cortada ' : 'Sin noticias ') + done + '/' + total;
+            v.sub = 'hace ' + agoText(t.status === 'aborted' ? t.ended : t.updated, nowMs);
+        }
+        v.title = 'Tests' + (who ? ' (' + who + ')' : '') + ': ' + done + ' de ' + total + ' corridos' +
+                  (parts.length ? ' — ' + parts.join(', ') : '') +
+                  (t.status === 'interrupted' ? '\nEl cliente dejó de avisar: se cortó o perdió la red' : '') +
+                  (running ? '\nLos reinicios y panics de la corrida no cuentan como problemas de la placa' : '');
+        return v;
+    }
+
+    // Barra de progreso segmentada: pasaron (verde), fallaron (rojo), ignorados (gris), el que corre (pulsa).
+    function testBarHtml(v) {
+        if (!v) return '';
+        var total = Math.max(v.total, 1);
+        return '<div class="tbar" role="progressbar" aria-valuemin="0" aria-valuemax="' + v.total + '" aria-valuenow="' + v.done + '">' +
+            v.segs.map(function (s) {
+                return '<span class="tb-' + s.cls + '" style="width:' + (100 * s.n / total).toFixed(2) + '%"></span>';
+            }).join('') + '</div>';
+    }
+
+    // Bloque de la card: título, el test en curso o hace cuánto, y la barra.
+    function testBlockHtml(d, nowMs) {
+        var v = testView(d.test, nowMs);
+        if (!v) return '';
+        return '<div class="tests t-' + v.cls + '" title="' + escapeHtml(v.title) + '">' +
+            '<div class="tests-head"><i class="ti ti-flask" aria-hidden="true"></i><b>' + escapeHtml(v.text) + '</b>' +
+                '<span class="tests-sub">' + escapeHtml(v.sub) + '</span></div>' +
+            testBarHtml(v) + '</div>';
     }
 
     // Cursor del log: c:<sesión>:<offset>. Copia de events._CURSOR_RE (Python):
@@ -599,14 +718,15 @@
         var ts = ev.ts || '';
         var detail = eventDetail(ev);
         var full = ev.type === 'panic' && d.line ? d.line : detail;
+        var test = ev.type === 'test';
         return {
-            icon: t.icon, label: t.label, cls: 'ev-' + safeType(ev.type).replace(/_/g, '-'),
+            icon: test ? testEventIcon(d) : t.icon, label: t.label, cls: 'ev-' + safeType(ev.type).replace(/_/g, '-'),
             date: ts.slice(0, 10), time: ts.slice(11, 19), detail: detail,
             // release forzado: user es el dueño anterior; "quién" es el que forzó
             who: (ev.type === 'release' && d.forced ? d.by_user || d.by_host : d.user) || '',
             session: cursorSession(ev.cursor), cursor: ev.cursor || null,
             bad: ev.type === 'panic' || ev.type === 'boot_loop' || (ev.type === 'flash' && d.ok === false) ||
-                 (ev.type === 'boot' && !!d.abnormal),
+                 (ev.type === 'boot' && !!d.abnormal) || (test && testEventBad(d)),
             type: safeType(ev.type),
             title: ts.replace('T', ' ') + ' · ' + t.label + (full ? ': ' + full : '') +
                    (ev.cursor ? '\n' + ev.cursor : '')
@@ -746,7 +866,9 @@
      *   registre el evento; si el firmware imprimió el mismo texto un instante
      *   antes, queda antes del eco), o si no hay, la primera después de t. Sin
      *   ninguna, la primera línea de la ventana.
-     * - El resto: la primera línea de la ventana.
+     * - El resto: la primera línea de la ventana. El inicio de un test (`test` start/case) sin el margen de 150 ms:
+     *   el cliente avisa apenas leyó el resultado del anterior, y esa línea quedaría marcada como inicio del
+     *   siguiente. El resultado (`result`/`end`) sí lo usa: cae en la línea de Unity que lo imprimió.
      * - Si la candidata está a más de 5 s, no se marca (la placa estuvo callada:
      *   la marca caería en una línea que no tiene nada que ver).
      * Aproximado a propósito (ver remote/dashboard/CLAUDE.md).
@@ -756,6 +878,10 @@
      * hay que llamarla en orden de líneas. flush(nowMs) resuelve los send cuya
      * ventana de texto ya pasó aunque no haya llegado otra línea.
      */
+    function testStarts(ev) {
+        return ev.type === 'test' && !!ev.detail && (ev.detail.phase === 'start' || ev.detail.phase === 'case');
+    }
+
     function EventMarks(opts) {
         opts = opts || {};
         this.back = opts.back === undefined ? 150 : opts.back;
@@ -778,7 +904,7 @@
             if (this._seen[key] || t === null) continue;
             this._seen[key] = true;
             var text = ev.type === 'send' && ev.detail && ev.detail.text ? String(ev.detail.text).toLowerCase() : null;
-            this._pending.push({t: t, ev: ev, text: text, fallback: null, best: null});
+            this._pending.push({t: t, ev: ev, text: text, fallback: null, best: null, back: testStarts(ev) ? 0 : this.back});
             added++;
         }
         this._pending.sort(function (a, b) { return a.t - b.t; });
@@ -795,7 +921,7 @@
         var keep = [];
         for (var i = 0; i < this._pending.length; i++) {
             var p = this._pending[i];
-            if (lt < p.t - this.back) { keep.push(p); continue; }
+            if (lt < p.t - p.back) { keep.push(p); continue; }
             if (p.fallback === null && lt > p.t + this.maxGap) continue;          // demasiado lejos: sin marca
             var hit = !!p.text && lt <= p.t + this.textWindow && low.indexOf(p.text) >= 0;
             if (!p.text) {
@@ -938,7 +1064,9 @@
         if (d.state === 'discovering') return {cls: 'flash', text: 'Iniciando'};
         if (d.state === 'unknown') return {cls: 'warn', text: 'Sin MAC'};
         var h = d.health || {};
-        if (h.boot_loop) return {cls: 'bad', text: 'Boot loop'};
+        // Corriendo tests: sus reinicios, panics y boot loops son esperables (d.acked los cubre).
+        if (d.test && d.test.status === 'running') return {cls: 'test', text: 'Testeando'};
+        if (h.boot_loop && !(d.acked && d.acked.boot_loop)) return {cls: 'bad', text: 'Boot loop'};
         // Con un ACK, h.panics cuenta también los de antes: sin número.
         if (panicActive(h, d.acked)) return {cls: 'bad', text: h.panics === 1 || d.acked ? 'Panic' : h.panics + ' panics'};
         if (silentFor(d, nowMs) !== null) return {cls: 'warn', text: 'Sin log'};
@@ -968,15 +1096,16 @@
 
     // Totales de una lista de buckets de /api/activity.
     function activityTotals(buckets) {
-        var t = {boot: 0, panic: 0, flash: 0, boot_loop: 0, reserve: 0};
+        var t = {boot: 0, panic: 0, flash: 0, boot_loop: 0, reserve: 0, test: 0, test_fail: 0};
         (buckets || []).forEach(function (b) { for (var k in t) t[k] += b[k] || 0; });
         return t;
     }
 
-    var BAR_H = {boot: 38, flash: 66, panic: 100};
+    var BAR_H = {boot: 38, test: 52, flash: 66, panic: 100};
     function barKind(b) {
         if (b.panic || b.boot_loop) return 'panic';
         if (b.flash) return 'flash';
+        if (b.test || b.test_boot || b.test_panic) return 'test';
         if (b.boot) return 'boot';
         return '';
     }
@@ -992,10 +1121,13 @@
             if (b.panic) parts.push(b.panic + (b.panic === 1 ? ' panic' : ' panics'));
             if (b.boot_loop) parts.push('boot loop');
             if (b.flash) parts.push(b.flash + (b.flash === 1 ? ' flash' : ' flashes'));
+            if (b.test) parts.push(b.test + (b.test === 1 ? ' test' : ' tests') + (b.test_fail ? ' (' + b.test_fail + ' fallaron)' : ''));
+            if (b.test_boot || b.test_panic) parts.push('en los tests: ' + [b.test_boot ? b.test_boot + ' reinicios' : '',
+                                                         b.test_panic ? b.test_panic + ' panics' : ''].filter(Boolean).join(', '));
             if (b.reserve) parts.push('reservada');
             var title = 'Hace ' + ago + ' h' + (parts.length ? ': ' + parts.join(', ') : ': sin novedades') +
                         (i < (acked || 0) && parts.length ? ' (antes del ACK)' : '');
-            return '<span class="' + (k + (b.reserve ? ' resv' : '') + (i < (acked || 0) ? ' acked' : '')).trim() + '" style="height:' +
+            return '<span class="' + (k + (b.reserve ? ' resv' : '') + (b.test_fail ? ' tfail' : '') + (i < (acked || 0) ? ' acked' : '')).trim() + '" style="height:' +
                    (k ? BAR_H[k] : 8) + '%" title="' + escapeHtml(title) + '"></span>';
         }).join('');
     }
@@ -1151,6 +1283,7 @@
                 (canAck ? '<button class="fact fact-btn" data-act="ack" title="ACK: dar por vistos los panics hasta ahora (los contadores siguen)">' +
                           '<i class="ti ti-checks" aria-hidden="true"></i>ACK</button>' : '') +
             '</div>' +
+            testBlockHtml(d, opts.now) +
             (opts.buckets ? '<div class="bars" aria-label="Actividad por hora, últimas ' + opts.buckets.length + ' h">' + activityBarsHtml(opts.buckets, opts.acked) + '</div>' +
                             '<div class="baxis"><span>hace ' + opts.buckets.length + ' h</span><span>ahora</span></div>' : '') +
             '<div class="bf"><span class="fw"' + (fwTitle ? ' title="' + escapeHtml(fwTitle) + '"' : '') + '>Firmware <b>' + escapeHtml(d.fw_version || '—') + '</b></span>' +
@@ -1412,6 +1545,8 @@
         boardFree: boardFree, locationCheck: locationCheck, locationView: locationView, LOCATION_MAX: LOCATION_MAX,
         monitorNav: monitorNav, navFilterHref: navFilterHref, metaSupported: metaSupported,
         monitorMetaHtml: monitorMetaHtml, META_OFF_TITLE: META_OFF_TITLE,
-        areaChartSvg: areaChartSvg
+        areaChartSvg: areaChartSvg,
+        TEST_RESULTS: TEST_RESULTS, TEST_FAILED: TEST_FAILED, testView: testView, testBarHtml: testBarHtml,
+        testBlockHtml: testBlockHtml, testEventDetail: testEventDetail, caseLabel: caseLabel, fmtSecs: fmtSecs
     };
 });

@@ -22,6 +22,7 @@
             <span class="hdr-meta hidden" id="device-meta"></span>
             <div class="device-badges" id="device-badges"></div>
             <div class="device-badges" id="health-badges"></div>
+            <button class="test-badge hidden" id="test-badge" title="Tests"></button>
         </div>
         <span class="status-dot" id="status-dot"></span>
         <span class="status-label" id="status-label">Conectando...</span>
@@ -59,11 +60,13 @@
                 <button class="side-tab active" data-tab="events">Eventos</button>
                 <button class="side-tab" data-tab="jobs">Flasheos</button>
                 <button class="side-tab" data-tab="sessions">Sesiones</button>
+                <button class="side-tab" data-tab="tests">Tests</button>
                 <button class="side-close" id="side-close" title="Cerrar"><i class="ti ti-x"></i></button>
             </div>
             <div class="side-body" id="side-events"></div>
             <div class="side-body hidden" id="side-jobs"></div>
             <div class="side-body hidden" id="side-sessions"></div>
+            <div class="side-body hidden" id="side-tests"></div>
         </aside>
     </div>
 
@@ -150,13 +153,24 @@
 
         function markEvent(el, ev) {
             var v = EB.eventView(ev);
+            var what = v.label + (v.detail ? ' ' + v.detail : '') + (v.who ? ' · ' + v.who : '');
+            // El ícono de un test le gana al del send que pide el menú del siguiente (cae en la misma línea)
+            if (el.classList.contains('mk-test') && ev.type !== 'test') {
+                el.title = (el.title ? el.title + '\n' : '') + what;
+                return;
+            }
             el.dataset.mk = v.icon;
             el.classList.add('mk', 'mk-ev', 'mk-' + ev.type);
-            var what = v.label + (v.detail ? ' ' + v.detail : '') + (v.who ? ' · ' + v.who : '');
+            if (ev.type === 'test') {
+                // El inicio de cada test parte el log: un separador con su nombre (a la derecha de la línea)
+                var c = (ev.detail || {}).case;
+                if (ev.detail.phase === 'case' && c) { el.classList.add('mk-test-case'); el.dataset.test = '▶ ' + EB.caseLabel(c); }
+                if (v.bad) el.classList.add('mk-test-bad');
+            }
             el.title = (el.title ? el.title + '\n' : '') + what;
         }
 
-        // ── Marcas de send/command/flash en el vivo ───────────────────────────
+        // ── Marcas de send/command/flash/test en el vivo ──────────────────────
         // El WebSocket manda texto sin offsets: los eventos del api se ubican por
         // hora (EB.EventMarks: la primera línea con hora ≥ la del evento − 500 ms).
         var marks = new EB.EventMarks();
@@ -180,11 +194,15 @@
 
         function pollMarks() {
             if (!boardApi) return Promise.resolve();
-            return fetch(boardApi + '/events?type=send,command,flash&since=session&limit=200')
+            return fetch(boardApi + '/events?type=send,command,flash,test&since=session&limit=400')
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function(d) {
                     curSession = d.session || curSession;
-                    if (marks.add(d.events)) scanMarks();
+                    // De los avisos de tests, el inicio y el resultado de cada uno (start/end no tienen una línea propia)
+                    var evs = (d.events || []).filter(function(e) {
+                        return e.type !== 'test' || (e.detail && (e.detail.phase === 'case' || e.detail.phase === 'result'));
+                    });
+                    if (marks.add(evs)) scanMarks();
                     applyMarks(marks.flush(Date.now()));
                 });
         }
@@ -479,6 +497,7 @@
                         $('health-badges').innerHTML = EB.healthBadges(d.health, d.acked).map(function(x) {
                             return '<span class="hbadge ' + x.cls + '" title="' + EB.escapeHtml(x.title) + '">' + EB.escapeHtml(x.text) + '</span>';
                         }).join('');
+                        renderTestBadge(d);
                         var busy = d.state === 'flashing' || d.state === 'erasing';
                         $('serial-text').disabled = busy;
                         $('serial-text').placeholder = busy ? 'Device ocupado (' + STATE_LABELS[d.state] + ')…'
@@ -494,6 +513,24 @@
                     return d;
                 })
                 .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
+        }
+
+        // ── Corrida de tests: badge con la barra en el header; click abre la pestaña Tests ──
+        var testSig = '';
+
+        function renderTestBadge(d) {
+            var v = EB.testView(d.test);
+            var b = $('test-badge');
+            b.classList.toggle('hidden', !v);
+            if (!v) return;
+            b.className = 'test-badge t-' + v.cls;
+            b.title = v.title + '\n(click: ver cada test)';
+            b.innerHTML = '<i class="ti ti-flask" aria-hidden="true"></i><b>' + EB.escapeHtml(v.text) + '</b>' + EB.testBarHtml(v);
+            var sig = [d.test.run_id, d.test.done, d.test.status, (d.test.current || {}).index].join('|');
+            if (sig !== testSig) {
+                testSig = sig;
+                if (panelOpen() && sideTab === 'tests') loadTests().catch(function() {});
+            }
         }
 
         // ── Nota y propiedades: chips en el header; se editan en un popover (meta.js) ──
@@ -596,6 +633,7 @@
         function loadHistory() {
             if (!panelOpen()) return Promise.resolve();
             if (sideTab === 'events') return loadEvents();
+            if (sideTab === 'tests') return loadTests();
             if (sideTab === 'jobs') {
                 return fetch(api + '/jobs').then(function(r) { return r.json(); }).then(renderJobs)
                     .catch(function(e) { $('side-jobs').innerHTML = '<div class="side-empty">Error al leer el historial</div>'; throw e; });
@@ -647,6 +685,91 @@
             }).join('');
         }
 
+
+        // ── Tests: la última corrida con cada caso (/api/board/{key}/test) ────
+        var testsData = null;
+
+        function loadTests() {
+            if (!boardApi) {
+                $('side-tests').innerHTML = '<div class="side-empty">' + (deviceLoaded ? 'La placa todavía no tiene MAC' : 'Cargando…') + '</div>';
+                return Promise.resolve();
+            }
+            return getJson(boardApi + '/test').then(function(res) {
+                if (res.status === 404 && !(res.body && res.body.detail && res.body.detail.error)) {
+                    $('side-tests').innerHTML = '<div class="side-empty">Este bench no registra corridas de tests: actualizalo</div>';
+                    return;
+                }
+                if (!res.ok) throw new Error(EB.errorText(res.body, res.status));
+                testsData = res.body.run;
+                renderTests(testsData);
+            }).catch(function(e) {
+                $('side-tests').innerHTML = '<div class="side-empty">Error al leer los tests: ' + EB.escapeHtml(e.message) + '</div>';
+                throw e;
+            });
+        }
+
+        function renderTests(run) {
+            if (!run) {
+                $('side-tests').innerHTML = '<div class="side-empty">Sin corridas de tests.<br><code>espbench test ' + EB.escapeHtml(tty) + '</code></div>';
+                return;
+            }
+            var v = EB.testView(run, undefined, true);
+            var when = run.started ? EB.isoLocal(run.started).replace('T', ' ').slice(0, 16) : '';
+            var head = '<div class="tr-head">' +
+                '<div class="tests t-' + v.cls + '" title="' + EB.escapeHtml(v.title) + '"><div class="tests-head"><i class="ti ti-flask" aria-hidden="true"></i><b>' +
+                    EB.escapeHtml(v.text) + '</b><span class="tests-sub">' + EB.escapeHtml(v.sub) + '</span></div>' + EB.testBarHtml(v) + '</div>' +
+                '<div class="tr-meta">' + EB.escapeHtml([run.project, run.user, when, run.started && run.ended ? EB.fmtSecs(run.ended - run.started) : ''].filter(Boolean).join(' · ')) +
+                    (run.message ? '<br>' + EB.escapeHtml(run.message) : '') + '</div></div>';
+            var rows = (run.cases || []).map(function(c, i) {
+                var r = EB.TEST_RESULTS[c.result] || {icon: '·', label: c.result, cls: 'skip'};
+                var failed = EB.TEST_FAILED.indexOf(c.result) >= 0;
+                return '<div class="tr-case tr-' + r.cls + '" data-i="' + i + '"' + (c.cursor || c.end_cursor ? ' data-cursor="1"' : '') +
+                       ' title="' + EB.escapeHtml(r.label + (c.message ? ': ' + c.message : '') + (c.file ? '\n' + c.file + ':' + c.line : '') +
+                                                  (c.cursor ? '\nclick: el log de este test' : '')) + '">' +
+                         '<span class="tr-icon">' + r.icon + '</span>' +
+                         '<div class="tr-main"><div class="tr-name"><span class="tr-num">' + EB.escapeHtml(String(c.number)) + '</span>' + EB.escapeHtml(c.name) + '</div>' +
+                           (failed && c.message ? '<div class="tr-msg">' + EB.escapeHtml((c.stage ? 'etapa ' + c.stage + ' · ' : '') + c.message) + '</div>' : '') +
+                         '</div>' +
+                         '<span class="tr-dur">' + EB.fmtSecs(c.duration_s) + '</span>' +
+                       '</div>';
+            });
+            if (run.status === 'running' && run.current) {
+                rows.push('<div class="tr-case tr-cur"><span class="tr-icon">▶</span><div class="tr-main"><div class="tr-name"><span class="tr-num">' +
+                          EB.escapeHtml(String(run.current.number)) + '</span>' + EB.escapeHtml(run.current.name) + '</div></div>' +
+                          '<span class="tr-dur">' + EB.fmtSecs(Date.now() / 1000 - run.current.started) + '</span></div>');
+            }
+            var pending = Math.max(0, (run.total || 0) - (run.cases || []).length - (run.status === 'running' && run.current ? 1 : 0));
+            if (pending && run.status === 'running') rows.push('<div class="tr-case tr-pending"><span class="tr-icon">·</span><div class="tr-main">' +
+                                                                pending + (pending === 1 ? ' test más' : ' tests más') + '</div></div>');
+            $('side-tests').innerHTML = head + rows.join('');
+        }
+
+        // Click en un caso: su log, del inicio del test (cursor del aviso `case`) en adelante.
+        $('side-tests').addEventListener('click', function(e) {
+            var row = e.target.closest('.tr-case[data-cursor]');
+            if (!row || !testsData) return;
+            var c = testsData.cases[+row.dataset.i];
+            var r = EB.TEST_RESULTS[c.result] || {icon: '·', label: c.result};
+            var ev = {type: 'test', ts: '', cursor: c.cursor || c.end_cursor, detail: {phase: 'result', case: c}};
+            openTestViewer(r.icon + ' ' + EB.caseLabel(c) + ' · ' + r.label, ev, c);
+        });
+
+        function openTestViewer(title, ev, c) {
+            var v = EB.eventView(ev);
+            showViewer(title, api + '/sessions/' + encodeURIComponent(EB.sessionFile(v.session, curSession)) + '?download=1');
+            // Desde el inicio del test (aviso `case`) hasta su línea de resultado de Unity; sin ella (timeout, panic,
+            // multietapa) hasta 1500 líneas, que pueden incluir el comienzo del test siguiente.
+            var q = c.cursor ? {since: c.cursor, max_lines: '1500', raw: '1'} : {around: c.end_cursor, before: '200', after: '0', raw: '1'};
+            if (c.cursor && (c.result === 'pass' || c.result === 'fail' || c.result === 'ignored')) {
+                q.until = 're::' + c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':(PASS|FAIL|IGNORE)';
+            }
+            getJson(boardApi + '/log?' + new URLSearchParams(q)).then(function(a) {
+                if (!a.ok) { viewerError(EB.errorText(a.body, a.status)); return; }
+                var lines = a.body.lines.map(function(l) { return EB.overwrite(EB.expandRangeLine(l.replace(/\r+$/, ''), a.body.date)); });
+                var els = renderViewer(lines);
+                if (els.length) els[els.length - 1].scrollIntoView({block: 'end'});
+            }).catch(function(e) { viewerError(e.message); });
+        }
 
         // ── Eventos (/api/board/{key}/events) ────────────────────────────────
         var EV_PAGE = 100, EV_MAX = 1000;
@@ -951,6 +1074,10 @@
             $('btn-clear').onclick = clearView;
             $('btn-history').onclick = function() { toggleHistory(!panelOpen()); };
             $('side-close').onclick = function() { toggleHistory(false); };
+            $('test-badge').onclick = function() {
+                document.querySelector('.side-tab[data-tab="tests"]').click();
+                toggleHistory(true);
+            };
             Array.prototype.forEach.call(document.querySelectorAll('.side-tab'), function(tab) {
                 tab.onclick = function() {
                     sideTab = tab.dataset.tab;
@@ -958,6 +1085,7 @@
                     $('side-events').classList.toggle('hidden', sideTab !== 'events');
                     $('side-jobs').classList.toggle('hidden', sideTab !== 'jobs');
                     $('side-sessions').classList.toggle('hidden', sideTab !== 'sessions');
+                    $('side-tests').classList.toggle('hidden', sideTab !== 'tests');
                     loadHistory().catch(function() {});
                 };
             });

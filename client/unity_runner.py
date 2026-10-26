@@ -10,11 +10,14 @@ un test multietapa (`TEST_CASE_MULTIPLE_STAGES`) pide además la etapa. Lo de ac
 - Un multietapa se sigue a través de los reinicios: manda la etapa, espera el reinicio (`Press ENTER`) o el resumen, y
   manda la siguiente. Los reinicios son esperables, así que un `boot_loop` en el medio no corta.
 - Un panic se le atribuye al test que lo tuvo, con su pedazo de log, y la corrida sigue después del reinicio.
+- `Reporter` le avisa a la Pi cada paso (`POST /api/device/{tty}/test`): el dashboard muestra el progreso y el
+  resultado, marca cada test en el log, y no pone la placa en rojo por los reinicios y panics de los tests.
 
 Sin `input()` ni `print`: lo llama el CLI (`client/espbench.py`), que decide la salida.
 """
 import dataclasses
 import json
+import os
 import pathlib
 import re
 import time
@@ -209,14 +212,56 @@ class Runner:
 
     # ----- la corrida -----
 
-    def run(self, cases: List[Case]) -> List[dict]:
+    def run(self, cases: List[Case], reporter: Optional["Reporter"] = None) -> List[dict]:
         results = []
         for i, case in enumerate(cases, 1):
             self.progress(f"[{i}/{len(cases)}] ({case.number}) {case.name}")
+            if reporter:
+                reporter.case(i, case)
             res = self.run_case(case)
             self.progress(f"  -> {res['result']} ({res['duration_s']:.1f} s)")
+            if reporter:
+                reporter.result(i, res)
             results.append(res)
         return results
+
+    def stale_s(self, cases: List[Case]) -> int:
+        """Cuánto puede pasar sin avisos antes de que el dashboard dé la corrida por cortada: el test más largo."""
+        stages = max([len(c.stages) for c in cases] + [1])
+        return int(stages * (self.case_timeout_s + self.menu_timeout_s + self.boot_timeout_s) + 60)
+
+
+class Reporter:
+    """Avisa a la Pi el avance de la corrida (`Client.test_event`). Best effort: si el bench no lo soporta (uno viejo
+    da 404) o falla, la corrida sigue y deja de avisar; `on_warn` lo cuenta una vez."""
+
+    def __init__(self, client, board, stale_s: int, on_warn: Optional[Callable] = None):
+        self.c, self.board, self.stale_s = client, board, stale_s
+        self.run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        self.warn = on_warn or (lambda msg: None)
+        self.active = True
+
+    def _post(self, phase: str, **body) -> None:
+        if not self.active:
+            return
+        try:
+            self.c.test_event(self.board, phase=phase, run_id=self.run_id, stale_s=self.stale_s, **body)
+        except Exception as e:      # noqa: BLE001 — que el dashboard no se entere no corta los tests
+            self.active = False
+            self.warn(f"el dashboard no va a mostrar esta corrida ({getattr(e, 'message', None) or e})")
+
+    def start(self, total: int, project: Optional[str], user: Optional[str]) -> None:
+        self._post("start", total=total, project=project, user=user)
+
+    def case(self, index: int, case: Case) -> None:
+        self._post("case", case={"index": index, "number": case.number, "name": case.name})
+
+    def result(self, index: int, res: dict) -> None:
+        keys = ("number", "name", "result", "duration_s", "message", "file", "line", "stage")
+        self._post("result", case={"index": index, **{k: res.get(k) for k in keys if res.get(k) is not None}})
+
+    def end(self, status: str = "done", message: Optional[str] = None) -> None:
+        self._post("end", status=status, message=message)
 
 
 def summarize(results: List[dict]) -> dict:

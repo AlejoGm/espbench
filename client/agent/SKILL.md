@@ -117,6 +117,8 @@ espbench test <dev> --no-flash --json                               # la placa y
   `duration_s`; las fallas traen `message`, `file`, `line` y `log` (la cola). `summary` cuenta por resultado.
 - Exit 0 si pasó todo, **11 `tests_failed`** si falló alguno. Los demás códigos son del banco, como en `flash`.
 - Al terminar la placa queda con el test app: flasheá el firmware que tenía.
+- El dashboard la sigue en vivo (card "Testeando" con la barra, pestaña Tests del monitor, cada test marcado en el
+  log): pasale el link a quien quiera mirarla. Los reinicios y panics de la corrida no la marcan como rota.
 
 ## Ejemplos (salidas reales, recortadas)
 

@@ -116,7 +116,7 @@
             <div class="tabs" id="tabs"></div>
             <label class="group-sel" title="Agrupar las placas"><i class="ti ti-layout-rows" aria-hidden="true"></i>Agrupar
                 <select id="group" aria-label="Agrupar las placas"></select></label>
-            <div class="legend"><span><i style="background:var(--boot)"></i>Reinicio</span><span><i style="background:var(--bad)"></i>Panic</span><span><i style="background:var(--flash)"></i>Flash</span><span><i style="background:var(--warn)"></i>Reservada</span></div>
+            <div class="legend"><span><i style="background:var(--boot)"></i>Reinicio</span><span><i style="background:var(--bad)"></i>Panic</span><span><i style="background:var(--flash)"></i>Flash</span><span><i style="background:var(--test)"></i>Tests</span><span><i style="background:var(--warn)"></i>Reservada</span></div>
         </div>
         <section class="boards" id="boards"></section>
         <div class="empty hidden" id="empty"><b>No encontré ningún bench</b>Revisá que Tailscale esté conectado. Los benches fuera de la tailnet van en <code>~/.config/espbench-benches.json</code>.</div>
@@ -217,7 +217,8 @@
     // ── alertas y notificaciones ──
 
     var ALERT = {panic: ['bad', 'bolt', 'Panic en '], boot_loop: ['bad', 'repeat', 'Boot loop en '], flash: ['flash', 'upload', 'Flash en '],
-                 silent: ['warn', 'volume-off', 'Sin log: '], down: ['bad', 'server-off', 'No responde: ']};
+                 silent: ['warn', 'volume-off', 'Sin log: '], down: ['bad', 'server-off', 'No responde: '],
+                 tests: ['bad', 'flask', 'Tests fallaron en ']};
 
     function collectAlerts() {
         var out = [];
@@ -235,6 +236,11 @@
         devices.forEach(function(d) {
             if (EB.silentFor(d) !== null) out.push({id: 'silent:' + d.bench + ':' + d.tty_name, type: 'silent', who: d.device_key || d.tty_name, sub: d.bench,
                                                     ts: EB.isoLocal(d.last_log_epoch)});
+            // Una corrida de tests terminada con fallas en las últimas 24 h (EB.testView: después no se muestra)
+            var tv = EB.testView(d.test);
+            if (tv && tv.status === 'done' && tv.failed) out.push({id: 'tests:' + d.bench + ':' + d.tty_name + ':' + d.test.run_id, type: 'tests',
+                                                                  who: d.device_key || d.tty_name, sub: [d.bench, tv.text].join(', '),
+                                                                  ts: EB.isoLocal(d.test.ended)});
         });
         return out.sort(function(a, b) { return (b.ts || '').localeCompare(a.ts || ''); });
     }

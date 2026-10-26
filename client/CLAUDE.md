@@ -7,7 +7,7 @@ Lo que corre en la máquina del developer (Mac, Python 3.9+: nada de `X | None` 
 | `deploy.py` | humanos | build + flash local o remoto, interactivo (`input()`, `rich`), modo custom con file picker |
 | `espbench.py` | agentes | CLI `espbench`: `--json` (un objeto por comando), exit codes por causa |
 | `espbench_lib.py` | los dos | config, API HTTP (urllib), rangos del log con espera, flash por TCP + verify. Sin `input()`, `rich` ni `print` |
-| `unity_runner.py` | agentes, CI | `espbench test`: el menú de Unity de un test app (listar, correr de a uno, multietapa a través de reinicios, panic por test) y el JUnit. Sobre `Client.send` + `read_range` |
+| `unity_runner.py` | agentes, CI | `espbench test`: el menú de Unity de un test app (listar, correr de a uno, multietapa a través de reinicios, panic por test) y el JUnit. Sobre `Client.send` + `read_range`. `Reporter` le avisa cada paso a la Pi (`Client.test_event` → `POST /api/device/{tty}/test`, best effort: un bench viejo no corta la corrida) para el dashboard |
 | `agent/SKILL.md` | Claude Code | skill de `espbench` (se instala con un symlink a `~/.claude/skills/espbench`) |
 | `install.sh` | | venv (`rich` para deploy) + wrapper `espbench` en `~/.local/bin`. Idempotente. Overrides: `ESPBENCH_VENV`, `ESPBENCH_BIN_DIR`, `ESPBENCH_SKIP_PIP` |
 

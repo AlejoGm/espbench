@@ -1026,6 +1026,10 @@ class Client:
     def command(self, board: Board, command: str) -> dict:
         return self._write(board, f"/api/device/{board.tty}/command/{command}", self._write_body(board))
 
+    def test_event(self, board: Board, **body) -> dict:
+        """Aviso de una corrida de `espbench test` (phase start | case | result | end; remote/server/testrun.py)."""
+        return self._write(board, f"/api/device/{board.tty}/test", self._write_body(board, **body))
+
     def reserve(self, board: Board, ttl_s: int) -> dict:
         body = {**self.config.require_creds("reserve"), "ttl_s": int(ttl_s)}
         if board.mac:

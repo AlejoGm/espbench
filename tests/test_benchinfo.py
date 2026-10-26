@@ -69,7 +69,7 @@ def test_activity_buckets_by_hour():
     a = benchinfo.device_activity(paths.device_events_file(MAC), 24, NOW)
     b = a["buckets"]
     assert len(b) == 24
-    assert b[0] == {"boot": 2, "panic": 0, "flash": 1, "boot_loop": 0, "reserve": 0}
+    assert b[0] == {"boot": 2, "panic": 0, "flash": 1, "boot_loop": 0, "reserve": 0, **dict.fromkeys(benchinfo.TEST_KEYS, 0)}
     assert b[14]["reserve"] == 1
     assert b[19]["boot_loop"] == 1 and sum(x["boot_loop"] for x in b) == 1    # solo el inicio
     assert b[23]["panic"] == 1 and b[23]["boot"] == 1

@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.49.1
+**Version:** 0.50.0
 
 ---
 
@@ -254,6 +254,8 @@ placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_H
 
 Web UI at `http://<pi-ip>:8080`, light or dark theme: the bench (temperature, RAM, disk, load, uptime), each board with its status, uptime, last log and 24 h activity, and a live serial monitor with events, history and console.
 
+An `espbench test` run shows up live: the board reads **Testing** with a progress bar (passed, failed, the test running now), the monitor marks where each test starts and ends in the log and lists every case in its **Tests** tab (click one for its log). Restarts and panics during a run belong to the tests: they don't mark the board as broken.
+
 Escrituras, token de la API y cómo liberar una placa: ver [Despliegue y seguridad](#despliegue-y-seguridad).
 
 ---
@@ -382,6 +384,7 @@ espbench/
 │   │   ├── api.py             # Dashboard backend: REST + WebSocket
 │   │   ├── device_registry.py # Dashboard's read model of the devices
 │   │   ├── log_streamer.py    # Log tail → WebSocket
+│   │   ├── testrun.py         # `espbench test` runs per board, for the dashboard
 │   │   ├── runstate.py        # run/<tty>.json (runtime state between processes)
 │   │   ├── paths.py           # Every path under ESP_BASE
 │   │   └── taglog.py          # taglog.info(TAG, msg) logging

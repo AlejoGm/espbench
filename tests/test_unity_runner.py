@@ -195,3 +195,41 @@ def test_multi_device_cases_are_skipped(cli, board):
     _app(board, [("dos placas", "[multi_device]", "pass"), ("pasa", "[es]", "pass")])
     code, r = cli("test", "sim-board", "--no-flash")
     assert code == 0 and [t["result"] for t in r["tests"]] == ["skipped", "pass"]
+
+
+# ---------- lo que ve el dashboard ----------
+
+def test_the_run_is_reported_to_the_dashboard(cli, board):
+    """Cada paso llega a la Pi: la corrida queda en meta/test_runs/ (card, pestaña Tests) y como eventos `test` (marcas
+    en el log); el panic del test no deja la placa en Panic."""
+    from server import events, paths, testrun
+    from server.device_registry import acked
+    _app(board, CASES)
+    code, r = cli("test", "sim-board", "--no-flash", "--timeout-test", "2s")
+    assert code == 11
+    run = testrun.detail(board.mac, __import__("time").time())
+    assert (run["status"], run["total"], run["done"], run["passed"], run["failed"]) == ("done", 5, 5, 2, 3)
+    assert [c["result"] for c in run["cases"]] == ["pass", "fail", "timeout", "panic", "pass"]
+    assert all(c["cursor"] and c["end_cursor"] for c in run["cases"])
+    phases = [e["detail"]["phase"] for e in events.read(paths.device_events_file(board.mac)) if e["type"] == "test"]
+    assert phases == ["start"] + ["case", "result"] * 5 + ["end"]
+    wins = testrun.windows(board.mac, __import__("time").time())
+    panics = [e for e in events.read(paths.device_events_file(board.mac)) if e["type"] == "panic"]
+    assert panics and all(testrun.in_windows(events_epoch(e), wins) for e in panics)
+    assert acked({"last_panic": {"ts": panics[-1]["ts"]}}, None, wins)["panic"] is True
+
+
+def events_epoch(ev):
+    import datetime as dt
+    return dt.datetime.fromisoformat(ev["ts"]).timestamp()
+
+
+def test_a_bench_that_does_not_know_about_tests_does_not_stop_the_run(cli, board, monkeypatch):
+    from client import espbench_lib as lib
+
+    def old_bench(self, board, **body):
+        raise lib.EspbenchError("not_found", "HTTP 404")
+    monkeypatch.setattr(lib.Client, "test_event", old_bench)
+    _app(board, [("pasa", "[es]", "pass"), ("otro", "[es]", "pass")])
+    code, r = cli("test", "sim-board", "--no-flash")
+    assert code == 0 and [t["result"] for t in r["tests"]] == ["pass", "pass"]

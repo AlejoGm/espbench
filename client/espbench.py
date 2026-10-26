@@ -579,7 +579,14 @@ def cmd_test(c: lib.Client, a, out: Out) -> int:
         return out.emit({"ok": False, "error": "not_found", **info,
                          "message": f"ningún test tiene las tags {a.tags}"})
 
-    results = runner.run(chosen)
+    reporter = unity.Reporter(c, board, runner.stale_s(chosen), on_warn=out.log)
+    reporter.start(len(chosen), info.get("project_name"), c.config.lock_user)
+    try:
+        results = runner.run(chosen, reporter)
+    except BaseException as e:
+        reporter.end("aborted", getattr(e, "message", None) or type(e).__name__)
+        raise
+    reporter.end()
     summary = unity.summarize(results)
     if a.junit:
         unity.junit(results, pathlib.Path(a.junit), suite=info.get("project_name") or board.label,

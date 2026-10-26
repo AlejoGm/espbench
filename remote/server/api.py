@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server import benchinfo, geo
+from server import benchinfo, geo, testrun
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -273,6 +273,12 @@ def board_events(key: str, type: Optional[str] = None, since: Optional[str] = No
                        order=order, counts=counts)
 
 
+@app.get("/api/board/{key}/test")
+def board_test(key: str):
+    """La última corrida de `espbench test` de la placa, con cada caso (testrun.py). null si nunca corrió una."""
+    return {"run": testrun.detail(_board_mac(key), time.time())}
+
+
 @app.get("/api/device/{tty}/jobs")
 async def device_jobs(tty: str, limit: int = 30):
     _check_tty(tty)
@@ -354,6 +360,29 @@ async def device_send(tty: str, body: dict = Body(...), authorization: Optional[
             detail.update(_forced_by(body, request))
         _record(state, "send", detail, cursor)
     return {"ok": True, "session": session, "sent": text, "enter": enter, "cursor": cursor}
+
+
+@app.post("/api/device/{tty}/test")
+async def device_test(tty: str, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """Aviso de `espbench test` (client/unity_runner.py): phase start | case | result | end de una corrida. Actualiza
+    la corrida de la placa (testrun.py: progreso y resultado para la card; dentro de la ventana, reinicios y panics
+    no son problemas) y lo registra como evento `test` con el cursor del log al recibirlo. Como send: expect_mac y
+    una reserva ajena bloquea (423)."""
+    _require_auth(authorization)
+    _check_tty(tty)
+    state = runstate.read(tty) or {}
+    _check_expect_mac(state, body.get("expect_mac"))
+    if not state.get("mac"):
+        _fail(409, "busy", f"la placa de {tty} todavía no tiene MAC ({state.get('state') or 'sin proceso'})")
+    _check_reservation(tty, body)
+    cursor = events.log_end_cursor(state["log_path"]) if state.get("log_path") else None
+    try:
+        detail = testrun.apply(state["mac"], body, time.time(), cursor)
+    except testrun.TestRunError as e:
+        _fail(404 if e.error == "not_found" else 400, e.error, e.message)
+    if not detail.get("repeated"):
+        cursor = _record(state, "test", detail, cursor) if cursor else _record(state, "test", detail)
+    return {"ok": True, "cursor": cursor, "run": testrun.view(state["mac"], time.time())}
 
 
 @app.post("/api/device/{tty}/reserve")

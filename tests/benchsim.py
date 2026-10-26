@@ -327,7 +327,7 @@ class _Handler(BaseHTTPRequestHandler):
             if method == "DELETE" and len(parts) == 5:
                 return _call(api.delete_property_value, parts[2], parts[4], authorization=auth)
         if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "board"]:
-            fn = {"log": api.board_log, "events": api.board_events}.get(parts[3])
+            fn = {"log": api.board_log, "events": api.board_events, "test": api.board_test}.get(parts[3])
             if fn is not None:
                 return _call(fn, parts[2], **_query_kwargs(fn, query))
         if parts[:2] == ["api", "device"] and len(parts) >= 3:
@@ -336,7 +336,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return _call(api.get_device, tty)
             if method == "POST" and len(parts) == 4:
                 fn = {"send": api.device_send, "reserve": api.device_reserve, "release": api.device_release,
-                      "unlock": api.device_unlock}.get(parts[3])
+                      "unlock": api.device_unlock, "test": api.device_test}.get(parts[3])
                 if fn is not None:
                     return _call(fn, tty, body, authorization=auth)
                 if parts[3] == "devremote-reset":

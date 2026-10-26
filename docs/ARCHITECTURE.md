@@ -216,6 +216,7 @@ Una línea JSON por evento, con la hora y el cursor del log donde pasó:
 | `reserve` / `release` | api (`release` también `devremote --unlock`, forzado) | user, expires (con zona) |
 | `note` | api, al cambiar la nota (`PATCH /api/devices/{mac}`) | text (`""` = borrada), user |
 | `props` | api, al cambiar las propiedades | changes `{cat: {from, to}}`, user |
+| `test` | api, en cada aviso de `espbench test` (`POST /api/device/{tty}/test`; cursor = fin del log al recibirlo) | phase (`start`/`case`/`result`/`end`), run_id; start: total, project, user; case: case {index, number, name}; result: además result, duration_s, message, file, line, stage; end: status (`done`/`aborted`), totales y counts |
 
 - **Boot loop**: mientras está activo no se registran los `boot` ni los `panic`
   sueltos (solo `start` con el conteo y `end` con los panics): un firmware que
@@ -374,7 +375,7 @@ boot ─────► devremote.service ────────────�
 | Endpoint | |
 |---|---|
 | `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
-| `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`) |
+| `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`). Lo de adentro de una corrida de tests va aparte (`test_boot`, `test_panic`; `test`/`test_fail` = casos terminados) y no avisa |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
 | `GET /api/version` | `{app: "espbench", version, name, id, location, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname; `location`, de `geo.location()`: `{label, city, region, country, lat, lon, tz, source: auto\|manual, ts, stale}` o `null`) y si hay token de la API |
 | `PATCH /api/bench` `{location}` | Override manual de la ubicación (texto hasta 60 caracteres, sin control ni formato Unicode Cf; `source: "manual"`); `""`/`null` lo borra y vuelve la automática. Devuelve la `location` resultante. Lo usa el header del dashboard |
@@ -390,6 +391,8 @@ boot ─────► devremote.service ────────────�
 | `GET /api/device/{tty}/jobs`, `.../jobs/{job_id}/log` | Historial de flasheos (`history.py`, `result.json`) |
 | `GET /api/device/{tty}/sessions`, `.../sessions/{name}[?download=1]` | Sesiones de log (actual + rotadas) |
 | `POST /api/device/{tty}/send` `{text, enter, expect_mac?, lock_user?, lock_token?, force?}` | Texto al serial vía `tmux send-keys -l`; 409 `busy` si flashea/borra. Devuelve `cursor` (fin del log antes del envío) y registra el evento `send` |
+| `POST /api/device/{tty}/test` `{phase, run_id, ...}` | Aviso de `espbench test` (`testrun.py`): start (total, project, user, stale_s), case (el test que empieza), result (cómo terminó), end (status `done`/`aborted`). Actualiza la corrida de la placa y registra el evento `test`. Como `send`: `expect_mac`, 423 si la reservó otro; 404 `not_found` si el run_id no es la corrida actual, 400 si el aviso no corresponde |
+| `GET /api/board/{key}/test` | `{run}`: la última corrida con cada caso (cursores de inicio y fin en el log) y `status` (`running`, `done`, `aborted`, `interrupted` = sin avisos por más de `stale_s`), o `null` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
 | `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
 | `GET /api/board/{key}/events?type=a,b&since=&limit=&order=&counts=` | Eventos de la placa, ordenados por (sesión, offset): los últimos `limit` (50), o los primeros desde `since` con `order=asc`; `more` si quedaron afuera; `counts=1`: además `{tipo: n}` de todos desde `since` (sin el filtro de tipo) |
@@ -421,6 +424,13 @@ boot ─────► devremote.service ────────────�
 - `send`, `reserve` y `release` (también `unlock`) quedan en `events.jsonl` (`events.record`, cursor =
   fin del log en ese momento; el de `send` es el previo al envío y solo se
   registra si tmux lo mandó).
+- **Corridas de tests** (`testrun.py`): el cliente (`unity_runner.Reporter`) avisa cada paso; el api guarda la
+  última corrida en `meta/test_runs/<MAC>.json` (en `meta/`: el api, sfypi, no puede crear archivos en
+  `devices/<MAC>/`, que es del proceso del device) con las ventanas [inicio, fin] de las recientes (48 h, 50).
+  `/api/devices` trae `test` (sin la lista de casos) y `acked` cubre el último panic / reset anormal si cayó en una
+  ventana (margen de 1 s: `health` va al segundo) y el boot loop si hay una corrida en curso o que terminó hace
+  menos de 90 s. Un multietapa reinicia a propósito y un test puede esperar un panic: la placa no queda en rojo y
+  bench-master no lo avisa. La falla se ve en el resultado de la corrida.
 - **Lecturas por placa** (`/api/board/{key}`): `key` = `device_key`, SN o MAC (con
   o sin separadores), resuelto con `devices.json` (`DevicesFile.resolve_board`).
   Funcionan con la placa desconectada (los datos viven en `devices/<MAC>/`); la
@@ -553,7 +563,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
 ├── meta/                  777: lo que crea el api (sfypi)
 │   ├── properties.json    valores de las propiedades de este bench (las categorías están en el código)
 │   ├── bench_geo.json     ubicación automática por IP (geo.py): ciudad, región, país, lat/lon, tz, ts, stale
-│   └── bench_location     (opcional) override manual de la ubicación (lo edita el dashboard)
+│   ├── bench_location     (opcional) override manual de la ubicación (lo edita el dashboard)
+│   └── test_runs/<MAC>.json  última corrida de `espbench test` de cada placa y ventanas de las recientes (testrun.py)
 ├── slots.conf             (opcional) <K> <ID_PATH>
 ├── run/<tty>.json         estado runtime de cada sesión
 ├── devices/<MAC>/

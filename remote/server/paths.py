@@ -180,6 +180,12 @@ def device_last_user(mac: str) -> pathlib.Path:
     return device_home(mac) / "last_user"
 
 
+def device_test_run(mac: str) -> pathlib.Path:
+    """La última corrida de `espbench test` de la placa y las ventanas de las recientes (testrun.py). La escribe el
+    api (sfypi): en meta/, no en devices/<MAC>/, que crea el proceso del device (root, 755)."""
+    return meta_dir() / "test_runs" / f"{_normalize_mac(mac)}.json"
+
+
 def device_unknown_home(tty_name: str) -> pathlib.Path:
     """Hogar provisorio de un device cuya MAC nunca se pudo leer."""
     return devices_dir() / f"unknown-{tty_name}"

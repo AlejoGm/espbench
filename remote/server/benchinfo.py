@@ -9,6 +9,9 @@ benchinfo.py — lo que el dashboard muestra del bench entero (no de una placa):
   merecen un aviso (panic, boot loop, flash). Sale de devices/<mac>/events.jsonl,
   leído de atrás para adelante hasta la ventana. Con un ACK de la placa (ack_at),
   `totals` cuenta solo lo de después y `acked` dice cuántas horas quedaron antes.
+  Los reinicios, panics y boot loops durante una corrida de `espbench test`
+  (testrun.windows) no se cuentan ni avisan: van como `test_boot` / `test_panic`;
+  `test` y `test_fail` cuentan los casos que terminaron en esa hora.
 """
 import datetime as dt
 import os
@@ -21,10 +24,12 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
-from server import events, paths
+from server import events, paths, testrun
 
 # Tipos que se cuentan por hora. reserve cuenta la hora en la que se tomó la reserva.
 BUCKET_TYPES = ("boot", "panic", "flash", "boot_loop", "reserve")
+# Durante una corrida de tests: casos terminados (y los que fallaron), y los reinicios/panics de los tests.
+TEST_KEYS = ("test", "test_fail", "test_boot", "test_panic")
 # Eventos que van a la lista de recientes (los avisos de bench-master).
 NOTABLE = ("panic", "boot_loop", "flash")
 
@@ -119,14 +124,15 @@ def _epoch(ts: Optional[str]) -> Optional[float]:
         return None
 
 
-def device_activity(events_path, hours: int, now: float, ack: Optional[float] = None) -> dict:
+def device_activity(events_path, hours: int, now: float, ack: Optional[float] = None, test_windows=()) -> dict:
     """{"buckets": [{boot, panic, ...} × hours], "totals": {boot, panic, ...}, "acked": n,
     "recent": [eventos notables]}. El bucket 0 es la hora más vieja; el último termina en
     `now`. ack (epoch del ACK): totals cuenta solo lo posterior; acked = los primeros n
     buckets, los que empezaron antes del ACK (el del ACK, solo si no tuvo nada después).
-    Sin ACK, totals = suma de los buckets."""
+    Sin ACK, totals = suma de los buckets. test_windows: lo de adentro es de los tests (ver arriba)."""
     start = now - hours * 3600
-    buckets = [dict.fromkeys(BUCKET_TYPES, 0) for _ in range(hours)]
+    wins = list(test_windows or [])
+    buckets = [dict.fromkeys(BUCKET_TYPES + TEST_KEYS, 0) for _ in range(hours)]
     totals = dict.fromkeys(BUCKET_TYPES, 0)
     after_ack = set()                       # buckets con algo posterior al ACK
     recent = []
@@ -140,10 +146,21 @@ def device_activity(events_path, hours: int, now: float, ack: Optional[float] = 
         if t < start:
             break                           # de atrás para adelante: lo que sigue es más viejo
         typ = ev.get("type")
-        if typ == "boot_loop" and (ev.get("detail") or {}).get("phase") == "end":
+        detail = ev.get("detail") or {}
+        if typ == "boot_loop" and detail.get("phase") == "end":
             continue                        # cuenta el inicio, no el fin
+        i = min(hours - 1, int((t - start) // 3600))
+        if typ == "test":
+            if detail.get("phase") == "result":
+                buckets[i]["test"] += 1
+                if (detail.get("case") or {}).get("result") in testrun.FAILED:
+                    buckets[i]["test_fail"] += 1
+            continue
+        if typ in ("boot", "panic", "boot_loop") and testrun.in_windows(t, wins):
+            if typ != "boot_loop":          # el loop de un multietapa: sus boots ya se contaron
+                buckets[i]["test_" + typ] += 1
+            continue
         if typ in BUCKET_TYPES:
-            i = min(hours - 1, int((t - start) // 3600))
             buckets[i][typ] += 1
             if ack is None or t > ack:
                 totals[typ] += 1
@@ -163,6 +180,7 @@ def activity(devices: List[dict], hours: int = 24, now: Optional[float] = None) 
     for d in devices:
         if not d.get("mac"):
             continue
-        a = device_activity(paths.device_events_file(d["mac"]), hours, now, _epoch(d.get("ack_at")))
+        a = device_activity(paths.device_events_file(d["mac"]), hours, now, _epoch(d.get("ack_at")),
+                            testrun.windows(d["mac"], now))
         out[d["tty_name"]] = {"key": d.get("device_key") or d.get("sn") or d["mac"], "mac": d["mac"], **a}
     return {"now": events.iso_ms(now), "hours": hours, "devices": out}
