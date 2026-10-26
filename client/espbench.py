@@ -119,6 +119,8 @@ def _human_benches(r: dict) -> None:
         rows.append((b["name"], where, b["host"], b["version"] or "-", {True: "sí", False: "no"}.get(b["auth"], "-"),
                      str(b["boards"]), str(b["available"]), note))
     _table(rows)
+    if r.get("message"):
+        print(r["message"])
 
 
 def _human_events(r: dict) -> None:
@@ -156,7 +158,10 @@ def cmd_benches(cfg: lib.Config, a, out: Out) -> int:
             except EspbenchError as e:
                 props = False if e.error == "not_found" else None
         bs.append(lib.bench_summary(b, cfg.lock_user, exclude, props))
-    return out.emit({"ok": True, "benches": bs}, _human_benches)
+    r = {"ok": True, "benches": bs}
+    if not found.found:
+        r["message"] = f"no se encontró ningún bench: {found.why_empty()}"
+    return out.emit(r, _human_benches)
 
 
 def _all_boards(c: lib.Client, a, with_unknown: bool = False):
@@ -629,7 +634,7 @@ def _discover(cfg: lib.Config, a, out: Out, found: "lib.Benches") -> None:
     if a.fn in (cmd_ls, cmd_pick, cmd_props) or (a.fn is cmd_events and getattr(a, "all", False)):
         a.multi = [(b, lib.Client(lib.config_for_bench(cfg, b), log=out.log)) for b in found.list()]
         if a.fn is cmd_props and not a.multi:
-            raise EspbenchError("not_found", "no se encontró ningún bench (`espbench benches`)")
+            raise EspbenchError("not_found", f"no se encontró ningún bench. {found.why_empty()}")
         return
     if not getattr(a, "dev", None):
         return

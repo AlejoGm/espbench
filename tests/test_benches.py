@@ -210,6 +210,39 @@ def test_probe_marks_legacy_and_auth():
     assert not new.legacy and new.auth is True
 
 
+def test_an_empty_scan_is_not_cached(tmp_path):
+    """Un scan vacío (Tailscale o la red en un mal momento) no queda pegado: el próximo comando escanea."""
+    ts = "http://100.75.179.122:8080"
+    up = [False]
+
+    def net(url, timeout):
+        if up[0] and url == ts + "/api/version":
+            return {"app": "espbench", "version": "1", "name": "lab"}
+        if up[0] and url == ts + "/api/devices":
+            return [DEV_A]
+        raise ConnectionRefusedError(url)
+
+    cache = tmp_path / "benches.json"
+    kw = dict(cfg={"tailscale": True, "hosts": []}, status=TS_STATUS, get_json=net, now=lambda: 1000.0)
+    assert benches.scan_cached(cache, ttl_s=30, **kw) == ([], False)
+    up[0] = True
+    found, cached = benches.scan_cached(cache, ttl_s=30, **kw)
+    assert not cached and [b.name for b in found] == ["lab"]
+
+
+def test_diagnose_says_why_there_is_no_bench():
+    cfg = {"tailscale": True, "hosts": [], "timeout_s": 2}
+    down = lambda: None  # noqa: E731  (tailscale status falló)
+    assert "no respondió" in benches.diagnose(cfg, down, ts_bin=lambda: "/usr/local/bin/tailscale")
+    assert "no hay Tailscale" in benches.diagnose(cfg, down, ts_bin=lambda: None)
+    why = benches.diagnose(cfg, lambda: TS_STATUS)
+    assert "ningún peer online de la tailnet (sensipi02, Gustavo, v6only)" in why and "2 s" in why
+    assert "ningún peer online" in benches.diagnose(cfg, lambda: {"Peer": {}})
+    assert "host del config (a, b, c)" in benches.diagnose({"tailscale": False, "hosts": ["a", "b", "c"]})
+    assert "apaga Tailscale" in benches.diagnose({"tailscale": False, "hosts": []})
+    assert "ESPBENCH_HOST" in why
+
+
 def test_scan_cached_reuses_the_bench_list_but_refetches_devices(tmp_path):
     """La lista de benches sale de la cache por ttl_s; los devices, siempre del bench.
     Candidatos de un `tailscale status --json` falso."""
@@ -246,7 +279,8 @@ def test_scan_cached_survives_a_broken_cache(tmp_path):
     cache = tmp_path / "benches.json"
     cache.write_text("{no json")
     found, cached = benches.scan_cached(cache, cfg={"tailscale": False, "hosts": []}, get_json=fake_net({}))
-    assert found == [] and not cached and benches.scan_cached(cache, cfg={"tailscale": False, "hosts": []})[1]
+    assert found == [] and not cached
+    assert benches.scan_cached(cache, cfg={"tailscale": False, "hosts": []})[1] is False   # vacío: no se cacheó
 
 
 def test_device_without_key_or_mac_never_matches_empty():
