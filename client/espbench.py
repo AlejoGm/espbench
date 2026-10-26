@@ -16,6 +16,8 @@ espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
     espbench send <dev> "txt" [--no-enter] [--until X] [--for D] [--timeout D] [--max-lines N]
     espbench flash <dev> [--build-dir B] [--no-encrypt] [--erase] [--verify[=10s]] [--until X] [--timeout D]
     espbench reset <dev> [--bootloader] [--verify[=10s]] [--until X] [--timeout D]
+    espbench test <dev> [--build-dir B] [--tags "[ota][modem]"] [--timeout-test 300s] [--junit out.xml]
+                        [--no-flash] [--list]
 
 Comunes: --json, --host, --profile, --bench, --expect-panic. Con --json, un objeto
 JSON por comando en stdout. Exit codes y `error`: docs/specs/agents-cli.md §8.3.
@@ -35,6 +37,7 @@ import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from client import espbench_lib as lib  # noqa: E402
+from client import unity_runner as unity  # noqa: E402
 from client.espbench_lib import EspbenchError  # noqa: E402
 
 
@@ -483,9 +486,9 @@ def _after_write(c: lib.Client, a, out: Out, board: lib.Board, since: str, r: di
     return out.emit(r, human)
 
 
-def cmd_flash(c: lib.Client, a, out: Out) -> int:
-    _validate(a)
-    board = c.resolve(a.dev, write=True)
+def _flash_target(c: lib.Client, a):
+    """El build dir (relativo al project_root del .flashcfg.json) y si va cifrado / con erase. Lo comparten
+    `flash` y `test`."""
     fcfg = c.config.flashcfg
     root = pathlib.Path(".")
     if c.config.flashcfg_path is not None:
@@ -494,13 +497,25 @@ def cmd_flash(c: lib.Client, a, out: Out) -> int:
     if not build_dir.is_absolute():
         build_dir = root / build_dir
     encrypt = bool(fcfg.get("encrypt", True)) if a.encrypt is None else a.encrypt
-    erase = bool(fcfg.get("erase", False)) or a.erase
+    erase = bool(fcfg.get("erase", False)) or getattr(a, "erase", False)
+    return build_dir.resolve(), encrypt, erase
+
+
+def _flash(c: lib.Client, out: Out, board: lib.Board, build_dir: pathlib.Path, encrypt: bool, erase: bool) -> dict:
+    fcfg = c.config.flashcfg
+    return c.flash(board, build_dir, chip=str(fcfg.get("chip") or "auto"),
+                   baud=int(fcfg.get("flash_baud") or 921600), encrypt=encrypt, erase=erase,
+                   on_line=None if out.json else (lambda l: print(l, file=sys.stderr, flush=True)))
+
+
+def cmd_flash(c: lib.Client, a, out: Out) -> int:
+    _validate(a)
+    board = c.resolve(a.dev, write=True)
+    build_dir, encrypt, erase = _flash_target(c, a)
     before = known = None
     if _waits_after_write(a):
         before, known = _now_cursor(c, board), c.crash_snapshot(board.key)
-    r = c.flash(board, build_dir.resolve(), chip=str(fcfg.get("chip") or "auto"),
-                baud=int(fcfg.get("flash_baud") or 921600), encrypt=encrypt, erase=erase,
-                on_line=None if out.json else (lambda l: print(l, file=sys.stderr, flush=True)))
+    r = _flash(c, out, board, build_dir, encrypt, erase)
     r["board"] = board.label
     if not _waits_after_write(a):
         return out.emit(r, _human_kv)
@@ -509,6 +524,66 @@ def cmd_flash(c: lib.Client, a, out: Out) -> int:
     if ready is None:
         out.log("la placa no volvió a monitoring todavía; verifico igual")
     return _after_write(c, a, out, board, r.get("cursor") or before, r, known)
+
+
+def _human_test(r: dict) -> None:
+    for t in r.get("tests") or []:
+        where = f" ({t['file']}:{t['line']})" if t.get("file") and t["result"] != "pass" else ""
+        msg = f": {t['message']}" if t.get("message") and t["result"] != "pass" else ""
+        print(f"{t['result']:<8} ({t['number']}) {t['name']}{where}{msg}")
+    for c in r.get("cases") or []:
+        stages = f"  [{len(c['stages'])} etapas]" if c.get("stages") else ""
+        print(f"({c['number']}) {c['name']} {''.join('[' + t + ']' for t in c['tags'])}{stages}")
+    s = r.get("summary")
+    if s:
+        print(f"== {s['total']} tests: {s['pass']} pass, {s['failed']} fallaron "
+              f"({s['fail']} fail, {s['timeout']} timeout, {s['panic']} panic), "
+              f"{s['ignored'] + s['skipped']} salteados", file=sys.stderr)
+
+
+def cmd_test(c: lib.Client, a, out: Out) -> int:
+    """Corre un test app de Unity (ESP-IDF) y devuelve el resultado por test (client/unity_runner.py)."""
+    _validate(a)
+    case_timeout = lib.parse_duration(a.timeout_test, "--timeout-test")
+    board = c.resolve(a.dev, write=True)
+    build_dir, encrypt, erase = _flash_target(c, a)
+    info = {"board": board.label, "mac": board.mac, "sn": board.sn, "build_dir": str(build_dir),
+            **unity.project_info(build_dir)}
+
+    if not a.no_flash:
+        before, known = _now_cursor(c, board), c.crash_snapshot(board.key)
+        f = _flash(c, out, board, build_dir, encrypt, erase)
+        c.wait_ready(board)
+        v = c.verify(board, f.get("cursor") or before, window_s=0.0, until=unity.PRESS_ENTER,
+                     timeout_s=lib.VERIFY_TIMEOUT_S, known=known)
+        if not v["ok"]:
+            return out.emit({"ok": False, "error": v.get("error") or "unexpected", **info,
+                             "message": f"el test app no llegó al menú de Unity: {v.get('message') or ''}".rstrip(),
+                             "verify": {k: x for k, x in v.items() if k != "events"}})
+
+    runner = unity.Runner(c, board, case_timeout, on_progress=out.log)
+    cases = runner.menu()
+    if not cases:
+        return out.emit({"ok": False, "error": "unexpected", **info,
+                         "message": "el menú de Unity no listó ningún test (¿el componente de los tests sin "
+                                    "WHOLE_ARCHIVE?)"})
+    chosen = unity.select(cases, unity.parse_tags(a.tags))
+    if a.list:
+        return out.emit({"ok": True, **info, "cases": [dataclasses.asdict(x) for x in chosen]}, _human_test)
+    if not chosen:
+        return out.emit({"ok": False, "error": "not_found", **info,
+                         "message": f"ningún test tiene las tags {a.tags}"})
+
+    results = runner.run(chosen)
+    summary = unity.summarize(results)
+    if a.junit:
+        unity.junit(results, pathlib.Path(a.junit), suite=info.get("project_name") or board.label,
+                    properties={k: info.get(k) for k in ("board", "mac", "sn", "project_name", "project_version",
+                                                         "idf_ver", "target")})
+    r = {"ok": summary["failed"] == 0, **info, "summary": summary, "tests": results}
+    if summary["failed"]:
+        r.update({"error": "tests_failed", "message": f"{summary['failed']} de {summary['total']} tests fallaron"})
+    return out.emit(r, _human_test)
 
 
 def cmd_reset(c: lib.Client, a, out: Out) -> int:
@@ -668,6 +743,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--until")
     sp.add_argument("--timeout")
     sp.add_argument("--max-lines", type=int)
+
+    sp = add("test", cmd_test, "corre un test app de Unity (ESP-IDF) y devuelve el resultado por test")
+    sp.add_argument("--build-dir", default="build", help="el test app compilado (default build)")
+    sp.add_argument("--no-encrypt", dest="encrypt", action="store_false", default=None)
+    sp.add_argument("--tags", help='solo los tests con todas esas tags: "[ota][modem]" o ota,modem')
+    sp.add_argument("--timeout-test", default="300s", help="tope por test (default 300s); uno colgado falla solo")
+    sp.add_argument("--junit", metavar="ARCHIVO", help="además, el resultado en JUnit XML")
+    sp.add_argument("--no-flash", action="store_true", help="la placa ya tiene el test app")
+    sp.add_argument("--list", action="store_true", help="lista los tests que correría, sin correrlos")
 
     sp = add("reserve", cmd_reserve, "reserva la placa (bloquea send/reset ajenos)")
     sp.add_argument("--ttl", default="30m", help="vencimiento (default 30m)")

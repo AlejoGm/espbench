@@ -70,6 +70,7 @@ EXIT_CODES = {
     "bad_anchor": 8, "cursor_expired": 8,
     "session_ended": 9,
     "network": 10, "auth": 10, "auth_config": 10,
+    "tests_failed": 11,     # espbench test: corrió, y algún test falló, se colgó o tuvo un panic
 }
 
 # Errores del protocolo TCP del flash (protocol.py) → contrato del cliente.
