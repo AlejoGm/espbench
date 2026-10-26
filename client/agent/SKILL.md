@@ -94,8 +94,29 @@ Los logs se comen tokens. Pedí lo justo:
 | 8 | `bad_anchor`, `cursor_expired` | el anchor no existe en esta sesión (`panic` sin panics) o el cursor es de una sesión borrada: usá `session` o `5m` |
 | 9 | `session_ended` | la placa se desconectó o su proceso se relanzó: `espbench ls --json`; si volvió, seguí desde `--since session` |
 | 10 | `network`, `auth`, `auth_config` | sin conexión con la Pi o token de la API faltante/incorrecto (`ESPBENCH_TOKEN`): avisale al usuario |
+| 11 | `tests_failed` | `espbench test` corrió y fallaron tests: mirá `tests[]` (`result`, `message`, `file:line`, `log`). No es un error del banco |
 
 Salvo el `reserve` de una reserva vencida, con exit 6 o 10 no reintentes en loop: lo resuelve una persona. Si un error llega **después** de escribir, el JSON trae lo que ya salió (`sent`, `cursor`, `job_id`): no repitas la escritura a ciegas, leé desde ese `cursor`.
+
+## Tests en placa: `espbench test`
+
+Corre un *test app* de Unity de ESP-IDF (`unity_run_menu()`) y devuelve el resultado **por test**:
+
+```
+espbench test <dev> --build-dir build-novus-bg95 --tags "[eventstorage]" --timeout-test 300s --junit r.xml --json
+espbench test <dev> --build-dir build-novus-bg95 --list --json     # qué tests hay, sin correrlos
+espbench test <dev> --no-flash --json                               # la placa ya tiene el test app
+```
+
+- Flashea el test app (cifrado como `flash`), espera el menú y corre los tests **de a uno**, con un tope por test: uno
+  colgado sale `timeout`, la placa se resetea y la corrida sigue. No mandes `[tag]` al menú a mano para correr una
+  tanda: un multietapa adentro la frena pidiendo la etapa.
+- Los multietapa (`TEST_CASE_MULTIPLE_STAGES`) se siguen solos a través de los reinicios. Un panic se le atribuye al
+  test (`result: panic`, `crash`), y la corrida sigue.
+- `tests[]`: `number`, `name`, `tags`, `result` (`pass`, `fail`, `timeout`, `panic`, `ignored`, `skipped`),
+  `duration_s`; las fallas traen `message`, `file`, `line` y `log` (la cola). `summary` cuenta por resultado.
+- Exit 0 si pasó todo, **11 `tests_failed`** si falló alguno. Los demás códigos son del banco, como en `flash`.
+- Al terminar la placa queda con el test app: flasheá el firmware que tenía.
 
 ## Ejemplos (salidas reales, recortadas)
 

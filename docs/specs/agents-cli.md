@@ -270,6 +270,7 @@ Comunes: `--json`, `--host`, `--profile`, `--expect-panic` (un panic en la venta
 | 8 | `bad_anchor` / `cursor_expired` | anchor o cursor inválido | |
 | 9 | `session_ended` | la placa se desconectó o el proceso se relanzó durante la espera | |
 | 10 | `network` / `auth` / `auth_config` | sin conexión, 401, o el token de la Pi ilegible (500) | |
+| 11 | `tests_failed` | `espbench test` corrió y algún test falló, se colgó o tuvo un panic (cuántos: `summary.failed`) | |
 
 El string `error` del JSON es el contrato; el exit code es el resumen. Hay varios 409 (`busy`, `device_changed`, `locked`) y varios 423 (`locked`, `reservation_lost`): el cliente los distingue **por el string `error`**, nunca por el status HTTP. Los errores llegan como `{"detail": {"error", "message"}}`.
 
