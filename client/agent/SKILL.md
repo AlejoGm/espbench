@@ -116,6 +116,8 @@ espbench test <dev> --no-flash --json                               # la placa y
 - `tests[]`: `number`, `name`, `tags`, `result` (`pass`, `fail`, `timeout`, `panic`, `ignored`, `skipped`),
   `duration_s`; las fallas traen `message`, `file`, `line` y `log` (la cola). `summary` cuenta por resultado.
 - Exit 0 si pasó todo, **11 `tests_failed`** si falló alguno. Los demás códigos son del banco, como en `flash`.
+- Una lectura a la Pi que no contesta se reintenta (3 veces) desde el mismo cursor. Si la Pi sigue sin contestar, la corrida
+  se corta pero sale igual con lo que ya corrió: `aborted: true`, `tests[]` parcial, el JUnit de esos, y el exit del error (10 `network`).
 - Al terminar la placa queda con el test app: flasheá el firmware que tenía.
 - El dashboard la sigue en vivo (card "Testeando" con la barra, pestaña Tests del monitor, cada test marcado en el
   log): pasale el link a quien quiera mirarla. Los reinicios y panics de la corrida no la marcan como rota.
