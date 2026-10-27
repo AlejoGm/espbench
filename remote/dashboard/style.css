@@ -219,6 +219,7 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 }
 .device-header .back-link { display: inline-flex; align-items: center; gap: 6px; height: 30px; color: var(--ink2); font-weight: 600; font-size: 13px; padding: 0 11px 0 9px; border-radius: 999px; background: var(--row); white-space: nowrap; }
 .device-header .back-link:hover { color: var(--ink); }
+.device-header > .status { flex: none; cursor: help; }
 .device-name { font-size: 16px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32ch; }
 .hdr-chips { flex: 1 1 320px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .hdr-chips:empty { display: none; }
@@ -227,10 +228,6 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 .dev-badge-label { color: var(--ink3); }
 .dev-badge-value { color: var(--ink); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
 .dev-badge.badge-fail .dev-badge-value { color: var(--bad); }
-.dev-badge.badge-state-flashing, .dev-badge.badge-state-erasing, .dev-badge.badge-state-discovering { background: var(--flash-bg); }
-.dev-badge.badge-state-flashing .dev-badge-value, .dev-badge.badge-state-erasing .dev-badge-value,
-.dev-badge.badge-state-discovering .dev-badge-value { color: var(--flash); }
-.dev-badge.badge-state-disconnected { background: var(--bad-bg); } .dev-badge.badge-state-disconnected .dev-badge-value { color: var(--bad); }
 .dev-badge.badge-locked { background: var(--warn-bg); } .dev-badge.badge-locked .dev-badge-label, .dev-badge.badge-locked .dev-badge-value { color: var(--warn); }
 .test-badge {
     display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; border: 0;
@@ -287,6 +284,11 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 
 .device-main { flex: 1; display: flex; gap: 8px; min-height: 0; }
 .term-wrap { flex: 1; position: relative; display: flex; min-width: 0; border-radius: var(--r-md); overflow: hidden; }
+/* Log vacío: qué se espera, o por qué no va a llegar nada (EB.monitorState) */
+.term-empty {
+    position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; pointer-events: none;
+    color: #8B949E; font-size: 13.5px; text-align: center;
+}
 
 /* El log: siempre oscuro */
 .terminal {
@@ -660,6 +662,7 @@ body.hide-ts .terminal .ln-ts { display: none; }
     .device-name { flex: 1 1 0; min-width: 0; max-width: none; font-size: 15px; }
     .device-header .status-label { display: none; }
     .status-dot { margin-left: 0; }
+    .status-dot.connected { display: none; }       /* sin texto, junto al estado de la placa confunde: solo si falla */
     /* chips en una sola línea que se desliza (sin scroll horizontal de la página) */
     .hdr-chips { order: 10; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
     .hdr-chips::-webkit-scrollbar { display: none; }

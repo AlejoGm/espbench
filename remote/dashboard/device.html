@@ -18,6 +18,7 @@
     <div class="device-header">
         <a class="back-link" id="back-link" href="./" title="Volver a las placas"><i class="ti ti-arrow-left" aria-hidden="true"></i><span class="lbl">Placas</span></a>
         <span class="device-name" id="device-name"></span>
+        <span class="status" id="board-status" title="Estado de la placa">…</span>
         <div class="hdr-chips">
             <span class="hdr-meta hidden" id="device-meta"></span>
             <div class="device-badges" id="device-badges"></div>
@@ -53,6 +54,7 @@
     <div class="device-main">
         <div class="term-wrap">
             <div id="terminal" class="terminal"></div>
+            <div class="term-empty hidden" id="term-empty"></div>
             <button class="new-lines hidden" id="new-lines">↓ <span id="new-lines-n">0</span> líneas nuevas</button>
         </div>
         <aside class="side-panel hidden" id="side-panel">
@@ -111,6 +113,8 @@
         $('back-link').title = nav.master ? 'Volver a bench-master' : 'Volver a las placas del bench';
 
         var MAX_LINES = 20000;   // tope de líneas en la vista; el archivo completo se descarga
+        var emptyText = null;       // qué decir con el log vacío (EB.monitorState)
+        var monState = {write: false, session: false};
 
         // ── Terminal: render incremental ──────────────────────────────────────
         // Cada línea completa es un <div>; la línea en curso (sin \n todavía) es
@@ -275,6 +279,9 @@
 
         function updateCounters() {
             var n = terminal.childElementCount - (partialEl ? 1 : 0);
+            // Log vacío: lo dice (esperando datos, o que el tty no tiene placa) en vez de una pantalla negra
+            $('term-empty').textContent = emptyText || '';
+            $('term-empty').classList.toggle('hidden', !emptyText || n > 0 || !!(partialEl && partialEl._plain));
             $('line-count').textContent = n.toLocaleString('es-AR') + ' líneas' +
                 (dropped ? ' (' + dropped.toLocaleString('es-AR') + ' recortadas)' : '');
             $('line-count').title = $('line-count').textContent;
@@ -456,13 +463,12 @@
                 .catch(function() { toast('Error de conexión', true); });
         }
 
-        var STATE_LABELS = {discovering: 'iniciando', flashing: 'flasheando', erasing: 'borrando',
-                            unknown: 'sin MAC', disconnected: 'desconectado'};
-
         function loadDeviceInfo() {
             return fetch(api)
-                .then(function(r) { return r.ok ? r.json() : null; })
+                // 404: no hay placa en el tty (null); otro error: el bench no contestó bien (undefined)
+                .then(function(r) { return r.status === 404 ? null : r.ok ? r.json() : undefined; })
                 .then(function(d) {
+                    applyMonitorState(d);
                     var badges = [];
                     var name = tty;
                     deviceLoaded = true;
@@ -479,7 +485,6 @@
                     }
                     if (d) {
                         name = d.device_key || d.hw_model || tty;
-                        if (d.state && STATE_LABELS[d.state]) badges.push(makeBadge('estado', STATE_LABELS[d.state], 'badge-state-' + d.state));
                         if (d.device_key && d.device_key !== tty) badges.push(makeBadge('tty', tty));
                         if (d.port_tcp)        badges.push(makeBadge('tcp', ':' + d.port_tcp));
                         if (d.hw_model && d.hw_model !== name) badges.push(makeBadge('hw', d.hw_model));
@@ -498,10 +503,6 @@
                             return '<span class="hbadge ' + x.cls + '" title="' + EB.escapeHtml(x.title) + '">' + EB.escapeHtml(x.text) + '</span>';
                         }).join('');
                         renderTestBadge(d);
-                        var busy = d.state === 'flashing' || d.state === 'erasing';
-                        $('serial-text').disabled = busy;
-                        $('serial-text').placeholder = busy ? 'Device ocupado (' + STATE_LABELS[d.state] + ')…'
-                                                            : 'Enviar al serial del device…  (↑↓ historial)';
                     }
                     renderMeta(d);
                     $('device-name').textContent = name;
@@ -512,7 +513,31 @@
                     $('btn-force').classList.toggle('hidden', !currentLock || !apiAuth);
                     return d;
                 })
-                .catch(function() { $('device-badges').innerHTML = makeBadge('tty', tty); });
+                .catch(function() { applyMonitorState(undefined); $('device-badges').innerHTML = makeBadge('tty', tty); });
+        }
+
+        // Estado de la placa al lado del nombre (el mismo que su card en Placas) y lo que se puede hacer con ella.
+        // La conexión del log es otra cosa: el punto chico de la derecha.
+        var ACTION_TITLES = {};
+        function applyMonitorState(d) {
+            monState = EB.monitorState(d, tty, Date.now(), EBMeta.catalog());
+            var st = monState.status;
+            $('board-status').className = 'status ' + st.cls;
+            $('board-status').textContent = st.text;
+            $('board-status').title = 'Estado de la placa (el mismo que en Placas)' + (monState.reason ? '\n' + monState.reason : '');
+            ['btn-reset', 'btn-bootloader', 'btn-devremote-reset'].forEach(function(id) {
+                var b = $(id);
+                if (!(id in ACTION_TITLES)) ACTION_TITLES[id] = b.title;
+                var ok = id === 'btn-devremote-reset' ? monState.session : monState.write;
+                if (b.dataset.busy !== '1') b.disabled = !ok;
+                b.title = ok ? ACTION_TITLES[id] : ACTION_TITLES[id] + ' — no disponible: ' + monState.reason;
+            });
+            $('serial-text').disabled = !monState.write;
+            $('serial-text').placeholder = monState.write ? 'Enviar al serial del device…  (↑↓ historial)' : monState.reason;
+            $('serial-form').querySelector('button[type=submit]').disabled = !monState.write;
+            emptyText = monState.empty;
+            updateCounters();
+            setStatus(wsState);
         }
 
         // ── Corrida de tests: badge con la barra en el header; click abre la pestaña Tests ──
@@ -1009,10 +1034,11 @@
         function sendCommand(cmd) {
             var btn = $('btn-' + cmd);
             btn.disabled = true;
+            btn.dataset.busy = '1';
             postJson('/command/' + cmd, {}, cmd === 'reset' ? 'Resetear' : 'Pasar a bootloader')
                 .then(function(res) { if (!res[0]) toast(EB.errorText(res[2], res[1]), true); })
                 .catch(function() { toast('Error de conexión', true); })
-                .finally(function() { setTimeout(function() { btn.disabled = false; }, 1000); });
+                .finally(function() { setTimeout(function() { delete btn.dataset.busy; btn.disabled = !monState.write; }, 1000); });
         }
 
         // ── Init ──────────────────────────────────────────────────────────────
@@ -1035,6 +1061,7 @@
                 if (!confirm('¿Reiniciar la sesión de ' + tty + '? Mata y relanza el proceso del device.')) return;
                 var btn = $('btn-devremote-reset');
                 btn.disabled = true;
+                btn.dataset.busy = '1';
                 // postJson: ante una reserva ajena (423) pregunta y reintenta con force
                 postJson('/devremote-reset', {}, 'Reiniciar la sesión')
                     .then(function(res) {
@@ -1043,7 +1070,7 @@
                         toast(d.ok ? 'Sesión reiniciada' : 'Falló: ' + (d.stderr || ''), !d.ok);
                     })
                     .catch(function() { toast('Error de conexión', true); })
-                    .finally(function() { setTimeout(function() { btn.disabled = false; }, 4000); });
+                    .finally(function() { setTimeout(function() { delete btn.dataset.busy; btn.disabled = !monState.session; }, 4000); });
             };
             fetch('api/version').then(function(r) { return r.json(); })
                 .then(function(v) { apiAuth = !!v.auth; $('btn-force').classList.toggle('hidden', !currentLock || !apiAuth); })
@@ -1118,10 +1145,16 @@
             });
         }
 
+        var wsState = 'reconnecting';
         function setStatus(state) {
+            wsState = state;
+            // Sin placa en el tty el WebSocket conecta igual, pero no va a llegar nada: no es "en vivo"
+            if (monState.status && monState.status.text === 'No existe') state = 'idle';
             $('status-dot').className = 'status-dot ' + state;
-            var labels = {connected: 'en vivo', reconnecting: 'reconectando...', error: 'error'};
+            var labels = {connected: 'log en vivo', reconnecting: 'reconectando el log…', error: 'sin conexión al log',
+                          idle: 'sin log'};
             $('status-label').textContent = labels[state] || state;
+            $('status-dot').title = $('status-label').textContent + ' (conexión con el log del bench, no el estado de la placa)';
         }
 
         function connect() {

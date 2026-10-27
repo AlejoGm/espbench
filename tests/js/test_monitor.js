@@ -92,3 +92,28 @@ test('monitorMetaHtml: bench sin soporte → ícono deshabilitado, sin botones',
     assert.match(h, /meta-off/);
     assert.ok(h.includes(EB.META_OFF_TITLE));
 });
+
+test('monitorState: el estado de la placa, no el de la conexión, y qué se puede hacer', () => {
+    const now = new Date(2026, 9, 27, 12, 0, 0).getTime();
+    const base = {tty_name: 'ttyUSB0', status: 'RUNNING', state: 'monitoring', mac: 'AA', last_log_epoch: now / 1000 - 1,
+                  health: {panics: 0}};
+    const ok = EB.monitorState(base, 'ttyUSB0', now);
+    assert.deepEqual([ok.status.text, ok.write, ok.session, ok.reason], ['En línea', true, true, null]);
+    assert.match(ok.empty, /Esperando datos del serial de ttyUSB0/);
+    // El mismo estado que la card: un panic sin ver es Panic aunque el log esté conectado
+    assert.equal(EB.monitorState(Object.assign({}, base, {health: {panics: 1}}), 'ttyUSB0', now).status.text, 'Panic');
+    // No existe (404): nada se puede hacer y el log lo dice
+    const nf = EB.monitorState(null, 'ttyUSB9', now);
+    assert.deepEqual([nf.status.text, nf.write, nf.session], ['No existe', false, false]);
+    assert.match(nf.empty, /No hay ninguna placa en ttyUSB9/);
+    // Flasheando: no se escribe, la sesión sí se puede reiniciar
+    const fl = EB.monitorState(Object.assign({}, base, {state: 'flashing'}), 'ttyUSB0', now);
+    assert.deepEqual([fl.status.text, fl.write, fl.session], ['Flasheando', false, true]);
+    // Proceso caído: reiniciar la sesión es justo lo que hace falta
+    const down = EB.monitorState(Object.assign({}, base, {status: 'DOWN', state: null}), 'ttyUSB0', now);
+    assert.deepEqual([down.status.text, down.write, down.session], ['Caída', false, true]);
+    assert.match(down.reason, /reiniciá la sesión/);
+    // El bench no contestó
+    assert.deepEqual([EB.monitorState(undefined, 'ttyUSB0', now).status.text, EB.monitorState(undefined, 'ttyUSB0', now).write],
+                     ['Sin datos', false]);
+});
