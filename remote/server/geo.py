@@ -4,8 +4,10 @@ geo.py — dónde está el bench, a nivel ciudad.
 - **Automática**: geolocalización por la IP pública del bench: `GET https://ipinfo.io/json`
   (sin token) y, si falla, `https://ipapi.co/json/`. Timeout corto, un intento por servicio.
   El resultado (ciudad, región, país, lat/lon, zona horaria, `ts`) va en meta/bench_geo.json.
-  La pide el api al arrancar, en un thread (no frena el arranque ni los pedidos), y cada 24 h
-  (`start_background`). Si la red falla, queda lo último guardado marcado `stale`.
+  La pide el api al arrancar, siempre (el bench pudo haberse mudado), en un thread (no frena el
+  arranque ni los pedidos), y cada 24 h (`start_background`); también a pedido (`POST
+  /api/bench/location/refresh`, el botón del dashboard). Si la red falla, queda lo último guardado
+  marcado `stale`.
 - **Manual (override)**: un texto fijo en meta/bench_location (`PATCH /api/bench {location}`),
   para cuando la IP sale por una VPN y da otra ciudad. Borrarlo vuelve a la automática.
 - **Desactivada**: con /opt/esp/geo_disabled (o `ESPBENCH_GEO=off`, lo usan los tests) el bench no
@@ -212,20 +214,23 @@ _started = False
 
 
 def start_background(get_json: Callable = http_get_json, sleep: Callable[[float], None] = time.sleep) -> bool:
-    """Thread del api: consulta al arrancar si lo guardado tiene más de 24 h (o no hay) y después cada
-    24 h; tras un fallo, de nuevo en una hora. Una sola vez por proceso. False si está desactivada."""
+    """Thread del api: consulta al arrancar (aunque lo guardado sea reciente: tras un reinicio el bench
+    pudo haberse mudado) y después cada 24 h; tras un fallo, de nuevo en una hora. Una sola vez por
+    proceso. False si está desactivada."""
     global _started
     if _started or disabled():
         return False
     _started = True
 
     def loop():
+        first = True
         while True:
             if disabled():
                 sleep(REFRESH_S)
                 continue
             age = _age_s(read_auto())
-            if age is None or age >= REFRESH_S or (read_auto() or {}).get("stale"):
+            if first or age is None or age >= REFRESH_S or (read_auto() or {}).get("stale"):
+                first = False
                 d = refresh(get_json)
                 wait = REFRESH_S if d and not d.get("stale") else RETRY_S
             else:

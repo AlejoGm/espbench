@@ -1,5 +1,6 @@
 """geo.py: ubicación del bench por IP pública (con HTTP falso: nada sale a la red), override
 manual y desactivada."""
+import datetime as dt
 import json
 import pathlib
 import sys
@@ -164,3 +165,23 @@ def test_background_disabled_does_not_start(monkeypatch):
     monkeypatch.setattr(geo, "_started", False)
     monkeypatch.setenv("ESPBENCH_GEO", "off")
     assert geo.start_background(net({})) is False
+
+
+def test_background_asks_at_start_even_if_the_saved_one_is_fresh(monkeypatch):
+    """Tras un reinicio el bench pudo haberse mudado: lo guardado hace 1 h no alcanza."""
+    monkeypatch.setattr(geo, "_started", False)
+    paths.bench_geo_file().parent.mkdir(parents=True, exist_ok=True)
+    fresh = dt.datetime.now().astimezone().replace(microsecond=0) - dt.timedelta(hours=1)
+    paths.bench_geo_file().write_text(json.dumps({"city": "Buenos Aires", "country": "AR", "ts": fresh.isoformat()}))
+    started = []
+    monkeypatch.setattr(geo.threading, "Thread", lambda target, **kw: type("T", (), {
+        "start": lambda self: started.append(target)})())
+
+    def sleep(s):
+        raise KeyboardInterrupt
+
+    get = net({geo.SERVICES[0]: IPINFO})
+    geo.start_background(get, sleep)
+    with pytest.raises(KeyboardInterrupt):
+        started[0]()
+    assert len(get.calls) == 1 and geo.location()["label"] == "Santiago, CL"
