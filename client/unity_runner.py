@@ -34,6 +34,11 @@ _RESULT_RE = re.compile(r"^(?P<file>[^\s:][^:]*):(?P<line>\d+):(?P<name>.+?):(?P
 _SUMMARY_RE = re.compile(r"^(\d+) Tests (\d+) Failures (\d+) Ignored")
 
 PASS, FAIL, IGNORED, TIMEOUT, PANIC, SKIPPED = "pass", "fail", "ignored", "timeout", "panic", "skipped"
+
+# Una lectura a la Pi que no contesta (`network`) se reintenta desde el mismo cursor antes de abortar la corrida: un
+# corte puntual de Tailscale tiraba una corrida de 13 min en el test 13 de 16.
+NET_RETRIES = 3
+NET_RETRY_PAUSE_S = 2.0
 FAILED = (FAIL, TIMEOUT, PANIC)
 
 
@@ -125,6 +130,7 @@ class Runner:
         self.case_timeout_s, self.menu_timeout_s, self.boot_timeout_s = case_timeout_s, menu_timeout_s, boot_timeout_s
         self.log_tail = log_tail
         self.progress = on_progress or (lambda msg: None)
+        self.results: List[dict] = []       # los de la corrida en curso: si se aborta, salen igual
 
     # ----- consola -----
 
@@ -133,12 +139,26 @@ class Runner:
         cursor = s.get("cursor")
         if not cursor:
             return {"ok": False, "error": "unexpected", "lines": []}
-        return self.c.read_range(self.board.key, since=cursor, until=until, echo=text, timeout_s=timeout_s,
-                                 fail_on=fail_on)
+        return self._read(cursor, until=until, echo=text, timeout_s=timeout_s, fail_on=fail_on)
 
     def _wait(self, since: Optional[str], until: str, timeout_s: float) -> dict:
         """Desde `since` y no desde ahora: el reinicio pudo haber terminado antes de que se pregunte."""
-        return self.c.read_range(self.board.key, since=since or "now", until=until, timeout_s=timeout_s, fail_on=())
+        return self._read(since or "now", until=until, timeout_s=timeout_s, fail_on=())
+
+    def _read(self, since: str, timeout_s: float, **kw) -> dict:
+        """`read_range` con reintento si la Pi no contesta. Se lee desde un cursor, así que repetirla no pierde ni
+        duplica líneas; el tope es el mismo, descontando lo que ya se esperó. El `send` no se reintenta: no se sabe si
+        llegó."""
+        t0 = time.monotonic()
+        for attempt in range(NET_RETRIES + 1):
+            try:
+                left = max(1.0, timeout_s - (time.monotonic() - t0))
+                return self.c.read_range(self.board.key, since=since, timeout_s=left, **kw)
+            except Exception as e:      # noqa: BLE001 — solo `network` se reintenta; el resto sube
+                if getattr(e, "error", None) != "network" or attempt == NET_RETRIES:
+                    raise
+                self.progress(f"  la Pi no contestó ({getattr(e, 'message', e)}): reintento {attempt + 1}/{NET_RETRIES}")
+                time.sleep(NET_RETRY_PAUSE_S)
 
     def menu(self) -> List[Case]:
         """Pide el menú y lo lee."""
@@ -213,7 +233,7 @@ class Runner:
     # ----- la corrida -----
 
     def run(self, cases: List[Case], reporter: Optional["Reporter"] = None) -> List[dict]:
-        results = []
+        results = self.results = []
         for i, case in enumerate(cases, 1):
             self.progress(f"[{i}/{len(cases)}] ({case.number}) {case.name}")
             if reporter:

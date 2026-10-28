@@ -10,6 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "remote"))
 
+from client import espbench_lib as lib  # noqa: E402
 from client import unity_runner as unity  # noqa: E402
 from tests.benchsim import boot_text  # noqa: E402
 from tests.test_espbench_cli import bench, board, cli, write_project  # noqa: E402,F401  (fixtures)
@@ -233,3 +234,35 @@ def test_a_bench_that_does_not_know_about_tests_does_not_stop_the_run(cli, board
     _app(board, [("pasa", "[es]", "pass"), ("otro", "[es]", "pass")])
     code, r = cli("test", "sim-board", "--no-flash")
     assert code == 0 and [t["result"] for t in r["tests"]] == ["pass", "pass"]
+
+
+# ---------- la red con la Pi ----------
+
+def _flaky_reads(monkeypatch, fail):
+    """Hace que `read_range` dé `network` según `fail(n)` (n = número de lectura, desde 1). Sin pausa entre intentos."""
+    monkeypatch.setattr(unity, "NET_RETRY_PAUSE_S", 0)
+    real, n = lib.Client.read_range, [0]
+
+    def read_range(self, *a, **k):
+        n[0] += 1
+        if fail(n[0]):
+            raise lib.EspbenchError("network", "sin conexión con la Pi: timed out")
+        return real(self, *a, **k)
+    monkeypatch.setattr(lib.Client, "read_range", read_range)
+
+
+def test_a_read_that_times_out_once_is_retried(cli, board, monkeypatch):
+    _app(board, [("pasa", "[es]", "pass"), ("corte", "[es]", ["reboot", "pass"]), ("otro", "[es]", "pass")])
+    _flaky_reads(monkeypatch, lambda n: n in (4, 9))       # una lectura de un test simple y una del multietapa
+    code, r = cli("test", "sim-board", "--no-flash", "--timeout-test", "2s")
+    assert code == 0 and r["summary"]["pass"] == 3, r
+
+
+def test_when_the_pi_stays_down_the_run_keeps_what_already_ran(cli, board, monkeypatch, tmp_path):
+    _app(board, [("uno", "[es]", "pass"), ("dos", "[es]", "pass"), ("tres", "[es]", "pass")])
+    _flaky_reads(monkeypatch, lambda n: n > 5)              # el menú inicial y 2 lecturas por test
+    junit = tmp_path / "r.xml"
+    code, r = cli("test", "sim-board", "--no-flash", "--timeout-test", "2s", "--junit", str(junit))
+    assert (code, r["error"], r["aborted"]) == (10, "network", True)
+    assert [t["name"] for t in r["tests"]] == ["uno", "dos"] and "2 de 3 tests" in r["message"]
+    assert ET.parse(junit).getroot().find("testsuite").get("tests") == "2"

@@ -581,19 +581,28 @@ def cmd_test(c: lib.Client, a, out: Out) -> int:
 
     reporter = unity.Reporter(c, board, runner.stale_s(chosen), on_warn=out.log)
     reporter.start(len(chosen), info.get("project_name"), c.config.lock_user)
+    aborted = None
     try:
         results = runner.run(chosen, reporter)
+    except EspbenchError as e:
+        # Lo que ya corrió no se tira: sale en el JSON y en el JUnit, con el error que cortó la corrida.
+        reporter.end("aborted", e.message)
+        results, aborted = runner.results, e
     except BaseException as e:
         reporter.end("aborted", getattr(e, "message", None) or type(e).__name__)
         raise
-    reporter.end()
+    else:
+        reporter.end()
     summary = unity.summarize(results)
     if a.junit:
         unity.junit(results, pathlib.Path(a.junit), suite=info.get("project_name") or board.label,
                     properties={k: info.get(k) for k in ("board", "mac", "sn", "project_name", "project_version",
                                                          "idf_ver", "target")})
-    r = {"ok": summary["failed"] == 0, **info, "summary": summary, "tests": results}
-    if summary["failed"]:
+    r = {"ok": summary["failed"] == 0 and aborted is None, **info, "summary": summary, "tests": results}
+    if aborted is not None:
+        r.update({"error": aborted.error, "message": f"corrida cortada después de {len(results)} de {len(chosen)} "
+                                                     f"tests: {aborted.message}", "aborted": True})
+    elif summary["failed"]:
         r.update({"error": "tests_failed", "message": f"{summary['failed']} de {summary['total']} tests fallaron"})
     return out.emit(r, _human_test)
 
