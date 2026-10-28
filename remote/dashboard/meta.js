@@ -215,7 +215,8 @@
     }
 
     // Ubicación del bench (header del dashboard): override manual de la automática (geolocalización por
-    // IP). PATCH api/bench {location}: un texto la fija; "" vuelve a la automática. loc: /api/version
+    // IP). PATCH api/bench {location}: un texto la fija; "" vuelve a la automática; "detectar de nuevo" (sin fija):
+    // POST api/bench/location/refresh. loc: /api/version
     // location (o null). onDone(changed, location nueva) al guardar o cancelar.
     function locationEditor(host, loc, onDone) {
         var v = EB.locationView(loc);
@@ -229,7 +230,9 @@
                 '<button class="rename-ok" title="Fijar esta ubicación (Enter)">✓</button>' +
                 '<button class="rename-cancel" title="Cancelar (Esc)">✗</button>' +
                 (v && v.source === 'manual' ? '<button class="meta-btn loc-auto" title="Sacar la fija y usar la ' +
-                    'geolocalización por IP">automática</button>' : '') +
+                    'geolocalización por IP">automática</button>' :
+                    '<button class="meta-btn loc-detect" title="Volver a averiguarla por la IP pública ' +
+                    '(si el bench se mudó)">detectar de nuevo</button>') +
                 '<span class="meta-err"></span>' +
             '</div>';
         var inp = host.querySelector('input');
@@ -251,6 +254,14 @@
         host.querySelector('.rename-cancel').onclick = function () { done(false); };
         var auto = host.querySelector('.loc-auto');
         if (auto) auto.onclick = function () { save(''); };
+        var detect = host.querySelector('.loc-detect');
+        if (detect) detect.onclick = function () {
+            err.textContent = 'detectando…';
+            detect.disabled = true;
+            send('POST', 'api/bench/location/refresh', {})
+                .then(function (r) { saved = r ? r.location : saved; done(true); })
+                .catch(function (e) { detect.disabled = false; err.textContent = e.message || 'Error de conexión'; });
+        };
         inp.onkeydown = function (e) {
             if (e.key === 'Enter') save(inp.value);
             if (e.key === 'Escape') done(false);

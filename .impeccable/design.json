@@ -1,0 +1,323 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-27T10:36:33-03:00",
+  "title": "Design System: espbench",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Naranja de acción",
+        "canonical": "#FF8A1F",
+        "tonalRamp": [
+          "#4D2909",
+          "#804510",
+          "#B26116",
+          "#E0791B",
+          "#FF9C41",
+          "#FFB979",
+          "#FFD6B1",
+          "#FFEDDD"
+        ]
+      },
+      "ok": {
+        "role": "status",
+        "displayName": "Verde sana",
+        "canonical": "#1FB57A",
+        "tonalRamp": [
+          "#093625",
+          "#105A3D",
+          "#167F55",
+          "#1B9F6B",
+          "#41C08E",
+          "#79D3AF",
+          "#B1E5D0",
+          "#DDF4EB"
+        ]
+      },
+      "bad": {
+        "role": "status",
+        "displayName": "Rojo problema",
+        "canonical": "#E5484D",
+        "tonalRamp": [
+          "#451617",
+          "#722426",
+          "#A03236",
+          "#CA3F44",
+          "#E96368",
+          "#EF9194",
+          "#F6BFC1",
+          "#FBE4E4"
+        ]
+      },
+      "warn": {
+        "role": "status",
+        "displayName": "Ámbar advertencia",
+        "canonical": "#E39A2D",
+        "tonalRamp": [
+          "#442E0E",
+          "#724D16",
+          "#9F6C1F",
+          "#C88828",
+          "#E7A94C",
+          "#EEC281",
+          "#F5DCB6",
+          "#FBF0E0"
+        ]
+      },
+      "flash": {
+        "role": "status",
+        "displayName": "Violeta flash",
+        "canonical": "#7B6CF6",
+        "tonalRamp": [
+          "#25204A",
+          "#3E367B",
+          "#564CAC",
+          "#6C5FD8",
+          "#8F82F7",
+          "#B0A7FA",
+          "#D1CCFC",
+          "#EBE9FE"
+        ]
+      },
+      "test": {
+        "role": "status",
+        "displayName": "Turquesa tests",
+        "canonical": "#0E9AB0",
+        "tonalRamp": [
+          "#042E35",
+          "#074D58",
+          "#0A6C7B",
+          "#0C889B",
+          "#32A9BC",
+          "#6EC2D0",
+          "#ABDCE3",
+          "#DBF0F3"
+        ]
+      },
+      "page": {
+        "role": "neutral",
+        "displayName": "Papel azulado",
+        "canonical": "#EEF2F7",
+        "tonalRamp": [
+          "#47494A",
+          "#77797C",
+          "#A7A9AD",
+          "#D1D5D9",
+          "#F1F4F8",
+          "#F5F7FA",
+          "#F9FAFC",
+          "#FCFDFE"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "canonical": "#18212C",
+        "tonalRamp": [
+          "#070A0D",
+          "#0C1016",
+          "#11171F",
+          "#151D27",
+          "#3B424C",
+          "#747A80",
+          "#AEB1B5",
+          "#DCDEDF"
+        ]
+      },
+      "terminal-bg": {
+        "role": "neutral",
+        "displayName": "Pantalla del log",
+        "canonical": "#0E1117",
+        "tonalRamp": [
+          "#040507",
+          "#07080C",
+          "#0A0C10",
+          "#0C0F14",
+          "#32353A",
+          "#6E7074",
+          "#ABACAE",
+          "#DBDBDC"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Nombre del bench en la home."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Títulos de sección y de card."
+      },
+      "board-name": {
+        "displayName": "Board name",
+        "purpose": "Nombre de la placa en la card y el monitor."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Texto general, cifras tabulares."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Píldoras, estados, badges y facts."
+      },
+      "log": {
+        "displayName": "Log",
+        "purpose": "Líneas del log serie e identificadores."
+      }
+    },
+    "shadows": [
+      {
+        "name": "hairline",
+        "value": "0 1px 2px rgba(24,33,44,.04)",
+        "purpose": "Única sombra: cards y píldoras flotantes del tema claro; ninguna en el oscuro."
+      }
+    ],
+    "motion": [
+      {
+        "name": "live-beat",
+        "value": "beat 2s infinite",
+        "purpose": "Punto 'vivo' de una placa que monitorea (solo sin reduced-motion)."
+      },
+      {
+        "name": "test-pulse",
+        "value": "tb-pulse 1.4s ease-in-out infinite",
+        "purpose": "Segmento del test en curso en la barra de progreso."
+      },
+      {
+        "name": "panic-flash",
+        "value": "flash-line 1.6s ease-out",
+        "purpose": "Resalta la línea de panic al saltar a ella."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-actions",
+        "value": "1279px"
+      },
+      {
+        "name": "mobile",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Acción principal de una card (Monitor).",
+      "html": "<button class=\"ds-btn\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 17l6-6-6-6M12 19h8\"/></svg>Monitor</button>",
+      "css": ".ds-btn{height:38px;padding:0 16px;border-radius:999px;border:none;background:#18212C;color:#EEF2F7;font:700 14px Manrope,system-ui,sans-serif;display:inline-flex;align-items:center;gap:6px;cursor:pointer}.ds-btn:hover{opacity:.88}.ds-btn:focus-visible{outline:2px solid #FF8A1F;outline-offset:2px}"
+    },
+    {
+      "name": "Accent Button",
+      "kind": "button",
+      "refersTo": "button-accent",
+      "description": "La única acción destacada de la pantalla (Actualizar el bench).",
+      "html": "<button class=\"ds-btn-accent\">Actualizar</button>",
+      "css": ".ds-btn-accent{height:44px;padding:0 18px;border-radius:999px;border:1px solid #FF8A1F;background:#FF8A1F;color:#4A2400;font:600 14px Manrope,system-ui,sans-serif;cursor:pointer}.ds-btn-accent:hover{filter:brightness(.96)}.ds-btn-accent:focus-visible{outline:2px solid #FF8A1F;outline-offset:2px}"
+    },
+    {
+      "name": "Action Button",
+      "kind": "button",
+      "refersTo": "button-action",
+      "description": "Acciones del header del monitor; variante peligrosa en rojo.",
+      "html": "<span class=\"ds-actions\"><button class=\"ds-act\">Reset</button><button class=\"ds-act ds-act--danger\">Sesión</button></span>",
+      "css": ".ds-actions{display:inline-flex;gap:6px}.ds-act{height:34px;padding:0 14px;border-radius:999px;border:1px solid #E3E8EF;background:#fff;color:#18212C;font:600 13px Manrope,system-ui,sans-serif;cursor:pointer}.ds-act:hover{border-color:#D3DAE4}.ds-act:focus-visible{outline:2px solid #FF8A1F;outline-offset:2px}.ds-act--danger{color:#E5484D}.ds-act--danger:hover{background:#FCE3E5;border-color:transparent}"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "status-ok",
+      "description": "Estado de la placa en una palabra, con su par tonal.",
+      "html": "<span class=\"ds-st ok\">En línea</span> <span class=\"ds-st bad\">Panic</span> <span class=\"ds-st test\">Testeando</span>",
+      "css": ".ds-st{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font:700 12px Manrope,system-ui,sans-serif}.ds-st::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor}.ds-st.ok{background:#DDF5EA;color:#1FB57A}.ds-st.bad{background:#FCE3E5;color:#E5484D}.ds-st.test{background:#DDF3F7;color:#0E9AB0}"
+    },
+    {
+      "name": "Fact Pills",
+      "kind": "chip",
+      "refersTo": "fact",
+      "description": "Contadores de la card: etiqueta tenue, valor en negrita.",
+      "html": "<span class=\"ds-facts\"><span class=\"ds-fact\">Reinicios <b>0</b></span><span class=\"ds-fact bad\">Panics <b>2</b></span></span>",
+      "css": ".ds-facts{display:inline-flex;gap:8px}.ds-fact{padding:6px 11px;border-radius:999px;background:#F4F6FA;color:#5B6676;font:600 12.5px Manrope,system-ui,sans-serif;font-variant-numeric:tabular-nums}.ds-fact b{color:#18212C}.ds-fact.bad b{color:#E5484D}"
+    },
+    {
+      "name": "Filter Field",
+      "kind": "input",
+      "refersTo": "",
+      "description": "Búsqueda y filtro en píldora; foco con borde interior naranja.",
+      "html": "<label class=\"ds-search\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M20 20l-3.5-3.5\"/></svg><input placeholder=\"Buscar placa, SN, nota…\"></label>",
+      "css": ".ds-search{display:inline-flex;align-items:center;gap:8px;height:38px;width:280px;padding:0 14px;border-radius:999px;background:#fff;color:#9AA4B2;box-shadow:0 1px 2px rgba(24,33,44,.04)}.ds-search:focus-within{box-shadow:0 1px 2px rgba(24,33,44,.04),inset 0 0 0 1.5px #FF8A1F}.ds-search input{flex:1;border:none;background:none;outline:none;color:#18212C;font:400 13px Manrope,system-ui,sans-serif}"
+    },
+    {
+      "name": "Tabs",
+      "kind": "nav",
+      "refersTo": "",
+      "description": "Pestañas en píldora; la activa sube a card.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab on\">Todas<b>12</b></button><button class=\"ds-tab\">Con problemas<b>1</b></button></nav>",
+      "css": ".ds-tabs{display:inline-flex;gap:6px;padding:6px;background:#EEF2F7;border-radius:999px}.ds-tab{height:36px;padding:0 16px;border-radius:999px;border:none;background:none;color:#5B6676;font:600 14px Manrope,system-ui,sans-serif;cursor:pointer}.ds-tab b{margin-left:4px;color:#9AA4B2;font-weight:700}.ds-tab.on{background:#fff;color:#18212C;box-shadow:0 1px 2px rgba(24,33,44,.04)}.ds-tab:hover{color:#18212C}"
+    },
+    {
+      "name": "Test Run Block",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Corrida de espbench test en la card: título, test en curso y barra segmentada.",
+      "html": "<div class=\"ds-tests\"><div class=\"ds-tests-h\"><b>Tests 7/16 · 1 ✗</b><span>▶ (9) corte de luz</span></div><div class=\"ds-tbar\"><i style=\"width:37.5%;background:#1FB57A\"></i><i style=\"width:6.25%;background:#E5484D\"></i><i style=\"width:6.25%;background:#0E9AB0\"></i></div></div>",
+      "css": ".ds-tests{width:320px;padding:10px 12px;border-radius:10px;background:#DDF3F7;font:12.5px Manrope,system-ui,sans-serif}.ds-tests-h{display:flex;gap:8px;margin-bottom:7px}.ds-tests-h b{color:#0E9AB0}.ds-tests-h span{margin-left:auto;color:#5B6676}.ds-tbar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:#E3E8EF}.ds-tbar i{height:100%}"
+    },
+    {
+      "name": "Terminal",
+      "kind": "custom",
+      "refersTo": "terminal",
+      "description": "El log serie: oscuro en los dos temas, mono, hora tenue y marcas de eventos.",
+      "html": "<div class=\"ds-term\"><div><span>16:44:02.131</span>Enter test for running.</div><div class=\"p\"><span>16:44:03.454</span>Guru Meditation Error: Core 1 panic'ed</div><div><span>16:44:03.455</span>rst:0xc (SW_CPU_RESET)</div></div>",
+      "css": ".ds-term{width:460px;padding:12px 16px;border-radius:16px;background:#0E1117;color:#C9D1D9;font:12.5px/1.55 'JetBrains Mono',ui-monospace,Menlo,monospace;white-space:pre}.ds-term span{color:#6E7681;margin-right:10px}.ds-term .p{background:rgba(229,72,77,.14);box-shadow:inset 3px 0 0 #E5484D;color:#FFA198}"
+    }
+  ],
+  "narrative": {
+    "northStar": "El tablero del banco",
+    "overview": "El dashboard es el tablero de instrumentos de un banco de laboratorio. Cada placa es un instrumento con su lectura en una palabra, sus contadores en píldoras y una tira de barras de las últimas 24 h; el log serie es la pantalla del instrumento, oscura en los dos temas. Hoy el sistema es blando (superficies tonales, todo redondeado); el rumbo confirmado es más preciso y técnico: menos redondeo, bordes finos y más densidad.",
+    "keyCharacteristics": [
+      "El color es estado: verde sana, rojo problema, ámbar advertencia o reserva, violeta flash, turquesa tests.",
+      "Superficies tonales (page → card → row) en lugar de bordes y sombras.",
+      "Píldoras para casi todo lo que se toca o se lee como dato.",
+      "Log serie en una pantalla oscura con fuente mono, igual en tema claro y oscuro.",
+      "Tema claro y oscuro con las mismas variables; las fuentes y los íconos del CDN son opcionales."
+    ],
+    "rules": [
+      {
+        "name": "The State-Is-Color Rule",
+        "body": "Cada color de estado nombra una sola clase de evento de la placa y aparece igual en el estado de la card, sus barras, los chips del header y los eventos del historial. Un color nuevo solo entra con un estado nuevo.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tinted-Pair Rule",
+        "body": "Un estado se dibuja con su par: texto en el color pleno sobre su fondo -bg. El color pleno de fondo (blanco encima) queda para lo más grave: boot loop en curso y \"no tocar / roto\".",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Todo número que se actualiza en vivo (contadores, tiempos, progreso) va en cifras tabulares.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tonal-Depth Rule",
+        "body": "Para separar algo, bajar o subir un nivel tonal antes que agregar borde o sombra.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** usar los colores de estado solo para estados de la placa, siempre con su par tonal.",
+      "**Do** separar con niveles tonales (page, card, row) antes que con bordes o sombras.",
+      "**Do** mantener el log oscuro y en mono en los dos temas.",
+      "**Do** dar a cada número en vivo cifras tabulares y una etiqueta que diga qué cuenta.",
+      "**Do** llevar los componentes nuevos hacia el rumbo confirmado: más precisos y técnicos (menos redondeo, bordes finos, más densidad), sin mezclar dos estilos en una misma pieza."
+    ],
+    "donts": [
+      "**Don't** usar un color de estado como decoración: si algo es rojo, la placa tiene un problema.",
+      "**Don't** depender de las fuentes o íconos del CDN: sin red tiene que leerse igual con las del sistema.",
+      "**Don't** usar más de una acción naranja por pantalla."
+    ]
+  }
+}

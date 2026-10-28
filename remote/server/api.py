@@ -693,6 +693,20 @@ async def patch_bench(body: dict = Body(...), authorization: Optional[str] = Hea
     return {"ok": True, "location": loc}
 
 
+@app.post("/api/bench/location/refresh")
+async def refresh_bench_location(authorization: Optional[str] = Header(None)):
+    """Vuelve a averiguar la ubicación por IP ya, sin esperar al próximo arranque o a las 24 h (geo.py).
+    Si hay override manual, se actualiza la automática guardada pero `location` sigue siendo la fija.
+    409 si la geolocalización está desactivada; 502 si los servicios no contestan (queda la guardada)."""
+    _require_auth(authorization)
+    if geo.disabled():
+        _fail(409, "geo_disabled", "la geolocalización está desactivada en este bench (/opt/esp/geo_disabled)")
+    d = await asyncio.to_thread(geo.refresh)
+    if not d or d.get("stale"):
+        _fail(502, "unexpected", "no pude averiguar la ubicación por IP (sin red o los servicios no contestan)")
+    return {"ok": True, "location": geo.location()}
+
+
 @app.get("/api/activity")
 async def bench_activity(hours: int = 24):
     """Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y

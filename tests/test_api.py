@@ -329,6 +329,7 @@ def test_empty_token_file_is_no_token(tmux):
     lambda a: api.devremote_reset("ttyUSB0", authorization=a),
     lambda a: api.patch_device(MAC, {"device_key": "X"}, authorization=a),
     lambda a: api.patch_bench({"location": "Lab"}, authorization=a),
+    lambda a: api.refresh_bench_location(authorization=a),
 ])
 def test_token_required_on_writes(tmux, call, monkeypatch):
     from server.device_registry import DevicesFile
@@ -1017,3 +1018,29 @@ def test_delete_value_checks_in_use_under_the_devices_lock(monkeypatch):
     monkeypatch.setattr(DevicesFile, "locked", spy)
     run(api.delete_property_value("chip", "esp32-p4"))
     assert seen == ["locked"]
+
+
+def test_refresh_location_asks_again_and_answers_the_new_one(monkeypatch):
+    from server import geo
+    monkeypatch.delenv("ESPBENCH_GEO")
+    paths.meta_dir().mkdir(parents=True)
+    paths.bench_geo_file().write_text(json.dumps({"city": "Buenos Aires", "country": "AR",
+                                                  "ts": "2026-10-27T10:00:00-03:00"}))
+    monkeypatch.setattr(geo, "fetch", lambda *a, **k: {"city": "Santiago", "region": None, "country": "CL",
+                                                      "lat": None, "lon": None, "tz": None, "service": "ipinfo.io"})
+    r = run(api.refresh_bench_location())
+    assert r["ok"] and (r["location"]["label"], r["location"]["source"]) == ("Santiago, CL", "auto")
+    run(api.patch_bench({"location": "Lab"}))                          # con fija: se actualiza abajo, sigue la fija
+    assert run(api.refresh_bench_location())["location"]["label"] == "Lab"
+
+
+def test_refresh_location_failures(monkeypatch):
+    from server import geo
+    with pytest.raises(HTTPException) as e:                             # ESPBENCH_GEO=off (conftest)
+        run(api.refresh_bench_location())
+    assert err(e) == (409, "geo_disabled")
+    monkeypatch.delenv("ESPBENCH_GEO")
+    monkeypatch.setattr(geo, "fetch", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as e:
+        run(api.refresh_bench_location())
+    assert err(e) == (502, "unexpected")

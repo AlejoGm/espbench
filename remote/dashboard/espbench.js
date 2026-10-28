@@ -572,8 +572,8 @@
     var TEST_RESULTS = {
         pass:    {icon: '✓', label: 'pasó', many: 'pasaron', cls: 'pass'},
         fail:    {icon: '✗', label: 'falló', many: 'fallaron', cls: 'fail'},
-        timeout: {icon: '⏱', label: 'timeout', many: 'timeout', cls: 'fail'},
-        panic:   {icon: '⚠', label: 'panic', many: 'panic', cls: 'fail'},
+        timeout: {icon: '⏱', label: 'timeout', many: 'timeouts', cls: 'fail'},
+        panic:   {icon: '⚠', label: 'panic', many: 'panics', cls: 'fail'},
         ignored: {icon: '–', label: 'ignorado', many: 'ignorados', cls: 'skip'},
         skipped: {icon: '–', label: 'salteado', many: 'salteados', cls: 'skip'}
     };
@@ -618,6 +618,23 @@
                (d.phase === 'end' && (d.status === 'aborted' || d.failed > 0));
     }
 
+    function countText(k, n) { return n + ' ' + (n === 1 ? TEST_RESULTS[k].label : TEST_RESULTS[k].many); }
+
+    // "5 pasaron", "3 fallaron (1 falló, 1 timeout, 1 panic)", "1 ignorado": el total de fallas es el mismo número
+    // que muestra el badge (fail + timeout + panic); el detalle por tipo va entre paréntesis.
+    function testCountsText(counts, failed) {
+        var parts = [];
+        if (counts.pass) parts.push(countText('pass', counts.pass));
+        if (failed) {
+            var kinds = TEST_FAILED.filter(function (k) { return counts[k]; });
+            var only = kinds.length === 1 && kinds[0] === 'fail';
+            parts.push(failed + (failed === 1 ? ' falló' : ' fallaron') +
+                       (kinds.length && !only ? ' (' + kinds.map(function (k) { return countText(k, counts[k]); }).join(', ') + ')' : ''));
+        }
+        ['ignored', 'skipped'].forEach(function (k) { if (counts[k]) parts.push(countText(k, counts[k])); });
+        return parts;
+    }
+
     var TEST_SHOW_S = 24 * 3600;     // una corrida terminada se muestra en la card hasta 24 h después
 
     /*
@@ -641,8 +658,7 @@
                  project: t.project || '', pct: total ? Math.round(100 * done / total) : 0,
                  segs: segs.filter(function (s) { return s.n > 0; })};
         var who = [t.project, t.user].filter(Boolean).join(' · ');
-        var parts = Object.keys(TEST_RESULTS).filter(function (k) { return counts[k]; })
-            .map(function (k) { return counts[k] + ' ' + TEST_RESULTS[k].many; });
+        var parts = testCountsText(counts, failed);
         if (running) {
             v.cls = 'run';
             v.text = 'Tests ' + done + '/' + total;
@@ -1074,6 +1090,36 @@
         var av = avoidedBy(d, catalog);
         if (av) return {cls: 'avoid', text: av.label.charAt(0).toUpperCase() + av.label.slice(1)};
         return {cls: 'ok', text: 'En línea'};
+    }
+
+    /*
+     * Lo que el monitor (device.html) muestra y deja hacer según /api/device/{tty}. d: el device, null si el api
+     * dio 404 (no hay placa en ese tty) o undefined si no contestó. {status: {cls, text} (el mismo de la card),
+     * write: puede recibir Reset/Boot/Enviar, session: puede reiniciar la sesión (aunque el proceso esté caído:
+     * es para eso), reason: por qué no, empty: texto del log vacío}.
+     */
+    var BUSY_TEXT = {flashing: 'Flasheando: esperá a que termine', erasing: 'Borrando: esperá a que termine',
+                     discovering: 'Iniciando: todavía no leyó la MAC'};
+    function monitorState(d, tty, nowMs, catalog) {
+        if (d === null) {
+            var nf = 'No hay ninguna placa en ' + tty;
+            return {status: {cls: 'off', text: 'No existe'}, write: false, session: false, reason: nf,
+                    empty: nf + '. Volvé a Placas y elegí otra.'};
+        }
+        if (!d) {
+            return {status: {cls: 'off', text: 'Sin datos'}, write: false, session: false,
+                    reason: 'El bench no contestó: no se sabe en qué estado está la placa', empty: null};
+        }
+        var st = boardStatus(d, nowMs, catalog);
+        var reason = null;
+        if (d.status !== 'RUNNING') {
+            reason = d.state === 'disconnected' ? 'La placa está desconectada' : 'El proceso de la placa no corre: reiniciá la sesión';
+        } else if (BUSY_TEXT[d.state]) {
+            reason = BUSY_TEXT[d.state];
+        }
+        return {status: st, write: !reason, session: true, reason: reason,
+                empty: d.status !== 'RUNNING' ? reason + '. El log de la sesión está vacío.'
+                                              : 'Esperando datos del serial de ' + tty + '…'};
     }
 
     // Tiempo encendida desde el último boot visto: [número, unidad, número, unidad] o null.
@@ -1538,7 +1584,7 @@
         ansiLineToHtml: ansiLineToHtml, overwrite: overwrite, LineBuffer: LineBuffer,
         cardState: cardState, stateBadgeHtml: stateBadgeHtml, fwRows: fwRows,
         lastFlashHtml: lastFlashHtml, summarize: summarize, basePath: basePath, wsUrl: wsUrl,
-        SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, uptimeParts: uptimeParts, uptimeText: uptimeText, agoText: agoText,
+        SILENT_S: SILENT_S, silentFor: silentFor, boardStatus: boardStatus, monitorState: monitorState, uptimeParts: uptimeParts, uptimeText: uptimeText, agoText: agoText,
         activityTotals: activityTotals, activityBarsHtml: activityBarsHtml, benchChips: benchChips, boardCardHtml: boardCardHtml, boardMetaHtml: boardMetaHtml,
         cardProps: cardProps, propIcon: propIcon, benchTagHtml: benchTagHtml,
         groupOptions: groupOptions, pickGroup: pickGroup, groupBoards: groupBoards, groupHeaderHtml: groupHeaderHtml,

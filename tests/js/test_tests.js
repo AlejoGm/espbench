@@ -17,7 +17,7 @@ test('testView: corriendo, con el test en curso y lo que falló', () => {
     assert.equal(v.text, 'Tests 7/16 · 1 ✗');
     assert.equal(v.sub, '▶ (9) corte de luz');
     assert.deepEqual(v.segs, [{cls: 'pass', n: 6}, {cls: 'fail', n: 1}, {cls: 'cur', n: 1}]);
-    assert.match(v.title, /6 pasaron, 1 fallaron/);
+    assert.match(v.title, /6 pasaron, 1 falló/);
 });
 
 test('testView: terminada (ok, con fallas), cortada y sin noticias; vieja no se muestra', () => {
@@ -31,6 +31,16 @@ test('testView: terminada (ok, con fallas), cortada y sin noticias; vieja no se 
     assert.equal(EB.testView(old, NOW), null);
     assert.ok(EB.testView(old, NOW, true));                 // la pestaña Tests la muestra igual
     assert.equal(EB.testView(null, NOW), null);
+});
+
+test('testView: el tooltip cuenta las fallas igual que el badge, con el detalle por tipo', () => {
+    const t = run({status: 'done', done: 8, total: 8, passed: 5, failed: 3, ended: S - 60,
+                   counts: {pass: 5, fail: 1, timeout: 1, panic: 1}});
+    const v = EB.testView(t, NOW);
+    assert.equal(v.text, '3 de 8 fallaron');
+    assert.match(v.title, /5 pasaron, 3 fallaron \(1 falló, 1 timeout, 1 panic\)/);
+    const two = EB.testView(run({counts: {pass: 1, fail: 2, ignored: 1}, passed: 1, failed: 2}), NOW);
+    assert.match(two.title, /1 pasó, 2 fallaron, 1 ignorado/);
 });
 
 test('testBarHtml: un segmento por resultado, en proporción al total', () => {
