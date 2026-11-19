@@ -5,7 +5,8 @@
 #   - Sin desktop (multi-user.target)
 #   - Serial TTL deshabilitado
 #   - Teclado/mouse bloqueados (udev HID)
-#   - WiFi provisioning con AP fallback (wifi-connect)
+#   - WiFi provisioning con AP fallback (wifi-connect) solo si wlan0 no tiene red
+#   - WiFi sin power save, journal persistente
 #   - Tailscale VPN
 #   - Servicios innecesarios deshabilitados
 #
@@ -145,39 +146,21 @@ else
 fi
 ok "wifi-connect instalado: $(wifi-connect --version 2>/dev/null || echo 'ok')"
 
-cat > /usr/local/bin/wifi-provision.sh << EOSCRIPT
-#!/bin/bash
-sleep 15
+# El AP sale solo si wlan0 no tiene red (no por un corte de internet): ver rpi/wifi-provision.sh
+install -m 755 "$SCRIPT_DIR/wifi-provision.sh" /usr/local/bin/wifi-provision.sh
+# Perfiles vacíos que deja wifi-connect al cortarse la Pi con el AP prendido
+find /etc/NetworkManager/system-connections -name "${AP_SSID}*.nmconnection" -size 0 -delete
 
-while true; do
-    # Verificar si wlan0 tiene conectividad (ignorar ethernet)
-    if ping -c 2 -W 5 -I wlan0 8.8.8.8 &>/dev/null; then
-        sleep 60  # conectado — recheck en 60s
-        continue
-    fi
-
-    # Sin internet en wlan0 — levantar AP portal
-    wifi-connect \
-        --portal-ssid "${AP_SSID}" \
-        --portal-passphrase "${AP_PASS}" \
-        --ui-directory /opt/wifi-connect \
-        --activity-timeout 300
-
-    # wifi-connect salió — intentar reconectar a redes conocidas
-    nmcli device connect wlan0 2>/dev/null || true
-    sleep 20  # dar tiempo a NM para conectar antes del próximo chequeo
-done
-EOSCRIPT
-chmod +x /usr/local/bin/wifi-provision.sh
-
-cat > /etc/systemd/system/wifi-provision.service << 'EOF'
+cat > /etc/systemd/system/wifi-provision.service << EOF
 [Unit]
-Description=WiFi provisioning — AP fallback si no hay internet
+Description=WiFi provisioning — AP de configuración si wlan0 no tiene red
 After=NetworkManager.service
 Wants=NetworkManager.service
 
 [Service]
 Type=simple
+Environment=AP_SSID=${AP_SSID}
+Environment=AP_PASS=${AP_PASS}
 ExecStart=/usr/local/bin/wifi-provision.sh
 Restart=on-failure
 RestartSec=30
@@ -188,7 +171,28 @@ EOF
 
 systemctl daemon-reload
 systemctl enable wifi-provision.service
+systemctl try-restart wifi-provision.service
 ok "WiFi provisioning habilitado (AP: '$AP_SSID')"
+
+# Power save del WiFi apagado: con brcmfmac en power save el link pierde paquetes y tiene picos de
+# latencia. Aplica a la próxima conexión; en caliente, con iw.
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/espbench-wifi-powersave.conf << 'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+iw dev wlan0 set power_save off 2>/dev/null || true
+ok "WiFi power save apagado"
+
+# Journal persistente (acotado): sin esto, lo que pasó antes de un reinicio se pierde.
+mkdir -p /etc/systemd/journald.conf.d /var/log/journal
+cat > /etc/systemd/journald.conf.d/espbench.conf << 'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+EOF
+systemctl restart systemd-journald
+ok "Journal persistente (máx. 200 MB)"
 
 # ---------------------------------------------------------------------------
 # 6. Deshabilitar servicios innecesarios
@@ -228,7 +232,7 @@ echo "========================================================"
 echo ""
 echo "  Flujo en próximo boot:"
 echo "    1. NetworkManager intenta WiFi guardado"
-echo "    2. Sin internet → AP '$AP_SSID' para configurar WiFi"
+echo "    2. Sin red WiFi guardada (o wlan0 10 min sin red) → AP '$AP_SSID' para configurar WiFi"
 echo "    3. Con internet → Tailscale conecta solo"
 echo ""
 if [[ "$TS_TAGGED" != 1 ]]; then

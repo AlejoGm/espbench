@@ -7,6 +7,8 @@ Raspberry Pi initial setup utilities.
 | File | Purpose |
 |------|---------|
 | `pi-setup.sh` | Full Pi bootstrap: system deps, Python venv, directory creation, service install |
+| `wifi-provision.sh` | Loop de `wifi-provision.service`: AP `SfyBench` (wifi-connect) solo si no hay WiFi guardada o wlan0 lleva 10 min sin red. Nunca por un corte de internet: la Pi 4 tiene una sola radio y con el AP prendido el bench queda offline. Tests: `tests/test_wifi_provision.py` |
+| `portal/` | UI del portal de wifi-connect |
 
 ## pi-setup.sh
 
