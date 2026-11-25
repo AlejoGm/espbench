@@ -17,6 +17,7 @@ espbench/
 │   └── infra/         # devremote, esp32_tmux.sh, espbench-name, udev, systemd
 ├── tests/             # pytest, corre en host sin hardware
 ├── rpi/               # Setup de una Pi nueva
+├── pc/                # Setup de una PC x86 con Ubuntu (en lugar de rpi/; después el mismo install.sh)
 ├── docs/              # ARCHITECTURE.md, PI_CHECKLIST.md (lo que se prueba en la Pi); specs/ = diseño histórico; archive/ = PRDs y código viejo
 └── issues/            # Histórico (01-13). Los issues nuevos van a GitHub Issues.
 ```

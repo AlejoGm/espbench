@@ -1,8 +1,8 @@
 # espbench
 
-Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi over TCP. Includes a persistent serial monitor and web dashboard.
+Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi (or an Ubuntu PC) over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.51.2
+**Version:** 0.52.0
 
 ---
 
@@ -102,6 +102,57 @@ devremote --status
 ```
 
 Dashboard: `http://<pi-hostname>:8080`
+
+---
+
+## Fresh Ubuntu PC Setup
+
+A spare x86 PC works as a bench too: same server, same `remote/install.sh`. `pc/pc-setup.sh` takes the place
+of `rpi/pi-setup.sh`. Tried on Ubuntu 26.04 Desktop (i5-9400, MSI H310M).
+
+### 1. BIOS
+
+- **Restore on AC Power Loss → Power On** (also called "AC Recovery" / "After Power Failure"): it comes back by
+  itself after a power cut.
+- If it stops at boot without a keyboard ("Keyboard not detected, press F1"): **Halt On → No errors**.
+
+### 2. Install Ubuntu
+
+Server or Desktop, **entire disk**, wired network. It needs the SSH server: tick *Install OpenSSH server* in the
+Server installer; Desktop doesn't bring it (`sudo apt install -y openssh-server`).
+
+### 3. Clone repo
+
+```bash
+sudo apt update && sudo apt install -y git
+sudo git clone https://github.com/AlejoGm/espbench.git /opt/espbench
+cd /opt/espbench
+```
+
+### 4. System setup
+
+```bash
+sudo BENCH_HOSTNAME=sensibox bash pc/pc-setup.sh
+```
+
+Updates the system, installs what `install.sh` needs plus SSH and mDNS, **removes brltty and ModemManager** (on
+Ubuntu Desktop they grab the serial ports: brltty takes the CH340s, ModemManager sends AT commands to every new
+tty), disables suspend and installs Tailscale. Optional env: `BENCH_HOSTNAME`, `BENCH_TZ`, `TS_AUTHKEY` (joins as
+`tag:bench`, as on the Pi). Without `TS_AUTHKEY`: `sudo tailscale up --advertise-tags=tag:bench` and open the link
+(your user must be allowed to assign `tag:bench`). The desktop stays; without it:
+`sudo systemctl set-default multi-user.target`.
+
+### 5. Install server and reboot
+
+```bash
+sudo bash remote/install.sh
+sudo reboot
+```
+
+`install.sh` enables the services, so they start at boot. Its warning about `systemd-time-wait-sync` doesn't matter
+on a PC (it has an RTC), and the Pi 4 fan step is skipped. Verify as on a Pi: `devremote --status` and
+`http://<hostname>:8080`. The dashboard shows the CPU temperature (`x86_pkg_temp`, `coretemp` or `k10temp`) and the
+DMI model (the brand model, or the motherboard on a self-built PC).
 
 ---
 
@@ -393,6 +444,7 @@ espbench/
 ├── tests/                     # pytest suite (host, no hardware)
 ├── docs/                      # ARCHITECTURE.md; archive/ = old PRDs and code
 ├── rpi/                       # Pi bootstrap script
+├── pc/                        # Ubuntu x86 PC bootstrap script
 └── scripts/                   # Maintenance scripts
 ```
 

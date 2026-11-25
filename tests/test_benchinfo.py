@@ -48,6 +48,76 @@ def test_health_without_proc_is_all_none(tmp_path):
     assert h["disk"] is None and h["model"] is None
 
 
+def write_tree(root, files):
+    for rel, text in files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    return root
+
+
+def test_health_pc_intel_cpu_temp_and_board_model(tmp_path):
+    # La sensibox: thermal_zone0 es acpitz (27,8 fijo), la CPU está en x86_pkg_temp; mother MSI armado.
+    r = write_tree(tmp_path / "root", {
+        "sys/class/thermal/thermal_zone0/type": "acpitz\n",
+        "sys/class/thermal/thermal_zone0/temp": "27800\n",
+        "sys/class/thermal/thermal_zone1/type": "pch_cannonlake\n",
+        "sys/class/thermal/thermal_zone1/temp": "39000\n",
+        "sys/class/thermal/thermal_zone2/type": "x86_pkg_temp\n",
+        "sys/class/thermal/thermal_zone2/temp": "38000\n",
+        "sys/class/dmi/id/product_name": "MS-7B29\n",
+        "sys/class/dmi/id/board_name": "H310M PRO-VDH (MS-7B29)\n",
+    })
+    h = benchinfo.health(str(r), disk_path=str(tmp_path))
+    assert h["temp_c"] == 38.0
+    assert h["model"] == "H310M PRO-VDH (MS-7B29)"
+
+
+def test_health_pc_amd_temp_from_hwmon(tmp_path):
+    # AMD: sin thermal zone de la CPU, k10temp por hwmon (temp1 = Tctl).
+    r = write_tree(tmp_path / "root", {
+        "sys/class/thermal/thermal_zone0/type": "acpitz\n",
+        "sys/class/thermal/thermal_zone0/temp": "16800\n",
+        "sys/class/hwmon/hwmon0/name": "acpitz\n",
+        "sys/class/hwmon/hwmon0/temp1_input": "16800\n",
+        "sys/class/hwmon/hwmon1/name": "k10temp\n",
+        "sys/class/hwmon/hwmon1/temp1_input": "45125\n",
+    })
+    assert benchinfo.health(str(r), disk_path=str(tmp_path))["temp_c"] == 45.1
+
+
+def test_health_pc_branded_model_and_placeholders(tmp_path):
+    dell = write_tree(tmp_path / "dell", {
+        "sys/class/dmi/id/product_name": "OptiPlex 7050\n",
+        "sys/class/dmi/id/board_name": "0NW6H5\n",
+    })
+    assert benchinfo.health(str(dell), disk_path=str(tmp_path))["model"] == "OptiPlex 7050"
+    generic = write_tree(tmp_path / "generic", {
+        "sys/class/dmi/id/product_name": "To be filled by O.E.M.\n",
+        "sys/class/dmi/id/board_name": "B450M DS3H\n",
+    })
+    assert benchinfo.health(str(generic), disk_path=str(tmp_path))["model"] == "B450M DS3H"
+    blank = write_tree(tmp_path / "blank", {
+        "sys/class/dmi/id/product_name": "System Product Name\n",
+        "sys/class/dmi/id/board_name": "Default string\n",
+    })
+    assert benchinfo.health(str(blank), disk_path=str(tmp_path))["model"] is None
+
+
+def test_health_pi_reads_cpu_thermal_zone(tmp_path):
+    # Pi con el type de la zona: cpu-thermal, aunque no sea la zona 0.
+    r = write_tree(tmp_path / "root", {
+        "sys/class/thermal/thermal_zone0/type": "rp1_adc\n",
+        "sys/class/thermal/thermal_zone0/temp": "1000\n",
+        "sys/class/thermal/thermal_zone1/type": "cpu-thermal\n",
+        "sys/class/thermal/thermal_zone1/temp": "52350\n",
+        "proc/device-tree/model": "Raspberry Pi 5 Model B Rev 1.0\x00",
+        "sys/class/dmi/id/product_name": "no deberia usarse\n",
+    })
+    h = benchinfo.health(str(r), disk_path=str(tmp_path))
+    assert h["temp_c"] == 52.4 and h["model"] == "Raspberry Pi 5 Model B Rev 1.0"
+
+
 def ev(type_, hours_ago, **detail):
     return events.make(type_, "c:20261006_000000_1:0", detail, ts=NOW - hours_ago * 3600)
 
