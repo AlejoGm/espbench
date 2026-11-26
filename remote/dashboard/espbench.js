@@ -865,6 +865,125 @@
         return null;
     }
 
+    // ── Categorías del log (copia de server/logcat.py: tests/test_logcat_parity.py) ──
+    // El catálogo es el de GET api/log-categories (el del bench o el default, con banco y otros al final).
+    var LOGCAT_IDF_RE = /^([EWIDV]) \([^)]*\) ([^:\s]+)/;
+    var LOGCAT_TAGLOG_RE = /^(?:\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| )?(INFO|WARN|ERROR|DEBUG)\s*\| /;
+    var LOGCAT_TAGLOG_LEVEL = {INFO: 'I', WARN: 'W', ERROR: 'E', DEBUG: 'D'};
+    var LOG_LEVELS = [{id: 'E', label: 'Errores'}, {id: 'W', label: 'Warnings'}, {id: 'I', label: 'Info'}];
+
+    // El cuerpo como logrange.clean_text: sin los \r del final, el último segmento de \r, sin ANSI.
+    function cleanBody(body) {
+        body = body.replace(/\r+$/, '');
+        var i = body.lastIndexOf('\r');
+        return stripAnsi(i >= 0 ? body.slice(i + 1) : body);
+    }
+
+    /*
+     * logCategorizer(catálogo).classify(línea, anterior) → {cat, lvl} (lvl: E W I D V o null).
+     * La línea con o sin el prefijo del DeviceLog; `anterior`, lo que dio la línea anterior (o null):
+     * una línea sin tag que no matchea ninguna regex ni es panic/reset hereda categoría y nivel.
+     * Reglas: server/logcat.py. Una regex del catálogo que JS no entiende se ignora.
+     */
+    function logCategorizer(catalog) {
+        var cats = (catalog && catalog.categories) || [];
+        var has = Object.prototype.hasOwnProperty;
+        var exact = {}, prefix = [], lines = [];
+        cats.forEach(function (c) {
+            (c.tags || []).forEach(function (t) {
+                if (t.slice(-1) === '*') prefix.push([t.slice(0, -1), c.id]);
+                else if (!has.call(exact, t)) exact[t] = c.id;
+            });
+        });
+        cats.forEach(function (c) {
+            (c.lines || []).forEach(function (pat) {
+                try { lines.push([new RegExp(pat), c.id]); } catch (e) { /* ignorada */ }
+            });
+        });
+        function tagCategory(tag) {
+            if (has.call(exact, tag)) return exact[tag];
+            for (var i = 0; i < prefix.length; i++) if (tag.indexOf(prefix[i][0]) === 0) return prefix[i][1];
+            return 'otros';
+        }
+        function classify(line, prev) {
+            var p = splitPrefix(line);
+            var body = cleanBody(p.body);
+            var m;
+            if (p.origin === '|' || (p.origin === null && LOGCAT_TAGLOG_RE.test(body))) {
+                m = LOGCAT_TAGLOG_RE.exec(body);
+                return {cat: 'banco', lvl: m ? LOGCAT_TAGLOG_LEVEL[m[1]] : null};
+            }
+            m = LOGCAT_IDF_RE.exec(body);
+            if (m) return {cat: tagCategory(m[2]), lvl: m[1]};
+            var lvl = MARK_BOOT_RE.test(body) ? 'W' : MARK_PANIC_RE.test(body) ? 'E' : null;
+            var cat = null;
+            for (var i = 0; i < lines.length; i++) {
+                if (lines[i][0].test(body)) { cat = lines[i][1]; break; }
+            }
+            if (cat === null && lvl === null) return prev || {cat: 'otros', lvl: null};
+            return {cat: cat || 'otros', lvl: lvl};
+        }
+        return {classify: classify, categories: cats};
+    }
+
+    // ¿La línea ({cat, lvl}) pasa el filtro? cats / lvls: {id: true} o null (sin filtro). I incluye D y V.
+    function logFilterPasses(cls, cats, lvls) {
+        if (!cls) return true;
+        if (cats && !cats[cls.cat]) return false;
+        if (lvls) {
+            var l = cls.lvl === 'D' || cls.lvl === 'V' ? 'I' : cls.lvl;
+            if (!l || !lvls[l]) return false;
+        }
+        return true;
+    }
+
+    // Selección guardada (localStorage) → {cats, lvls} con solo lo que existe en el catálogo; vacío = null.
+    function logFilterSelection(saved, categories) {
+        var known = {}, out = {cats: null, lvls: null};
+        (categories || []).forEach(function (c) { known[c.id] = true; });
+        ((saved && saved.cats) || []).forEach(function (id) {
+            if (known[id]) (out.cats = out.cats || {})[id] = true;
+        });
+        ((saved && saved.lvls) || []).forEach(function (id) {
+            if (LOG_LEVELS.some(function (l) { return l.id === id; })) (out.lvls = out.lvls || {})[id] = true;
+        });
+        return out;
+    }
+
+    // 950 → "950", 1234 → "1,2k", 12345 → "12k".
+    function compactCount(n) {
+        if (n < 1000) return String(n);
+        if (n < 10000) return (Math.floor(n / 100) / 10).toFixed(1).replace('.', ',') + 'k';
+        return Math.floor(n / 1000) + 'k';
+    }
+
+    /*
+     * Barra de filtros del monitor: un chip por categoría y uno por nivel (aria-pressed), con la
+     * cantidad de líneas de cada uno en la vista (counts: {cat: {id: n}, lvl: {E: n}}; los números
+     * se actualizan aparte, por data-n). "Limpiar" si hay algo elegido.
+     */
+    function logCatBarHtml(categories, counts, cats, lvls) {
+        counts = counts || {cat: {}, lvl: {}};
+        function chip(kind, id, label, n, on, extra) {
+            return '<button type="button" class="lc-chip' + (extra || '') + (on ? ' on' : '') + (n ? '' : ' zero') +
+                '" data-' + kind + '="' + escapeHtml(id) + '" aria-pressed="' + (on ? 'true' : 'false') + '"' +
+                ' title="' + (on ? 'Sacar ' + escapeHtml(label) + ' del filtro' : 'Filtrar por ' + escapeHtml(label)) + '">' +
+                escapeHtml(label) + ' <span class="lc-n" data-n="' + kind + ':' + escapeHtml(id) + '">' +
+                compactCount(n) + '</span></button>';
+        }
+        var html = '<span class="lc-group" role="group" aria-label="Categorías">' +
+            (categories || []).map(function (c) {
+                return chip('cat', c.id, c.label || c.id, counts.cat[c.id] || 0, !!(cats && cats[c.id]));
+            }).join('') + '</span><span class="lc-group" role="group" aria-label="Niveles">' +
+            LOG_LEVELS.map(function (l) {
+                return chip('lvl', l.id, l.label, counts.lvl[l.id] || 0, !!(lvls && lvls[l.id]),
+                            ' lc-lvl lc-lvl-' + l.id.toLowerCase());
+            }).join('') + '</span>';
+        if (cats || lvls) html += '<button type="button" class="lc-clear" data-clear="1" title="Sacar los filtros de categoría y nivel">' +
+            '<i class="ti ti-x" aria-hidden="true"></i>Limpiar</button>';
+        return html;
+    }
+
     // "2026-10-05T16:02:03.123" (o con espacio) → ms epoch local, o null.
     function tsMs(iso) {
         var m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?/.exec(iso || '');
@@ -1576,6 +1695,8 @@
         sessionLabel: sessionLabel, sessionFile: sessionFile, expandRangeLine: expandRangeLine, findLine: findLine,
         cursorOffset: cursorOffset,
         lineMark: lineMark, tsMs: tsMs, EventMarks: EventMarks,
+        logCategorizer: logCategorizer, logFilterPasses: logFilterPasses, logFilterSelection: logFilterSelection,
+        logCatBarHtml: logCatBarHtml, compactCount: compactCount, LOG_LEVELS: LOG_LEVELS,
         errorText: errorText, errorCode: errorCode, withToken: withToken,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         isoLocal: isoLocal, sessionStart: sessionStart,

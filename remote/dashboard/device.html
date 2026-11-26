@@ -40,7 +40,6 @@
     <div class="term-toolbar">
         <label class="filter-box" title="Filtrar líneas ( / )"><i class="ti ti-filter" aria-hidden="true"></i>
             <input id="filter" class="filter-input" type="search" placeholder="Filtrar  /" autocomplete="off" aria-label="Filtrar líneas"></label>
-        <button class="tool-btn" id="btn-problems" title="Solo problemas: panics, resets, errores y warnings" aria-label="Solo problemas"><i class="ti ti-alert-triangle"></i><span class="lbl">Problemas</span></button>
         <button class="tool-btn tool-btn--panic hidden" id="btn-panic" title="Ir al último panic" aria-label="Ir al último panic"><i class="ti ti-arrow-bar-to-up"></i><span class="lbl">Último panic</span></button>
         <button class="tool-btn" id="btn-ts" title="Hora de cada línea (la pone la Pi al recibirla)" aria-label="Hora"><i class="ti ti-clock"></i><span class="lbl">Hora</span></button>
         <span class="tool-sep"></span>
@@ -50,6 +49,7 @@
         <a class="tool-btn" id="btn-download" title="Descargar la sesión actual completa" aria-label="Descargar el log"><i class="ti ti-download"></i><span class="lbl">Log</span></a>
         <button class="tool-btn" id="btn-history" title="Historial: eventos, flasheos y sesiones anteriores" aria-label="Historial"><i class="ti ti-history"></i><span class="lbl">Historial</span></button>
     </div>
+    <div class="logcat-bar hidden" id="logcat-bar" role="toolbar" aria-label="Filtrar por categoría y nivel"></div>
 
     <div class="device-main">
         <div class="term-wrap">
@@ -125,7 +125,10 @@
         var unseen = 0;
         var dropped = 0;
         var filterText = '';
-        var onlyProblems = false;
+        // Categorías y niveles (logcat): catálogo de api/log-categories; sin él (bench viejo) no hay barra.
+        // lastCls: lo que dio la última línea completa (la herencia la necesita, en orden).
+        var logcat = null, lcCats = null, lcLvls = null, lastCls = null;
+        var lcCounts = {cat: {}, lvl: {}};
         var lastPanicEl = null;
         var showTs = true;
         try { showTs = localStorage.getItem('eb.showTs') !== '0'; } catch (e) {}
@@ -137,7 +140,7 @@
         // send/command/flash se agregan después, por evento (markEvent).
         var MARK_ICONS = {panic: '⚠', boot: '↻'};
 
-        function makeLine(text, el, noFilter) {
+        function makeLine(text, el, noFilter, lcat) {
             el = el || document.createElement('div');
             var p = EB.splitPrefix(text);
             var plain = EB.stripAnsi(p.body);
@@ -151,8 +154,25 @@
             el._plain = plain.toLowerCase();
             el._cls = cls;
             el._iso = p.time ? p.date + 'T' + p.time : null;
+            el._text = text;
+            el._lc = lcat || null;     // categoría y nivel (logcat); el._cls es la clase CSS
             if (!noFilter) applyFilterTo(el);
             return el;
+        }
+
+        // Categoría de la próxima línea completa (en orden) y su cuenta en los chips.
+        function classifyNext(text) {
+            if (!logcat) return null;
+            lastCls = logcat.classify(text, lastCls);
+            countLc(lastCls, 1);
+            return lastCls;
+        }
+
+        function countLc(cls, d) {
+            if (!cls) return;
+            lcCounts.cat[cls.cat] = (lcCounts.cat[cls.cat] || 0) + d;
+            var l = cls.lvl === 'D' || cls.lvl === 'V' ? 'I' : cls.lvl;
+            if (l) lcCounts.lvl[l] = (lcCounts.lvl[l] || 0) + d;
         }
 
         function markEvent(el, ev) {
@@ -238,7 +258,7 @@
         }
 
         function visible(el) {
-            if (onlyProblems && !EB.isProblem(el._cls)) return false;
+            if (!EB.logFilterPasses(el._lc, lcCats, lcLvls)) return false;
             return !filterText || el._plain.indexOf(filterText) >= 0;
         }
 
@@ -253,7 +273,7 @@
             if (lines.length) {
                 var frag = document.createDocumentFragment();
                 lines.forEach(function(l) {
-                    var el = makeLine(l);
+                    var el = makeLine(l, null, false, classifyNext(l));
                     if (el._cls === 'ln-panic') lastPanicEl = el;
                     takeMarks(el);
                     frag.appendChild(el);
@@ -262,7 +282,8 @@
                 trim();
                 if (!follow) unseen += lines.length;
             }
-            makeLine(buffer.partialView(), partialEl);
+            var partial = buffer.partialView();
+            makeLine(partial, partialEl, false, logcat ? logcat.classify(partial, lastCls) : null);
             partialEl.classList.add('ln-partial');
             if (follow) terminal.scrollTop = terminal.scrollHeight;
             updateCounters();
@@ -272,6 +293,7 @@
             var extra = terminal.childElementCount - 1 - MAX_LINES;
             for (; extra > 0; extra--) {
                 if (terminal.firstChild === lastPanicEl) lastPanicEl = null;
+                countLc(terminal.firstChild._lc, -1);
                 terminal.removeChild(terminal.firstChild);
                 dropped++;
             }
@@ -294,6 +316,7 @@
             fb.title = follow ? 'Pausar: dejar de seguir el final del log (End sigue)' : 'Seguir el final del log (End)';
             fb.setAttribute('aria-label', follow ? 'Pausar' : 'Seguir');
             fb.classList.toggle('active', !follow);
+            updateLcCounts();
         }
 
         function setFollow(on) {
@@ -316,7 +339,7 @@
             for (var el = terminal.firstChild; el; el = el.nextSibling) {
                 if (el._plain !== undefined) applyFilterTo(el);
             }
-            terminal.classList.toggle('filtered', !!filterText || onlyProblems);
+            terminal.classList.toggle('filtered', !!filterText || !!lcCats || !!lcLvls);
             if (follow) terminal.scrollTop = terminal.scrollHeight;
         }
 
@@ -324,13 +347,69 @@
             terminal.innerHTML = '';
             partialEl = null;
             lastPanicEl = null;
+            lastCls = null;
+            lcCounts = {cat: {}, lvl: {}};
             dropped = unseen = 0;
             updateCounters();
         }
 
+        // ── Filtro por categoría y nivel (chips debajo de la toolbar) ──
+        function toggleSel(sel, id) {
+            var out = {}, any = false;
+            Object.keys(sel || {}).forEach(function(k) { if (k !== id) { out[k] = true; any = true; } });
+            if (!(sel && sel[id])) { out[id] = true; any = true; }
+            return any ? out : null;
+        }
+
+        function setLcSelection(cats, lvls) {
+            lcCats = cats; lcLvls = lvls;
+            try {
+                localStorage.setItem('eb.logFilter', JSON.stringify({cats: Object.keys(cats || {}), lvls: Object.keys(lvls || {})}));
+            } catch (e) {}
+            renderLcBar();
+            refilter();
+        }
+
+        function renderLcBar() {
+            if (logcat) $('logcat-bar').innerHTML = EB.logCatBarHtml(logcat.categories, lcCounts, lcCats, lcLvls);
+        }
+
+        // Solo los números (los botones no se rehacen con cada línea: se perdería el click).
+        function updateLcCounts() {
+            if (!logcat) return;
+            var spans = $('logcat-bar').querySelectorAll('[data-n]');
+            for (var i = 0; i < spans.length; i++) {
+                var k = spans[i].dataset.n.split(':');
+                var n = (k[0] === 'cat' ? lcCounts.cat : lcCounts.lvl)[k[1]] || 0;
+                var txt = EB.compactCount(n);
+                if (spans[i].textContent !== txt) spans[i].textContent = txt;
+                spans[i].parentNode.classList.toggle('zero', !n);
+            }
+        }
+
+        function initLogcat(catalog) {
+            logcat = EB.logCategorizer(catalog);
+            var saved = null;
+            try { saved = JSON.parse(localStorage.getItem('eb.logFilter') || 'null'); } catch (e) {}
+            var sel = EB.logFilterSelection(saved, logcat.categories);
+            lcCats = sel.cats; lcLvls = sel.lvls;
+            // Las líneas que llegaron antes que el catálogo, en orden.
+            lastCls = null;
+            lcCounts = {cat: {}, lvl: {}};
+            for (var el = terminal.firstChild; el; el = el.nextSibling) {
+                if (el !== partialEl && el._text !== undefined) el._lc = classifyNext(el._text);
+            }
+            if (partialEl && partialEl._text !== undefined) partialEl._lc = logcat.classify(partialEl._text, lastCls);
+            var bar = $('logcat-bar');
+            bar.classList.remove('hidden');
+            bar.title = catalog.error ? 'El catálogo del bench está roto, va el de siempre: ' + catalog.error : '';
+            renderLcBar();
+            refilter();
+        }
+
         function jumpToPanic() {
             if (!lastPanicEl) return;
-            if (lastPanicEl.classList.contains('hidden')) { filterText = ''; $('filter').value = ''; refilter(); }
+            if (lastPanicEl.classList.contains('hidden')) { filterText = ''; $('filter').value = ''; setLcSelection(null, null); }
             follow = false;
             lastPanicEl.scrollIntoView({block: 'center'});
             lastPanicEl.classList.remove('flash');
@@ -1080,11 +1159,16 @@
             setInterval(tickLocks, 1000);
 
             $('filter').addEventListener('input', function() { filterText = this.value.trim().toLowerCase(); refilter(); });
-            $('btn-problems').onclick = function() {
-                onlyProblems = !onlyProblems;
-                this.classList.toggle('active', onlyProblems);
-                refilter();
-            };
+            fetch('api/log-categories').then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(initLogcat)
+                .catch(function() {});          // bench anterior a las categorías: sin barra
+            $('logcat-bar').addEventListener('click', function(e) {
+                var b = e.target.closest('button');
+                if (!b) return;
+                if (b.dataset.clear) setLcSelection(null, null);
+                else if (b.dataset.cat) setLcSelection(toggleSel(lcCats, b.dataset.cat), lcLvls);
+                else if (b.dataset.lvl) setLcSelection(lcCats, toggleSel(lcLvls, b.dataset.lvl));
+            });
             $('btn-panic').onclick = jumpToPanic;
             function applyTs() {
                 document.body.classList.toggle('hide-ts', !showTs);

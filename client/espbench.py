@@ -435,8 +435,10 @@ def cmd_logs(c: lib.Client, a, out: Out) -> int:
     _validate(a)
     board = c.resolve(a.dev)
     r = c.read_range(board.key, since=a.since, until=a.until, around=a.around, before=a.before, after=a.after,
-                     grep=a.grep, src=a.src, **_wait_args(a))
+                     grep=a.grep, src=a.src, cat=a.cat, level=a.level, **_wait_args(a))
     r["board"] = board.label
+    if a.cat or a.level:
+        r["filter"] = {"cat": a.cat, "level": a.level}
     return out.emit(r, _human_lines)
 
 
@@ -741,6 +743,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--after", type=int, help="con --around: líneas después")
     sp.add_argument("--grep", help="regex sobre lo que se muestra")
     sp.add_argument("--src", choices=("serial", "taglog", "all"), help="origen de las líneas")
+    sp.add_argument("--cat", help="solo esas categorías, separadas por coma (celular,controlador,nube,wifi-ble,"
+                                  "sistema,ota,memoria,banco,otros: las del bench, GET /api/log-categories)")
+    sp.add_argument("--level", help="solo esos niveles: E, W, I (I incluye D y V), separados por coma")
     waits(sp)
 
     sp = add("send", cmd_send, "manda texto a la consola serie")

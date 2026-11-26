@@ -945,7 +945,11 @@ class Client:
         return f"/api/board/{urllib.parse.quote(key, safe='')}/{what}"
 
     def board_log(self, key: str, **params) -> dict:
-        return self.request("GET", self._board_path(key, "log"), params)
+        r = self.request("GET", self._board_path(key, "log"), params)
+        if (params.get("cat") or params.get("level")) and "filter" not in r:
+            # un bench anterior ignora cat/level y devolvería todo sin filtrar
+            raise EspbenchError("unsupported", "este bench no filtra el log por categoría ni nivel: actualizalo")
+        return r
 
     def board_events(self, key: str, types: Optional[str] = None, since: Optional[str] = None,
                      limit: Optional[int] = None, order: Optional[str] = None) -> dict:
@@ -1069,6 +1073,7 @@ class Client:
     def read_range(self, key: str, since: Optional[str] = None, until: Optional[str] = None,
                    around: Optional[str] = None, before: Optional[int] = None, after: Optional[int] = None,
                    grep: Optional[str] = None, src: Optional[str] = None, max_lines: Optional[int] = None,
+                   cat: Optional[str] = None, level: Optional[str] = None,
                    timeout_s: Optional[float] = None, for_s: Optional[float] = None, echo: Optional[str] = None,
                    expect_panic: bool = False, idle_needs_output: bool = False,
                    fail_on=CRASH_TYPES, known=_UNSET) -> dict:
@@ -1090,7 +1095,7 @@ class Client:
         Devuelve un dict con `error` (None, timeout, crashed, session_ended) y
         `reason` (range, until, idle, for, panic). Los errores HTTP levantan
         EspbenchError."""
-        params = {"grep": grep, "src": src, "max_lines": max_lines}
+        params = {"grep": grep, "src": src, "max_lines": max_lines, "cat": cat, "level": level}
         if around:
             r = self.board_log(key, around=around, before=before, after=after, **params)
             return self._result(key, _single(r, max_lines), reason="range", error=None, until=None)

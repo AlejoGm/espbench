@@ -198,6 +198,33 @@ def test_agent_cycle(cli, bench, board, tmp_path):
     assert code == 0 and r["message"] == "liberado"
 
 
+def test_logs_cat_and_level(cli, bench, tmp_path):
+    code, r = cli("send", "sim-board", "panic", "--until", "panic")
+    assert code == 0
+    time.sleep(0.3)
+    code, r = cli("logs", "sim-board", "--level", "E", "--max-lines", "50")
+    assert code == 0 and r["filter"] == {"cat": None, "level": "E"}
+    assert any("Guru Meditation" in l for l in r["lines"]) and any("Backtrace" in l for l in r["lines"])
+    assert not any("OK uptime" in l for l in r["lines"])
+    code, r = cli("logs", "sim-board", "--cat", "radio")
+    assert (code, r["error"]) == (1, "bad_request") and "celular" in r["message"]
+
+
+def test_logs_cat_on_old_bench_is_unsupported(cli, bench, monkeypatch):
+    """Un bench anterior ignora cat/level (FastAPI no se queja) y devolvería todo: el CLI lo nota."""
+    orig = lib.Client.request
+
+    def old_bench(self, method, path, query=None, body=None):
+        r = orig(self, method, path, query, body)
+        if path.endswith("/log"):
+            r.pop("filter", None)
+        return r
+    monkeypatch.setattr(lib.Client, "request", old_bench)
+    code, r = cli("logs", "sim-board", "--cat", "sistema")
+    assert (code, r["error"]) == (1, "unsupported")
+    assert cli("logs", "sim-board")[0] == 0
+
+
 def test_events_all(cli, bench, tmp_path):
     bench.add_board("ttyUSB1", "AA:BB:CC:DD:EE:02", key="otra")
     code, r = cli("events", "--all", "--type", "boot")
