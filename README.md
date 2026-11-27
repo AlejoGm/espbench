@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi (or an Ubuntu PC) over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.55.0
+**Version:** 0.56.0
 
 ---
 
@@ -243,6 +243,7 @@ espbench send mi-board "status" --until "OK" --json
 espbench events mi-board --type panic --json
 espbench logs mi-board --around panic --max-lines 80 --json
 espbench logs mi-board --since 30m --cat controlador,nube --level E,W --json   # solo errores y warnings de Modbus y MQTT
+espbench wifi on --for 1h --json          # WiFi del banco para las placas (si el bench tiene dongle); off para apagarla
 espbench release mi-board --json
 ```
 
@@ -301,6 +302,18 @@ Probar sin Pi: `ESP_BASE=$(mktemp -d) python -m tests.benchsim --port 8099` leva
 placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_HOST=127.0.0.1:8099 espbench ls`.
 
 ---
+
+## WiFi del banco (opcional)
+
+Un bench con un dongle USB que haga punto de acceso (probado: TP-Link TL-WN722N **v1**, Atheros AR9271) puede ser el WiFi de sus placas: un hotspot de NetworkManager que les da IP y las saca a internet por el cable del bench. Está **apagado** hasta que alguien lo prende (`espbench wifi on [--for 8h]`, vence sola a las 8 h; `espbench wifi off`), y `espbench wifi` muestra qué placas están conectadas. Cambiarlo con una placa reservada por otro da `locked`; cada cambio queda como evento `wifi` en el log de cada placa. Diseño y fases: [docs/specs/bench-wifi.md](docs/specs/bench-wifi.md).
+
+La red (nombre, clave y canal) se configura desde el dashboard del bench: con el dongle enchufado, el chip dice "WiFi · sin configurar" y abre el formulario. La clave queda solo en el bench y la API nunca la devuelve (sin `api_token` cualquiera en la red interna puede cambiarla: conviene activarlo). También se puede desde el bench, sin dashboard (pide la clave sin mostrarla; nunca usa la interfaz por la que sale el bench):
+
+```bash
+sudo espbench-wifi setup
+```
+
+Un bench sin dongle (las Pi) no tiene nada que hacer: sin `/opt/esp/wifi.conf` la función no existe y nada cambia.
 
 ## Dashboard
 

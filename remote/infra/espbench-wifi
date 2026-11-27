@@ -1,0 +1,221 @@
+#!/bin/bash
+# espbench-wifi — el WiFi del banco: un hotspot de NetworkManager en un dongle USB, para las placas
+# (docs/specs/bench-wifi.md). Corre como root: el api (sfypi) lo llama con `sudo -n`.
+#
+#   espbench-wifi setup      interactivo, en el bench: interfaz, SSID, clave (sin mostrarla) y canal
+#   espbench-wifi configure  lo mismo sin preguntar (lo usa el dashboard): por stdin, una línea cada uno,
+#                            SSID, clave (vacía = la que ya estaba) y canal (vacío = 6 o el que estaba).
+#                            Nunca por argumentos: quedarían en la lista de procesos. La interfaz es la
+#                            de wifi.conf, o el único dongle USB que no es la salida del bench.
+#   espbench-wifi up         prende la red (conexión de NM "espbench-wifi")
+#   espbench-wifi down       la apaga
+#   espbench-wifi status     key=value, después "--- stations" (iw station dump) y "--- leases" (dnsmasq de NM)
+#
+# Ni el SSID ni la clave van en el repo: quedan solo en el bench. Sin $ESP_BASE/wifi.conf (IFACE, SSID,
+# CHANNEL) el bench no tiene la red configurada y up/down no tocan nada. La clave no va en wifi.conf:
+# vive solo en el keyfile de NM (600). Nunca se usa la interfaz por la que sale el bench (en una Pi,
+# wlan0). La conexión es autoconnect=false: al bootear la red está apagada.
+#
+# Solo para tests: ESPBENCH_WIFI_TEST=1 (sin chequeo de root), ESPBENCH_NM_DIR, ESPBENCH_NM_LEASES_DIR,
+# ESPBENCH_SYS_NET.
+set -euo pipefail
+
+ESP_BASE="${ESP_BASE:-/opt/esp}"
+CONF="$ESP_BASE/wifi.conf"
+CON="espbench-wifi"
+NM_DIR="${ESPBENCH_NM_DIR:-/etc/NetworkManager/system-connections}"
+LEASES_DIR="${ESPBENCH_NM_LEASES_DIR:-/var/lib/NetworkManager}"
+SYS_NET="${ESPBENCH_SYS_NET:-/sys/class/net}"
+KEYFILE="$NM_DIR/$CON.nmconnection"
+
+die() { echo "espbench-wifi: $*" >&2; exit 1; }
+
+need_root() {
+    [ -n "${ESPBENCH_WIFI_TEST:-}" ] || [ "$(id -u)" -eq 0 ] || die "hay que correrlo como root (sudo)"
+}
+
+conf_get() { [ -f "$CONF" ] && sed -n "s/^$1=//p" "$CONF" | tail -1 || true; }
+
+load_conf() {
+    [ -f "$CONF" ] || die "la red del bench no está configurada (dashboard → WiFi → Configurar, o sudo espbench-wifi setup)"
+    IFACE="$(conf_get IFACE)"
+    SSID="$(conf_get SSID)"
+    CHANNEL="$(conf_get CHANNEL)"
+    [ -n "$IFACE" ] && [ -n "$SSID" ] || die "$CONF incompleto (faltan IFACE o SSID)"
+}
+
+is_active() { nmcli -t -f NAME con show --active 2>/dev/null | grep -qx "$CON"; }
+
+# Interfaces por las que el bench sale a la red: nunca se usan para el hotspot (en una Pi, wlan0).
+uplinks() { ip route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | sort -u; }
+
+wifi_ifaces() { iw dev 2>/dev/null | sed -n 's/^[[:space:]]*Interface //p'; }
+
+# Dongles: interfaces WiFi en USB que no son la salida del bench (el WiFi interno de una Pi no cuenta).
+candidates() {
+    local i
+    for i in $(wifi_ifaces); do
+        uplinks | grep -qx "$i" && continue
+        case "$(readlink -f "$SYS_NET/$i/device" 2>/dev/null)" in *usb*) echo "$i" ;; esac
+    done
+}
+
+check_values() {   # iface ssid pass channel
+    local ifaces
+    ifaces=" $(wifi_ifaces | tr '\n' ' ')"
+    case "$ifaces " in *" $1 "*) ;; *) die "'$1' no es una interfaz WiFi (hay:${ifaces:- ninguna})" ;; esac
+    if uplinks | grep -qx "$1"; then
+        die "'$1' es por donde el bench sale a la red: usarla para el hotspot lo deja incomunicado"
+    fi
+    [ -n "$2" ] || die "falta el SSID"
+    [ "${#2}" -le 32 ] || die "el SSID tiene más de 32 caracteres"
+    [ "${#3}" -ge 8 ] && [ "${#3}" -le 63 ] || die "la clave tiene que tener entre 8 y 63 caracteres"
+    [[ "$4" =~ ^([1-9]|1[0-3])$ ]] || die "canal inválido (1 a 13)"
+}
+
+write_config() {   # iface ssid pass channel
+    local active=0
+    is_active && active=1
+    if [ "$active" = 1 ]; then nmcli con down "$CON" >/dev/null 2>&1 || true; fi
+    mkdir -p "$NM_DIR"
+    (
+        umask 077
+        cat > "$KEYFILE" <<EOF
+[connection]
+id=$CON
+type=wifi
+interface-name=$1
+autoconnect=false
+
+[wifi]
+mode=ap
+ssid=$2
+band=bg
+channel=$4
+
+[wifi-security]
+key-mgmt=wpa-psk
+proto=rsn
+pairwise=ccmp
+group=ccmp
+psk=$3
+
+[ipv4]
+method=shared
+
+[ipv6]
+method=disabled
+EOF
+    )
+    chmod 600 "$KEYFILE"
+    nmcli con load "$KEYFILE" >/dev/null 2>&1 || nmcli con reload >/dev/null 2>&1 || true
+    printf 'IFACE=%s\nSSID=%s\nCHANNEL=%s\n' "$1" "$2" "$4" > "$CONF"
+    chmod 644 "$CONF"
+    # Estaba prendida: vuelve a prenderse con la configuración nueva.
+    if [ "$active" = 1 ]; then nmcli con up "$CON" >/dev/null 2>&1 || die "configurada, pero no volvió a prender"; fi
+}
+
+warn_on_air() {   # iface ssid
+    if nmcli -t -f SSID dev wifi list ifname "$1" --rescan yes 2>/dev/null | grep -Fxq "$2"; then
+        echo "OJO: '$2' ya está en el aire cerca del bench: las placas se pueden conectar a esa."
+    fi
+}
+
+cmd_setup() {
+    need_root
+    local ifaces def iface ssid pass pass2 channel
+    ifaces="$(wifi_ifaces | tr '\n' ' ' | sed 's/ $//')"
+    [ -n "$ifaces" ] || die "no hay interfaces WiFi: ¿está enchufado el dongle?"
+    def="$(candidates | head -1)"; def="${def:-${ifaces%% *}}"
+    read -r -p "Interfaz del dongle [$def] (hay: $ifaces): " iface
+    iface="${iface:-$def}"
+    case " $ifaces " in *" $iface "*) ;; *) die "'$iface' no es una interfaz WiFi (hay: $ifaces)" ;; esac
+    if uplinks | grep -qx "$iface"; then
+        die "'$iface' es por donde el bench sale a la red: usarla para el hotspot lo deja incomunicado"
+    fi
+    read -r -p "SSID (la red de configuración que ya conocen las placas): " ssid
+    [ -n "$ssid" ] || die "falta el SSID"
+    read -r -s -p "Clave (8 a 63 caracteres, no se muestra): " pass; echo
+    read -r -s -p "Repetila: " pass2; echo
+    [ "$pass" = "$pass2" ] || die "las claves no coinciden"
+    read -r -p "Canal 2,4 GHz [6]: " channel
+    channel="${channel:-6}"
+    check_values "$iface" "$ssid" "$pass" "$channel"
+    warn_on_air "$iface" "$ssid"
+    write_config "$iface" "$ssid" "$pass" "$channel"
+    echo "Listo: '$ssid' en $iface, canal $channel ($(is_active && echo prendida || echo apagada)). Prenderla: espbench wifi on"
+}
+
+cmd_configure() {
+    need_root
+    local ssid pass channel iface old_pass
+    IFS= read -r ssid || true
+    IFS= read -r pass || true
+    IFS= read -r channel || true
+    iface="$(conf_get IFACE)"
+    if [ -z "$iface" ]; then
+        iface="$(candidates | head -1)"
+        [ -n "$iface" ] || die "no hay ningún dongle WiFi USB enchufado"
+    fi
+    if [ -z "$pass" ]; then
+        old_pass="$( [ -f "$KEYFILE" ] && sed -n 's/^psk=//p' "$KEYFILE" | tail -1 || true)"
+        [ -n "$old_pass" ] || die "falta la clave (todavía no hay una guardada)"
+        pass="$old_pass"
+    fi
+    channel="${channel:-$(conf_get CHANNEL)}"
+    channel="${channel:-6}"
+    check_values "$iface" "$ssid" "$pass" "$channel"
+    write_config "$iface" "$ssid" "$pass" "$channel"
+    warn_on_air "$iface" "$ssid"
+    echo "ok"
+}
+
+cmd_up() {
+    need_root
+    load_conf
+    local err
+    if ! err="$(nmcli con up "$CON" 2>&1 >/dev/null)"; then
+        die "no se pudo prender la red: ${err:-nmcli falló}"
+    fi
+}
+
+cmd_down() {
+    need_root
+    load_conf
+    if is_active; then
+        nmcli con down "$CON" >/dev/null 2>&1 || die "no se pudo apagar la red"
+    fi
+}
+
+cmd_status() {
+    if [ ! -f "$CONF" ]; then
+        echo "available=0"
+        local c
+        c="$(candidates | head -1)"
+        [ -n "$c" ] && echo "candidate=$c"
+        return 0
+    fi
+    load_conf
+    local present=0 active=0
+    iw dev "$IFACE" info >/dev/null 2>&1 && present=1
+    is_active && active=1
+    echo "available=1"
+    echo "iface=$IFACE"
+    echo "ssid=$SSID"
+    echo "channel=$CHANNEL"
+    echo "present=$present"
+    echo "active=$active"
+    echo "--- stations"
+    if [ "$active" = 1 ]; then iw dev "$IFACE" station dump 2>/dev/null || true; fi
+    echo "--- leases"
+    cat "$LEASES_DIR/dnsmasq-$IFACE.leases" 2>/dev/null || true
+}
+
+case "${1:-}" in
+    setup)     cmd_setup ;;
+    configure) cmd_configure ;;
+    up)        cmd_up ;;
+    down)      cmd_down ;;
+    status)    cmd_status ;;
+    *)         echo "uso: espbench-wifi setup|configure|up|down|status" >&2; exit 2 ;;
+esac

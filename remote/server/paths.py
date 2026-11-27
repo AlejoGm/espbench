@@ -82,6 +82,16 @@ def properties_file() -> pathlib.Path:
     return meta_dir() / "properties.json"
 
 
+def wifi_conf() -> pathlib.Path:
+    """WiFi del banco (benchwifi, espbench-wifi setup): IFACE, SSID, CHANNEL. Sin la clave (vive en el keyfile de NM)."""
+    return esp_base() / "wifi.conf"
+
+
+def wifi_state_file() -> pathlib.Path:
+    """Estado del WiFi del banco que pidió alguien (prendido, hasta cuándo, quién): lo escribe el api."""
+    return meta_dir() / "wifi_state.json"
+
+
 def log_categories_file() -> pathlib.Path:
     """Catálogo de categorías del log de este bench (logcat); sin el archivo, el default."""
     return meta_dir() / "log_categories.json"

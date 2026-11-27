@@ -225,6 +225,55 @@ def test_logs_cat_on_old_bench_is_unsupported(cli, bench, monkeypatch):
     assert cli("logs", "sim-board")[0] == 0
 
 
+@pytest.fixture
+def wifi_helper(monkeypatch):
+    """El helper del WiFi del banco, falso (tests/test_benchwifi.py), en el api del bench simulado."""
+    from server import benchwifi
+    from tests.test_benchwifi import FakeHelper
+    fake = FakeHelper()
+    monkeypatch.setattr(benchwifi, "runner", fake)
+    monkeypatch.setattr(benchwifi, "_schedule", lambda st: None)
+    return fake
+
+
+def _wifi_conf():
+    from server import paths as spaths
+    spaths.wifi_conf().parent.mkdir(parents=True, exist_ok=True)
+    spaths.wifi_conf().write_text("IFACE=wlx00c0ca1234\nSSID=RedDelBanco\nCHANNEL=6\n")
+
+
+def test_wifi_status_on_off(cli, bench, wifi_helper):
+    code, r = cli("wifi")
+    assert (code, r["error"]) == (1, "unsupported")                 # sin wifi.conf (una Pi sin dongle)
+    assert wifi_helper.calls == []
+    _wifi_conf()
+    code, r = cli("wifi")
+    assert code == 0 and r["available"] and r["on"] is False and r["ssid"] == "RedDelBanco", r
+    code, r = cli("wifi", "on", "--for", "30m")
+    assert code == 0 and r["on"] and r["by"] == "agent" and r["until"] and len(r["events"]) == 1
+    assert wifi_helper.calls.count("up") == 1
+    code, r = cli("wifi", "off", "--for", "1m")
+    assert (code, r["error"]) == (1, "bad_request")
+    code, r = cli("wifi", "on", "--for", "13h")
+    assert (code, r["error"]) == (1, "bad_request")
+    code, r = cli("wifi", "off")
+    assert code == 0 and r["on"] is False
+
+
+def test_wifi_on_with_board_reserved_by_other_is_locked(cli, bench, wifi_helper):
+    _wifi_conf()
+    locks.write("ttyUSB0", locks.Lock("juan", "x", expires=int(time.time()) + 600))
+    code, r = cli("wifi", "on")
+    assert (code, r["error"]) == (6, "locked") and "juan" in r["message"], r
+    assert "up" not in wifi_helper.calls
+
+
+def test_wifi_without_host_finds_the_bench_with_wifi(disc, board, wifi_helper):
+    _wifi_conf()
+    code, r = disc("wifi")
+    assert code == 0 and r["available"] and r.get("bench") == "bench-sim"
+
+
 def test_events_all(cli, bench, tmp_path):
     bench.add_board("ttyUSB1", "AA:BB:CC:DD:EE:02", key="otra")
     code, r = cli("events", "--all", "--type", "boot")

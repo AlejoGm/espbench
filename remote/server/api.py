@@ -17,6 +17,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Optional
 from urllib.parse import unquote
@@ -27,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server import benchinfo, cleanup, geo, logcat, testrun
+from server import benchinfo, benchwifi, cleanup, geo, logcat, testrun
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -37,9 +38,18 @@ DASHBOARD_DIR = BASE_DIR / "dashboard"
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
-    """Al arrancar: la ubicación por IP en un thread, sin frenar el arranque ni los pedidos (geo.py)."""
+    """Al arrancar: la ubicación por IP en un thread, sin frenar el arranque ni los pedidos (geo.py); el WiFi del
+    banco retoma su vencimiento o se apaga si venció (benchwifi.resume; sin wifi.conf no hace nada)."""
     geo.start_background()
+    threading.Thread(target=_wifi_resume, name="wifi-resume", daemon=True).start()
     yield
+
+
+def _wifi_resume() -> None:
+    try:
+        benchwifi.resume()
+    except Exception as e:          # el WiFi no puede frenar el dashboard
+        taglog.error(TAG, f"wifi resume: {e}")
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -264,6 +274,56 @@ def board_log(key: str, since: Optional[str] = None, until: Optional[str] = None
     return _range_call(logrange.read_range, paths.device_home(mac), since=since, until=until, around=around,
                        before=before, after=after, max_lines=max_lines, grep=grep, src=src, raw=raw,
                        echo=echo, live=_board_live(mac), cat=cat, level=level)
+
+
+def _board_names() -> dict:
+    """MAC (sin separadores) → nombre de la placa, para las placas conectadas al WiFi del banco."""
+    return {locks.normalize_mac(d.mac): d.device_key or d.sn or d.mac
+            for d in registry.list_devices() if d.mac}
+
+
+@app.get("/api/wifi")
+def wifi_status():
+    """WiFi del banco (benchwifi, docs/specs/bench-wifi.md): `available` false sin dongle configurado."""
+    return benchwifi.status(_board_names())
+
+
+@app.post("/api/wifi")
+async def wifi_change(body: dict = Body(...), authorization: Optional[str] = Header(None), request: Request = None):
+    """Prende (`action: on`, `for_s` opcional: default 8 h, máx 12 h) o apaga el WiFi del banco. 423 si una
+    placa está reservada por otro (salvo `force`), 409 unsupported sin WiFi. Evento `wifi` en cada placa."""
+    _require_auth(authorization)
+    lock_user, lock_token = _creds(body, required=False)
+    try:
+        user = board_meta.clean_user(body.get("user")) or lock_user or None
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    forced_by = _forced_by(body, request) if _forced(body) else None
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, lambda: benchwifi.change(
+            body.get("action"), body.get("for_s"), user=user, lock_user=lock_user, lock_token=lock_token,
+            force=_forced(body), forced_by=forced_by, boards=_board_names()))
+    except benchwifi.WifiError as e:
+        _fail(e.status, e.error, e.message)
+
+
+@app.post("/api/wifi/config")
+async def wifi_config(body: dict = Body(...), authorization: Optional[str] = Header(None), request: Request = None):
+    """SSID, clave (vacía o ausente = la que ya estaba) y canal de la red del bench (benchwifi.configure). La clave
+    nunca se devuelve. Con la red prendida y una placa reservada por otro: 423 (salvo `force`)."""
+    _require_auth(authorization)
+    lock_user, lock_token = _creds(body, required=False)
+    try:
+        user = board_meta.clean_user(body.get("user")) or lock_user or None
+    except board_meta.MetaError as e:
+        _fail(400, "bad_request", str(e))
+    forced_by = _forced_by(body, request) if _forced(body) else None
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, lambda: benchwifi.configure(
+            body.get("ssid"), body.get("password"), body.get("channel"), user=user, lock_user=lock_user,
+            lock_token=lock_token, force=_forced(body), forced_by=forced_by, boards=_board_names()))
+    except benchwifi.WifiError as e:
+        _fail(e.status, e.error, e.message)
 
 
 @app.get("/api/log-categories")

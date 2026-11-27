@@ -518,6 +518,7 @@
         props:     {icon: '◇', label: 'propiedades'},
         ack:       {icon: '✓', label: 'ACK'},
         test:      {icon: '⚗', label: 'test'},
+        wifi:      {icon: '📶', label: 'WiFi'},
         state:     {icon: '⇄', label: 'estado'},
         session:   {icon: '●', label: 'sesión'}
     };
@@ -560,6 +561,8 @@
         case 'session': return [d.tty, d.pid ? 'pid ' + d.pid : ''].filter(Boolean).join(' · ');
         case 'note': return d.text ? '"' + d.text + '"' : 'borrada';
         case 'test': return testEventDetail(d);
+        case 'wifi': return (d.action === 'on' ? 'prendida' + (d.until ? ' hasta ' + d.until.slice(11, 16) : '')
+                                              : 'apagada' + (d.reason === 'vencida' ? ' (venció)' : '')) + forced;
         case 'props': return Object.keys(d.changes || {}).map(function (cat) {
             var to = propValues(d.changes[cat].to);
             return cat + (to.length ? '=' + to.join(',') : ' quitada');
@@ -1299,6 +1302,109 @@
     }
 
     // Chips de salud de la máquina del bench (GET /api/bench/health). [{icon, value, label, level}]
+    // ── WiFi del banco (GET api/wifi, docs/specs/bench-wifi.md) ──────────────
+    var WIFI_HOURS = [1, 4, 8, 12];
+
+    function hhmm(iso) { return typeof iso === 'string' && iso.length >= 16 ? iso.slice(11, 16) : ''; }
+
+    // Chip del header: null si el bench no tiene WiFi (una Pi sin dongle: no se muestra nada).
+    function wifiView(w) {
+        if (!w || !w.available) return null;
+        if (w.configured === false) {
+            return {cls: 'wifi-off', icon: 'wifi', value: 'WiFi', label: 'sin configurar',
+                    title: 'Dongle enchufado (' + (w.iface || '?') + ') · click para configurar la red'};
+        }
+        if (w.on === null || w.on === undefined) {
+            return {cls: 'warn', icon: 'wifi-off', value: 'WiFi', label: '¿?', title: w.error || 'No se pudo leer el estado del WiFi'};
+        }
+        if (!w.on) {
+            return {cls: 'wifi-off' + (w.error ? ' warn' : ''), icon: 'wifi-off', value: 'WiFi', label: 'apagada',
+                    title: (w.ssid || '') + (w.error ? ' · ' + w.error : '') + ' · click para prenderla'};
+        }
+        var n = (w.clients || []).length;
+        return {cls: 'wifi-on', icon: 'wifi', value: 'WiFi',
+                label: n + (n === 1 ? ' placa' : ' placas') + (w.until ? ' · hasta ' + hhmm(w.until) : ''),
+                title: (w.ssid || '') + (w.by ? ' · prendida por ' + w.by : '') + ' · click para ver o apagar'};
+    }
+
+    function wifiChipHtml(w) {
+        var v = wifiView(w);
+        if (!v) return '';
+        return '<button type="button" class="mchip wifi ' + v.cls + '" id="wifi-chip" title="' + escapeHtml(v.title) + '" aria-haspopup="true">' +
+            '<i class="ti ti-' + v.icon + '" aria-hidden="true"></i><b>' + escapeHtml(v.value) + '</b> ' + escapeHtml(v.label) + '</button>';
+    }
+
+    // "hasta las 18:40" para prender ahora `hours` horas (hora local del navegador).
+    function wifiUntilText(hours, nowMs) {
+        var d = new Date((nowMs || Date.now()) + hours * 3600e3);
+        return 'hasta las ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    // Formulario de la red (sin configurar, o "Configurar"): SSID, clave (nunca se muestra la guardada) y canal.
+    // Guardar = data-save; Cancelar (solo si ya estaba configurada) = data-cancel. Error en .wm-err[data-err].
+    function wifiConfigHtml(w) {
+        var configured = !!(w && w.configured);
+        var ch = (w && w.channel) || 6, opts = '';
+        for (var i = 1; i <= 13; i++) opts += '<option value="' + i + '"' + (i === ch ? ' selected' : '') + '>' + i + '</option>';
+        return '<div class="wm-title">' + (configured ? 'Red del banco' : 'Configurar la red del banco') + '</div>' +
+            '<div class="wm-sub">' + escapeHtml(configured ? 'Cambiar nombre, clave o canal.' :
+                'Dongle ' + ((w && w.iface) || '') + ': la red de configuración que ya conocen las placas.') + '</div>' +
+            '<label class="wm-field">Nombre (SSID)<input name="ssid" maxlength="32" autocomplete="off" spellcheck="false" value="' +
+                escapeHtml((w && w.ssid) || '') + '"></label>' +
+            '<label class="wm-field">Clave<input name="password" type="password" maxlength="63" autocomplete="new-password" placeholder="' +
+                (configured ? 'sin cambios' : '8 a 63 caracteres') + '"></label>' +
+            '<label class="wm-field">Canal (2,4 GHz)<select name="channel">' + opts + '</select></label>' +
+            '<div class="wm-err" data-err></div>' +
+            '<div class="wm-acts">' + (configured ? '<button type="button" data-cancel="1">Cancelar</button>' : '') +
+                '<button type="button" class="wm-go" data-save="1">Guardar</button></div>' +
+            '<div class="wm-note">La clave se guarda solo en el bench y no se vuelve a mostrar.</div>';
+    }
+
+    // Lo que se va a mandar, o el error a mostrar (la misma validación que el server).
+    function wifiConfigCheck(v, configured) {
+        var ssid = v.ssid || '', pass = v.password || '';
+        if (!ssid.trim()) return 'Falta el nombre de la red';
+        if (new TextEncoder().encode(ssid).length > 32 || /[\x00-\x1f\x7f]/.test(ssid)) return 'El nombre tiene que tener hasta 32 caracteres';
+        if (!pass && !configured) return 'Falta la clave';
+        if (pass && (pass.length < 8 || pass.length > 63 || /[^\x20-\x7e]/.test(pass))) return 'La clave tiene que tener entre 8 y 63 caracteres comunes (sin acentos ni ñ)';
+        var ch = +v.channel;
+        if (!(ch >= 1 && ch <= 13)) return 'Canal entre 1 y 13';
+        return null;
+    }
+
+    // Menú del chip. Apagada: duración + Prender. Prendida: placas conectadas, Extender y Apagar.
+    // Los botones llevan data-act (on/off) y data-hours; la duración elegida, data-pick; "Configurar", data-cfg.
+    // Sin configurar (o mode 'config'): el formulario.
+    function wifiMenuHtml(w, hours, nowMs, mode) {
+        if (!w || !w.available) return '';
+        if (w.configured === false || mode === 'config') return wifiConfigHtml(w);
+        hours = hours || 8;
+        var sub = [w.ssid, w.channel ? 'canal ' + w.channel : ''].filter(Boolean).join(' · ');
+        var html = '<div class="wm-title">WiFi del banco</div>';
+        if (w.on) {
+            html += '<div class="wm-sub">' + escapeHtml(sub + ' · prendida' + (w.by ? ' por ' + w.by : '') +
+                                                       (w.until ? ' · se apaga a las ' + hhmm(w.until) : '')) + '</div>';
+            var cl = w.clients || [];
+            html += cl.length ? '<div class="wm-clients">' + cl.map(function (c) {
+                return '<span>' + escapeHtml(c.board || c.mac) + '</span><span>' + escapeHtml(c.ip || '–') + '</span><span>' +
+                       (c.signal_dbm !== null && c.signal_dbm !== undefined ? c.signal_dbm + ' dBm' : '') + '</span>';
+            }).join('') + '</div>' : '<div class="wm-empty">Ninguna placa conectada todavía.</div>';
+            html += '<div class="wm-acts"><button type="button" data-act="on" data-hours="8">Extender 8 h</button>' +
+                    '<button type="button" class="wm-off" data-act="off"><i class="ti ti-wifi-off" aria-hidden="true"></i>Apagar</button></div>';
+        } else {
+            html += '<div class="wm-sub">' + escapeHtml(sub + ' · apagada') + '</div>' +
+                '<div class="wm-label">Prendida por</div><div class="wm-hours">' + WIFI_HOURS.map(function (h) {
+                    return '<button type="button" data-pick="' + h + '"' + (h === hours ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"') + '>' + h + ' h</button>';
+                }).join('') + '</div>' +
+                '<button type="button" class="wm-go" data-act="on" data-hours="' + hours + '"><i class="ti ti-wifi" aria-hidden="true"></i>Prender ' +
+                    wifiUntilText(hours, nowMs) + '</button>' +
+                '<div class="wm-note">Las placas en modo dual pasan del celular al WiFi.</div>';
+        }
+        if (w.error) html += '<div class="wm-err">' + escapeHtml(w.error) + '</div>';
+        html += '<button type="button" class="wm-link" data-cfg="1"><i class="ti ti-settings" aria-hidden="true"></i>Configurar la red</button>';
+        return html;
+    }
+
     function benchChips(h) {
         if (!h) return [];
         var out = [];
@@ -1698,6 +1804,8 @@
         lineMark: lineMark, tsMs: tsMs, EventMarks: EventMarks,
         logCategorizer: logCategorizer, logFilterPasses: logFilterPasses, logFilterSelection: logFilterSelection,
         logCatBarHtml: logCatBarHtml, compactCount: compactCount, LOG_LEVELS: LOG_LEVELS,
+        wifiView: wifiView, wifiChipHtml: wifiChipHtml, wifiMenuHtml: wifiMenuHtml, wifiUntilText: wifiUntilText, WIFI_HOURS: WIFI_HOURS,
+        wifiConfigHtml: wifiConfigHtml, wifiConfigCheck: wifiConfigCheck,
         errorText: errorText, errorCode: errorCode, withToken: withToken,
         escapeHtml: escapeHtml, parseLocal: parseLocal, relTime: relTime, fmtBytes: fmtBytes,
         isoLocal: isoLocal, sessionStart: sessionStart,
