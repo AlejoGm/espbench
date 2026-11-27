@@ -82,6 +82,11 @@ def properties_file() -> pathlib.Path:
     return meta_dir() / "properties.json"
 
 
+def log_categories_file() -> pathlib.Path:
+    """Catálogo de categorías del log de este bench (logcat); sin el archivo, el default."""
+    return meta_dir() / "log_categories.json"
+
+
 def legacy_properties_file() -> pathlib.Path:
     """Donde estaba properties.json en 0.36–0.39 (sin permisos para el api): se lee si el nuevo no existe."""
     return esp_base() / "properties.json"

@@ -76,6 +76,7 @@ Los logs se comen tokens. Pedí lo justo:
 - **`logs` siempre con `--since`** (`boot`, `flash`, `5m`, o el `end`/`cursor` de la respuesta anterior). Sin `--since` lee la sesión entera: en una placa que corre hace días es todo el log desde que arrancó el proceso.
 - `--max-lines N` (default 200; con más, cabeza + cola y la línea `… N líneas omitidas …`).
 - `--grep '<regex>'` para ver solo lo que importa (no afecta el `until`).
+- `--cat <categorías>` y `--level <niveles>` (separados por coma, tampoco afectan el `until`): `--cat controlador --level E` son solo los errores de Modbus. Categorías: `celular`, `controlador`, `nube`, `wifi-ble`, `sistema` (boot, ROM, panics), `ota`, `memoria`, `banco` (líneas del server) y `otros`; las de cada bench en `GET /api/log-categories` (una que no existe da `bad_request` con la lista). Niveles: `E`, `W`, `I` (incluye D y V). En un bench viejo da `unsupported`.
 - `--src serial` saca las líneas del server (flash, transiciones).
 - `events` antes que `logs`: un panic es un evento con `detail.reason`, sin bajar el log.
 

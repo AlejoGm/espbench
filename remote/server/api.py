@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server import benchinfo, geo, testrun
+from server import benchinfo, geo, logcat, testrun
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -254,12 +254,21 @@ def _range_call(fn, *args, **kw):
 def board_log(key: str, since: Optional[str] = None, until: Optional[str] = None,
               around: Optional[str] = None, before: Optional[str] = None, after: Optional[str] = None,
               max_lines: Optional[str] = None, grep: Optional[str] = None, src: Optional[str] = None,
-              raw: bool = False, echo: Optional[str] = None):
-    """Rango del log (docs/specs/agents-cli.md §5 y §7.3)."""
+              raw: bool = False, echo: Optional[str] = None, cat: Optional[str] = None,
+              level: Optional[str] = None):
+    """Rango del log (docs/specs/agents-cli.md §5 y §7.3). `cat`/`level`: filtro por categoría y nivel
+    (logcat; la respuesta trae `filter` si se pidió, así un cliente sabe que el bench filtra)."""
     mac = _board_mac(key)
     return _range_call(logrange.read_range, paths.device_home(mac), since=since, until=until, around=around,
                        before=before, after=after, max_lines=max_lines, grep=grep, src=src, raw=raw,
-                       echo=echo, live=_board_live(mac))
+                       echo=echo, live=_board_live(mac), cat=cat, level=level)
+
+
+@app.get("/api/log-categories")
+def log_categories():
+    """Catálogo de categorías del log (logcat): el del bench (meta/log_categories.json) o el default,
+    con banco y otros al final. `error` si el archivo del bench está roto (se usa el default)."""
+    return logcat.public(logcat.load())
 
 
 @app.get("/api/board/{key}/events")
