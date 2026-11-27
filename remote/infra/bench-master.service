@@ -1,0 +1,20 @@
+[Unit]
+Description=espbench bench-master: todos los benches en un lugar, para el equipo (espbench-master)
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+# Solo si se activó a mano en este bench (sudo espbench-master enable).
+ConditionPathExists=/opt/esp/bench-master.conf
+
+[Service]
+Type=simple
+User=sfypi
+Group=sfypi
+ExecStart=/usr/local/bin/espbench-master run
+# Al bootear la IP de Tailscale puede tardar: se reintenta.
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi (or an Ubuntu PC) over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.55.0
+**Version:** 0.57.0
 
 ---
 
@@ -391,6 +391,12 @@ master/bench-master --open      # first run creates master/.venv; http://localho
 
 Details: [master/CLAUDE.md](master/CLAUDE.md), [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md), test guide: [docs/BENCH_MASTER_TESTING.md](docs/BENCH_MASTER_TESTING.md).
 
+
+**Running it on a bench for the whole team** (e.g. sensibox, next to its own dashboard): `sudo espbench-master enable` on that bench builds
+`/opt/esp/master-venv` and starts `bench-master.service`, listening **only on the bench's Tailscale IP** at `http://<bench>:8090` and accepting
+its name and MagicDNS name (`--allow-host`). `sudo espbench-master disable` undoes it; nothing runs unless enabled, so other benches don't change.
+It needs a Tailscale ACL exception: that bench gets an extra `tag:benchmaster`, which may reach `tag:bench:8080`, and members reach it on 8090: see
+[docs/security.md](docs/security.md) ("Excepción: el bench que corre bench-master").
 ---
 
 ## Configuration Reference (`.flashcfg.json`)

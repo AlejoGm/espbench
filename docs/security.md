@@ -45,6 +45,33 @@ ya tienen entre sí; si la política actual es más restrictiva, quedarse con es
 }
 ```
 
+### Excepción: el bench que corre bench-master
+
+Si un bench corre bench-master para el equipo (`sudo espbench-master enable`, p. ej. la sensibox), necesita
+pedirle el estado a los demás. Se le pone un tag más, `tag:benchmaster` (además de `tag:bench`), y dos reglas:
+**solo ese bench** llega a `tag:bench` y **solo al 8080**; los humanos llegan a él en el 8090 (bench-master
+escucha solo en su IP de Tailscale). Con el tag, y no con su IP, las reglas siguen valiendo si el bench se
+reinstala y vuelve con otra IP (alcanza con volver a darle los dos tags).
+
+```jsonc
+  "tagOwners": {
+    "tag:bench": ["autogroup:admin"],
+    "tag:benchmaster": ["autogroup:admin"]
+  },
+  "grants": [
+    // ...las de arriba...
+    {"src": ["tag:benchmaster"], "dst": ["tag:bench"], "ip": ["tcp:8080"]},       // bench-master → dashboards
+    {"src": ["autogroup:member"], "dst": ["tag:benchmaster"], "ip": ["tcp:8090"]} // el equipo → bench-master
+  ]
+```
+
+El tag se le pone en el panel (Machines → el bench → Edit ACL tags) o al conectarlo:
+`sudo tailscale up --advertise-tags=tag:bench,tag:benchmaster`.
+
+Ojo: el 8080 también tiene escrituras (consola, reset, reservas). Si alguien entra a ese bench, llega a las de
+todos; el `api_token` en los benches (más abajo) lo frena. Chequeo: desde ese bench
+`curl -m3 <ip-de-otro-bench>:8080/api/version` anda y `nc -zv -w3 <ip-de-otro-bench> 22` sigue fallando.
+
 Para chequear después de aplicarla: desde un bench, `nc -zv -w3 <ip-tailscale-de-tu-mac> 22` y
 `curl -m3 <ip-de-otro-bench>:8080/api/version` tienen que fallar (`tailscale ping` no sirve: pasa aunque la ACL bloquee). Desde la Mac, `curl <ip-del-bench>:8080/api/version` tiene que andar.
 

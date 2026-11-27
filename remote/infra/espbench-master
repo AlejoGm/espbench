@@ -1,0 +1,103 @@
+#!/bin/bash
+# espbench-master — bench-master corriendo en un bench (p. ej. la sensibox), para todo el equipo, además de
+# su propio dashboard. Por defecto nadie lo corre: se activa a mano en el bench que lo va a tener.
+#
+#   sudo espbench-master enable    arma $ESP_BASE/master-venv, escribe bench-master.conf y prende el servicio
+#   sudo espbench-master disable   apaga el servicio y saca la config (el bench queda como antes)
+#   espbench-master status         si está activado, en qué dirección escucha y con qué nombres
+#   espbench-master run            lo que corre el servicio (bench-master.service, como sfypi)
+#
+# Escucha solo en la IP de Tailscale del bench (no en la red local): el proxy de bench-master da consola
+# serie y resets de todos los benches. Acepta como Host esa IP, el nombre del bench y su nombre MagicDNS.
+# Para ver los otros benches, este bench lleva además tag:benchmaster y la ACL deja que ese tag llegue a
+# tag:bench:8080 y que los miembros le lleguen en el puerto del master (docs/security.md).
+#
+# Config $ESP_BASE/bench-master.conf: PORT (8090), ALLOW_HOSTS (nombres separados por coma), HOST (vacío =
+# la IP de Tailscale al arrancar). Solo para tests: ESPBENCH_MASTER_TEST=1 (sin root ni systemctl reales).
+set -euo pipefail
+
+ESP_BASE="${ESP_BASE:-/opt/esp}"
+CONF="$ESP_BASE/bench-master.conf"
+VENV="$ESP_BASE/master-venv"
+UPDATE_CONF="$ESP_BASE/update.conf"
+
+die() { echo "espbench-master: $*" >&2; exit 1; }
+need_root() { [ -n "${ESPBENCH_MASTER_TEST:-}" ] || [ "$(id -u)" -eq 0 ] || die "hay que correrlo como root (sudo)"; }
+conf_get() { [ -f "$CONF" ] && sed -n "s/^$1=//p" "$CONF" | tail -1 || true; }
+
+repo_dir() {
+    local d
+    d="$( [ -f "$UPDATE_CONF" ] && sed -n 's/^REPO_DIR=//p' "$UPDATE_CONF" | tail -1 || true)"
+    echo "${d:-/opt/espbench}"
+}
+
+tailscale_ip() { tailscale ip -4 2>/dev/null | head -1; }
+
+# Nombre corto y MagicDNS del bench (sensibox, sensibox.tailXXXX.ts.net).
+default_names() {
+    local short dns
+    short="$(hostname -s 2>/dev/null || hostname)"
+    dns="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+    echo "$short${dns:+,$dns}"
+}
+
+cmd_enable() {
+    need_root
+    local repo names
+    repo="$(repo_dir)"
+    [ -f "$repo/master/requirements.txt" ] || die "no encuentro bench-master en $repo"
+    command -v tailscale >/dev/null || die "hace falta Tailscale: bench-master escucha solo en la IP de Tailscale"
+    [ -n "$(tailscale_ip)" ] || die "Tailscale no tiene IP: ¿está conectado (tailscale up)?"
+    echo "Armando $VENV..."
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install -q -r "$repo/master/requirements.txt"
+    names="$(conf_get ALLOW_HOSTS)"
+    names="${names:-$(default_names)}"
+    printf 'PORT=%s\nALLOW_HOSTS=%s\nHOST=%s\n' "$(conf_get PORT | grep . || echo 8090)" "$names" "$(conf_get HOST)" > "$CONF"
+    chmod 644 "$CONF"
+    systemctl enable --now bench-master
+    echo "bench-master activado: http://$(echo "$names" | cut -d, -f1):$(conf_get PORT)/ (solo por Tailscale)"
+}
+
+cmd_disable() {
+    need_root
+    systemctl disable --now bench-master 2>/dev/null || true
+    rm -f "$CONF"
+    echo "bench-master desactivado"
+}
+
+cmd_status() {
+    if [ ! -f "$CONF" ]; then
+        echo "bench-master no está activado en este bench (sudo espbench-master enable)"
+        return 0
+    fi
+    echo "activado · puerto $(conf_get PORT) · nombres $(conf_get ALLOW_HOSTS) · escucha en ${HOST_OVERRIDE:-$(conf_get HOST | grep . || tailscale_ip)}"
+    systemctl is-active bench-master 2>/dev/null || true
+}
+
+cmd_run() {
+    [ -f "$CONF" ] || die "bench-master no está activado (sudo espbench-master enable)"
+    local host port names args
+    host="$(conf_get HOST)"
+    host="${host:-$(tailscale_ip)}"
+    [ -n "$host" ] || die "Tailscale todavía no tiene IP (systemd reintenta)"
+    port="$(conf_get PORT)"
+    port="${port:-8090}"
+    names="$(conf_get ALLOW_HOSTS)"
+    # Tailscale no se lista a sí mismo: este bench se agrega por su IP (los demás, por Tailscale).
+    mkdir -p "$ESP_BASE/meta"
+    printf '{"tailscale": true, "hosts": ["%s:8080"]}\n' "$host" > "$ESP_BASE/meta/master-benches.json"
+    export ESPBENCH_BENCHES_CONFIG="$ESP_BASE/meta/master-benches.json"
+    args=(-m master --host "$host" --port "$port")
+    [ -n "$names" ] && args+=(--allow-host "$names")
+    cd "$(repo_dir)"
+    exec "$VENV/bin/python" "${args[@]}"
+}
+
+case "${1:-}" in
+    enable)  cmd_enable ;;
+    disable) cmd_disable ;;
+    status)  cmd_status ;;
+    run)     cmd_run ;;
+    *)       echo "uso: espbench-master enable|disable|status|run" >&2; exit 2 ;;
+esac
