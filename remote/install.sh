@@ -174,6 +174,12 @@ info "Instalando espbench-procs en /usr/local/bin/..."
 cp "$REMOTE_DIR/infra/espbench-procs" /usr/local/bin/espbench-procs
 chmod +x /usr/local/bin/espbench-procs
 
+# espbench-master: bench-master en este bench, para el equipo. Se instala siempre pero no corre: se
+# activa a mano (sudo espbench-master enable), y el servicio solo arranca si existe bench-master.conf.
+info "Instalando espbench-master en /usr/local/bin/..."
+cp "$REMOTE_DIR/infra/espbench-master" /usr/local/bin/espbench-master
+chmod +x /usr/local/bin/espbench-master
+
 # espbench-update: se instala con cp + mv (no cp encima): si este install lo
 # corre el propio espbench-update, no se le pisa el archivo mientras corre.
 info "Instalando espbench-update en /usr/local/bin/..."
@@ -215,6 +221,9 @@ cp "$REMOTE_DIR/infra/devremote.service" /etc/systemd/system/devremote.service
 
 info "Instalando servicio systemd dashboard..."
 cp "$REMOTE_DIR/infra/dashboard.service" /etc/systemd/system/dashboard.service
+
+info "Instalando servicio bench-master (inactivo salvo espbench-master enable)..."
+cp "$REMOTE_DIR/infra/bench-master.service" /etc/systemd/system/bench-master.service
 
 info "Instalando servicio de hotplug espbench-attach@..."
 cp "$REMOTE_DIR/infra/espbench-attach@.service" /etc/systemd/system/espbench-attach@.service
