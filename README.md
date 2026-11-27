@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi (or an Ubuntu PC) over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.54.0
+**Version:** 0.55.0
 
 ---
 

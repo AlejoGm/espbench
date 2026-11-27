@@ -17,6 +17,7 @@ test('fmtBytes', () => {
     assert.equal(EB.fmtBytes(512), '512 B');
     assert.equal(EB.fmtBytes(2048), '2.0 KB');
     assert.equal(EB.fmtBytes(3 * 1024 * 1024), '3.0 MB');
+    assert.equal(EB.fmtBytes(1.5 * 1024 * 1024 * 1024), '1.5 GB');
 });
 
 test('healthBadges: sano no muestra nada', () => {

@@ -376,6 +376,7 @@ boot ─────► devremote.service ────────────�
 |---|---|
 | `GET /api/bench/health` | Temperatura, RAM, disco, carga y uptime de la máquina (`benchinfo.health`) |
 | `GET /api/activity?hours=24` | Por placa: reinicios, panics, flashes, boot loops y reservas por hora, y eventos recientes notables (`benchinfo.activity`). Lo de adentro de una corrida de tests va aparte (`test_boot`, `test_panic`; `test`/`test_fail` = casos terminados) y no avisa |
+| `GET /api/bench/cleanup?days=N`, `POST /api/bench/cleanup` `{days?}` | Liberar espacio (`cleanup.py`): vista previa (cuántas sesiones de log rotadas y flasheos de más de N días, default 14, y cuánto pesan) y borrarlos (como root, `sudo -n`). Quedan la sesión en curso y el último flasheo de cada placa |
 | `GET /api/update`, `POST /api/update` `{ref?, force?}` | Estado del último update y PIN; lanzar `espbench-update` (§13) |
 | `GET /api/version` | `{app: "espbench", version, name, id, location, auth}` (`id` = MAC de la máquina): identidad del bench para bench-master (`name` sale de `/opt/esp/bench_name` o del hostname; `location`, de `geo.location()`: `{label, city, region, country, lat, lon, tz, source: auto\|manual, ts, stale}` o `null`) y si hay token de la API |
 | `PATCH /api/bench` `{location}` | Override manual de la ubicación (texto hasta 60 caracteres, sin control ni formato Unicode Cf; `source: "manual"`); `""`/`null` lo borra y vuelve la automática. Devuelve la `location` resultante. Lo usa el header del dashboard |

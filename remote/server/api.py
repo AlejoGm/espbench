@@ -11,10 +11,12 @@ remote/dashboard/, que es el frontend.
 import asyncio
 import contextlib
 import dataclasses
+import json
 import pathlib
 import re
 import socket
 import subprocess
+import sys
 import time
 from typing import Any, Optional
 from urllib.parse import unquote
@@ -25,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import auth, board_meta, events, history, locks, logrange, paths, runstate, taglog
 from server import update as bench_update
-from server import benchinfo, geo, logcat, testrun
+from server import benchinfo, cleanup, geo, logcat, testrun
 from server.device_registry import DeviceRegistry, DevicesFile, DevicesFileCorrupt
 from server.log_streamer import LogStreamer
 
@@ -714,6 +716,49 @@ async def refresh_bench_location(authorization: Optional[str] = Header(None)):
     if not d or d.get("stale"):
         _fail(502, "unexpected", "no pude averiguar la ubicación por IP (sin red o los servicios no contestan)")
     return {"ok": True, "location": geo.location()}
+
+
+def _cleanup_days(days) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        _fail(400, "bad_request", "days tiene que ser un entero")
+    if not cleanup.MIN_DAYS <= days <= cleanup.MAX_DAYS:
+        _fail(400, "bad_request", f"days entre {cleanup.MIN_DAYS} y {cleanup.MAX_DAYS}")
+    return days
+
+
+@app.get("/api/bench/cleanup")
+async def get_cleanup(days: int = cleanup.DEFAULT_DAYS):
+    """Vista previa de la limpieza (cleanup.py): cuántas sesiones de log rotadas y flasheos de más de `days` días se
+    borrarían y cuánto pesan. Solo lee."""
+    days = _cleanup_days(days)
+    items = await asyncio.to_thread(cleanup.plan, days)
+    return cleanup.summary(items, days)
+
+
+@app.post("/api/bench/cleanup")
+async def post_cleanup(body: Optional[dict] = Body(None), authorization: Optional[str] = Header(None)):
+    """Borra las sesiones de log rotadas y los flasheos de más de `days` días (default 14); de cada placa queda el
+    último flasheo y la sesión en curso. Como root (`sudo -n`): devices/<MAC>/ no es del api."""
+    _require_auth(authorization)
+    body = body if isinstance(body, dict) else {}
+    days = _cleanup_days(body.get("days", cleanup.DEFAULT_DAYS))
+    cmd = ["sudo", "-n", sys.executable, "-m", "server.cleanup", "--days", str(days), "--json",
+           "--base", str(paths.esp_base())]
+    try:
+        r = await _run(cmd)
+    except FileNotFoundError as e:
+        _fail(502, "cleanup_unavailable", f"no se pudo lanzar la limpieza: {e}")
+    try:
+        res = json.loads(r.stdout)
+    except ValueError:
+        res = None
+    if r.returncode != 0 or not isinstance(res, dict):
+        _fail(502, "cleanup_unavailable", f"la limpieza falló: {(r.stderr or r.stdout).strip()[-500:]}")
+    taglog.info(TAG, f"limpieza > {days} días: {res['sessions']['count']} sesiones, {res['jobs']['count']} jobs, "
+                     f"{res['freed_bytes'] / 1e6:.1f} MB liberados, {len(res.get('errors') or [])} errores")
+    return {"ok": True, **res}
 
 
 @app.get("/api/activity")

@@ -256,6 +256,9 @@ class _FakeRun:
             if board is not None:
                 board.later(0.05, board.replug)
             return ok
+        if cmd[:2] == ["sudo", "-n"] and "server.cleanup" in cmd:     # la limpieza de verdad, sin root
+            return subprocess.run(cmd[2:], capture_output=True, text=True,
+                                  cwd=str(pathlib.Path(__file__).parent.parent / "remote"))
         return types.SimpleNamespace(returncode=1, stdout="", stderr=f"comando no simulado: {cmd}")
 
 

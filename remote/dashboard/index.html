@@ -31,7 +31,10 @@
         </div>
         <div class="mchips" id="bench-chips"></div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-            <button class="pill accent" id="btn-update"><i class="ti ti-download" aria-hidden="true"></i>Actualizar</button>
+            <div style="display:flex;gap:6px">
+                <button class="pill" id="btn-cleanup" title="Borrar sesiones de log y flasheos viejos de las placas"><i class="ti ti-eraser" aria-hidden="true"></i>Liberar espacio</button>
+                <button class="pill accent" id="btn-update"><i class="ti ti-download" aria-hidden="true"></i>Actualizar</button>
+            </div>
             <span class="upd-state" id="upd-state"></span>
         </div>
     </section>
@@ -152,6 +155,35 @@
             .then(function() { document.getElementById('upd-state').textContent = 'Actualizando…'; })
             .catch(function(e) { alert('No se pudo actualizar: ' + e.message); })
             .then(function() { btn.disabled = false; });
+    });
+
+    // Liberar espacio (cleanup.py): vista previa con GET, confirmación, y POST. La sesión en curso y el último
+    // flasheo de cada placa quedan siempre.
+    document.getElementById('btn-cleanup').addEventListener('click', function() {
+        var btn = this;
+        var days = prompt('Borrar las sesiones de log y los flasheos de más de cuántos días?\n' +
+                          '(La sesión en curso y el último flasheo de cada placa quedan siempre.)', '14');
+        if (days === null) return;
+        days = parseInt(days, 10);
+        if (!(days >= 1)) { alert('Tiene que ser un número de días, 1 o más.'); return; }
+        btn.disabled = true;
+        getJson('api/bench/cleanup?days=' + days).then(function(p) {
+            if (!p.sessions.count && !p.jobs.count) { alert('Nada para borrar de más de ' + days + ' días.'); return; }
+            var msg = 'Se borran, de más de ' + days + ' días:\n' +
+                      '  · ' + p.sessions.count + ' sesiones de log (' + EB.fmtBytes(p.sessions.bytes) + ')\n' +
+                      '  · ' + p.jobs.count + ' flasheos (' + EB.fmtBytes(p.jobs.bytes) + ')\n' +
+                      'Total: ' + EB.fmtBytes(p.total_bytes) + '. No se puede deshacer. ¿Borrar?';
+            if (!confirm(msg)) return;
+            return EBAuth.fetch('api/bench/cleanup', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                      body: JSON.stringify({days: days})})
+                .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(EB.errorText(d, r.status)); return d; }); })
+                .then(function(d) {
+                    alert('Liberados ' + EB.fmtBytes(d.freed_bytes) + ' (' + d.sessions.count + ' sesiones, ' + d.jobs.count + ' flasheos).' +
+                          (d.errors && d.errors.length ? '\n' + d.errors.length + ' no se pudieron borrar: ' + d.errors[0].error : ''));
+                    getJson('api/bench/health').then(renderHealth).catch(function() {});
+                });
+        }).catch(function(e) { alert('No se pudo liberar espacio: ' + e.message); })
+          .then(function() { btn.disabled = false; });
     });
 
     // ── placas ──
