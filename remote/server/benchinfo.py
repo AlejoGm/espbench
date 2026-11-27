@@ -3,7 +3,8 @@ benchinfo.py — lo que el dashboard muestra del bench entero (no de una placa):
 
 - `health()`: la máquina (temperatura, RAM, disco, carga, uptime, modelo). Lee
   /proc y /sys; en una máquina sin esos archivos (Mac, tests) cada dato que falta
-  queda en None.
+  queda en None. Sirve para una Pi y para una PC x86 (temperatura de la CPU y
+  modelo del DMI: ver `_cpu_temp` y `_model`).
 - `activity()`: cuántos reinicios, panics, flashes, boot loops y reservas tuvo
   cada placa por hora en las últimas N horas, y los eventos recientes que
   merecen un aviso (panic, boot loop, flash). Sale de devices/<mac>/events.jsonl,
@@ -53,9 +54,63 @@ def _meminfo(text: Optional[str]) -> Dict[str, int]:
     return out
 
 
+def _millideg(text: Optional[str]) -> Optional[int]:
+    return int(text) if text and text.lstrip("-").isdigit() else None
+
+
+# Dónde está la temperatura de la CPU, de la más confiable a la menos. En la Pi thermal_zone0
+# es cpu-thermal. En una PC thermal_zone0 suele ser acpitz, una sonda del mother que en muchas
+# da siempre lo mismo (27,8 °C): la CPU es x86_pkg_temp (Intel) o, por hwmon, coretemp (Intel)
+# y k10temp / zenpower (AMD, que no tiene thermal zone de la CPU).
+_CPU_ZONES = ("x86_pkg_temp", "cpu-thermal", "cpu_thermal")
+_CPU_HWMON = ("coretemp", "k10temp", "zenpower")
+
+
+def _cpu_temp(r: pathlib.Path) -> Optional[int]:
+    """m°C de la CPU; si no se reconoce ninguna, thermal_zone0 (lo de siempre)."""
+    zones = {}
+    for z in sorted((r / "sys/class/thermal").glob("thermal_zone*")):
+        zones.setdefault(_read(z, "type"), z)
+    for t in _CPU_ZONES:
+        v = _millideg(_read(zones[t], "temp")) if t in zones else None
+        if v is not None:
+            return v
+    for h in sorted((r / "sys/class/hwmon").glob("hwmon*")):
+        if _read(h, "name") in _CPU_HWMON:
+            v = _millideg(_read(h, "temp1_input"))
+            if v is not None:
+                return v
+    return _millideg(_read(r, "sys/class/thermal/thermal_zone0/temp"))
+
+
+# Lo que los fabricantes dejan en el DMI cuando no completan el campo.
+_DMI_PLACEHOLDERS = ("to be filled", "system product name", "default string", "not applicable",
+                     "not specified", "o.e.m.", "type1productconfigid")
+
+
+def _dmi(r: pathlib.Path, field: str) -> Optional[str]:
+    v = _read(r, f"sys/class/dmi/id/{field}")
+    if not v or any(p in v.lower() for p in _DMI_PLACEHOLDERS):
+        return None
+    return v
+
+
+def _model(r: pathlib.Path) -> Optional[str]:
+    """La Pi: device-tree ("Raspberry Pi 4 Model B Rev 1.4"). Una PC: el DMI. Un equipo de marca
+    trae el modelo en product_name ("OptiPlex 7050"); un mother armado deja ahí un código que
+    también está en board_name ("MS-7B29" en "H310M PRO-VDH (MS-7B29)"), y entonces va el mother."""
+    dt_model = _read(r, "proc/device-tree/model")
+    if dt_model:
+        return dt_model
+    product, board = _dmi(r, "product_name"), _dmi(r, "board_name")
+    if product and not (board and product in board):
+        return product
+    return board
+
+
 def health(root: str = "/", disk_path: Optional[str] = None) -> dict:
     r = pathlib.Path(root)
-    temp = _read(r, "sys/class/thermal/thermal_zone0/temp")
+    temp = _cpu_temp(r)
     mem = _meminfo(_read(r, "proc/meminfo"))
     uptime = _read(r, "proc/uptime")
     loadavg = _read(r, "proc/loadavg")
@@ -76,8 +131,8 @@ def health(root: str = "/", disk_path: Optional[str] = None) -> dict:
             pass
     return {
         "hostname": socket.gethostname(),
-        "model": _read(r, "proc/device-tree/model"),
-        "temp_c": round(int(temp) / 1000, 1) if temp and temp.lstrip("-").isdigit() else None,
+        "model": _model(r),
+        "temp_c": round(temp / 1000, 1) if temp is not None else None,
         "ram": ram,
         "disk": disk,
         "load": load,
