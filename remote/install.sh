@@ -174,6 +174,12 @@ info "Instalando espbench-procs en /usr/local/bin/..."
 cp "$REMOTE_DIR/infra/espbench-procs" /usr/local/bin/espbench-procs
 chmod +x /usr/local/bin/espbench-procs
 
+# espbench-wifi: el WiFi del banco en un dongle USB (docs/specs/bench-wifi.md). Sin /opt/esp/wifi.conf
+# no hace nada (una Pi sin dongle): se configura a mano con `sudo espbench-wifi setup`.
+info "Instalando espbench-wifi en /usr/local/bin/..."
+cp "$REMOTE_DIR/infra/espbench-wifi" /usr/local/bin/espbench-wifi
+chmod +x /usr/local/bin/espbench-wifi
+
 # espbench-update: se instala con cp + mv (no cp encima): si este install lo
 # corre el propio espbench-update, no se le pisa el archivo mientras corre.
 info "Instalando espbench-update en /usr/local/bin/..."
@@ -284,6 +290,7 @@ echo "    /usr/local/bin/devremote  <- CLI"
 echo "    /usr/local/bin/esp32_tmux.sh"
 echo "    /usr/local/bin/espbench-name"
 echo "    /usr/local/bin/espbench-procs"
+echo "    /usr/local/bin/espbench-wifi (WiFi del banco: sudo espbench-wifi setup)"
 echo "    /etc/udev/rules.d/99-esp32.rules"
 echo "    /etc/systemd/system/devremote.service"
 echo "    /etc/systemd/system/dashboard.service"

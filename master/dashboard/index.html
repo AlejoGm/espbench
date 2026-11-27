@@ -163,7 +163,10 @@
             '</div></div>' + (u && u.pin ? '<span class="branch"><i class="ti ti-pin" aria-hidden="true"></i>' + esc(u.pin) + '</span>' : '') + '</div>' +
             '<div class="hchips">' + EB.benchChips(h).map(function(c) {
                 return '<div class="hchip ' + c.level + '"><div class="ic"><i class="ti ti-' + c.icon + '" aria-hidden="true"></i></div><div><b>' + esc(c.value) + '</b><span>' + esc(c.label) + '</span></div></div>';
-            }).join('') + '</div>' +
+            }).join('') + (function(w) {
+                return w ? '<div class="hchip" title="' + esc(w.title) + '"><div class="ic"><i class="ti ti-' + w.icon + '" aria-hidden="true"></i></div><div><b>' +
+                           esc(w.value) + '</b><span>' + esc(w.label) + '</span></div></div>' : '';
+            })(EB.wifiView(ex.wifi)) + '</div>' +
             '<div class="hero-stat"><span class="big">' + t.tot.boot + '<em>' + (t.tot.boot === 1 ? 'reinicio' : 'reinicios') + ' en 24 h</em></span>' +
                 (t.tot.panic ? '<span class="delta"><i class="ti ti-bolt" aria-hidden="true"></i>' + t.tot.panic + (t.tot.panic === 1 ? ' panic' : ' panics') + '</span>'
                              : '<span class="delta ok"><i class="ti ti-check" aria-hidden="true"></i>sin panics</span>') + '</div>' +
@@ -429,6 +432,8 @@
                 getJson(benchUrl(b.name, 'api/bench/health')).then(function(x) { e.health = x; }, function() {}),
                 getJson(benchUrl(b.name, 'api/activity?hours=24')).then(function(x) { e.activity = x; }, function() {}),
                 getJson(benchUrl(b.name, 'api/update')).then(function(x) { e.update = x; }, function() {}),
+                // WiFi del banco: solo se muestra (se prende y apaga en el dashboard del bench). Sin dongle o viejo: nada.
+                getJson(benchUrl(b.name, 'api/wifi')).then(function(x) { e.wifi = x; }, function() { delete e.wifi; }),
                 // Un bench viejo no tiene /api/properties: sin catálogo propio (no suma a la unión).
                 getJson(benchUrl(b.name, 'api/properties')).then(function(x) { e.catalog = x.categories || []; },
                                                                 function() { delete e.catalog; })

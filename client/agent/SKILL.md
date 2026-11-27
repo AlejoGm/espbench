@@ -80,6 +80,14 @@ Los logs se comen tokens. Pedí lo justo:
 - `--src serial` saca las líneas del server (flash, transiciones).
 - `events` antes que `logs`: un panic es un evento con `detail.reason`, sin bajar el log.
 
+## WiFi del banco
+
+Si el bench tiene dongle (`espbench wifi` no da `unsupported`), la red WiFi de las placas se prende por comando:
+
+- `espbench wifi --json`: estado (`on`, `ssid`, `until`, `by`) y `clients` (cada placa conectada por nombre, IP, señal).
+- `espbench wifi on [--for 1h] --json` (vence sola: default 8 h, máx 12 h) y `espbench wifi off --json`. Devuelve `events`: el cursor del cambio en cada placa, para `logs --since <cursor>` (p. ej. esperar `--until "re:Got IPv4"`).
+- Es de todo el bench: prenderla hace que las placas en modo dual pasen del celular al WiFi. Si una placa está reservada por otro, `locked` (exit 6): no fuerces, avisale al usuario. Apagala al terminar.
+
 ## Errores
 
 | exit | `error` | Qué hacer |

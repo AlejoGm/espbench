@@ -129,6 +129,39 @@ button { cursor: pointer; }
 .mchip.warn { background: var(--warn-bg); color: var(--warn); } .mchip.warn b { color: inherit; }
 .mchip.bad { background: var(--bad-bg); color: var(--bad); } .mchip.bad b { color: inherit; }
 .mchip.pin .ti { color: var(--accent); }
+/* WiFi del banco: chip (botón) en el header y su menú (index.html, EB.wifiChipHtml / wifiMenuHtml) */
+.mchip.wifi { border: none; cursor: pointer; font: inherit; }
+.mchip.wifi-off { background: none; box-shadow: inset 0 0 0 1px var(--line2); border-style: dashed; }
+.mchip.wifi-on { background: var(--ok-bg); color: var(--ok); } .mchip.wifi-on b { color: inherit; }
+.bench-head { position: relative; }
+.wifi-menu {
+    position: absolute; right: 20px; top: calc(100% - 6px); z-index: 20; width: 340px; max-width: calc(100vw - 32px);
+    background: var(--card); border-radius: var(--r-md); padding: 14px 16px; box-shadow: 0 8px 24px rgba(24,33,44,.14), 0 0 0 1px var(--line);
+    display: flex; flex-direction: column; gap: 8px; font-size: 13px;
+}
+.wifi-menu.hidden { display: none; }
+.wifi-menu .wm-title { font-weight: 700; font-size: 14px; }
+.wifi-menu .wm-sub, .wifi-menu .wm-label, .wifi-menu .wm-note, .wifi-menu .wm-empty { color: var(--ink2); font-size: 12px; }
+.wifi-menu .wm-note { color: var(--ink3); }
+.wifi-menu .wm-err { color: var(--bad); font-size: 12px; }
+.wifi-menu button { height: 32px; border-radius: var(--r-sm); border: 1px solid var(--line2); background: var(--card); color: var(--ink); font: inherit; cursor: pointer; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.wifi-menu button:hover { background: var(--row); }
+.wifi-menu .wm-hours { display: flex; gap: 6px; }
+.wifi-menu .wm-hours button { flex: 1; }
+.wifi-menu .wm-hours button.on { border-color: var(--accent); color: var(--accent); }
+.wifi-menu .wm-go { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.wifi-menu .wm-go:hover { background: var(--ink2); }
+.wifi-menu .wm-clients { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 12px; border-top: 1px solid var(--line); padding-top: 8px; font-variant-numeric: tabular-nums; }
+.wifi-menu .wm-clients span:nth-child(3n+2), .wifi-menu .wm-clients span:nth-child(3n) { color: var(--ink2); }
+.wifi-menu .wm-acts { display: flex; gap: 8px; } .wifi-menu .wm-acts button { flex: 1; }
+.wifi-menu .wm-off { color: var(--bad); }
+.wifi-menu .wm-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink2); }
+.wifi-menu .wm-field input, .wifi-menu .wm-field select { height: 34px; border-radius: var(--r-sm); border: 1px solid var(--line2); background: var(--card); color: var(--ink); padding: 0 10px; font: inherit; font-size: 13px; }
+.wifi-menu .wm-field input:focus, .wifi-menu .wm-field select:focus { outline: none; border-color: var(--accent); }
+.wifi-menu .wm-err:empty { display: none; }
+.wifi-menu .wm-link { border: none; background: none; color: var(--ink2); justify-content: flex-start; padding: 0; height: 24px; font-size: 12px; }
+.wifi-menu .wm-link:hover { background: none; color: var(--ink); }
+@media (max-width: 760px) { .wifi-menu { right: 8px; left: 8px; width: auto; } }
 
 /* ══ Card de placa (bench y bench-master) ════════════════════════════════ */
 

@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "remote"))
 
 from common import mac_to_sn_sfy  # noqa: E402
-from server import api, device_log, protocol, taglog  # noqa: E402
+from server import api, device_log, paths, protocol, taglog  # noqa: E402
 from server.device import DeviceManager  # noqa: E402
 from server.device_registry import DeviceRegistry, DevicesFile  # noqa: E402
 from server.flash import build_esptool_cmd  # noqa: E402
@@ -320,6 +320,14 @@ class _Handler(BaseHTTPRequestHandler):
             return _call(api.get_version)
         if method == "GET" and parts == ["api", "properties"]:
             return _call(api.get_properties)
+        if method == "GET" and parts == ["api", "log-categories"]:
+            return _call(api.log_categories)
+        if method == "GET" and parts == ["api", "wifi"]:
+            return _call(api.wifi_status)
+        if method == "POST" and parts == ["api", "wifi"]:
+            return _call(api.wifi_change, body, authorization=auth)
+        if method == "POST" and parts == ["api", "wifi", "config"]:
+            return _call(api.wifi_config, body, authorization=auth)
         if method == "PATCH" and parts == ["api", "bench"]:
             return _call(api.patch_bench, body, authorization=auth)
         if method == "POST" and parts == ["api", "bench", "location", "refresh"]:
@@ -465,14 +473,43 @@ class Bench:
         return b
 
 
+def sim_wifi() -> None:
+    """WiFi del banco de mentira para probar el dashboard: un dongle enchufado sin configurar y un helper
+    falso en el api (configure escribe wifi.conf; la placa sim-board aparece conectada cuando está prendida)."""
+    from server import benchwifi
+    state = {"on": False, "ssid": None, "channel": 6}
+    benchwifi.candidates = lambda root=None: ["wlx00c0ca1234"]
+
+    def run(args, input=None):
+        if args[0] == "configure":
+            ssid, _password, channel = (input or "\n\n\n").split("\n")[:3]
+            state.update(ssid=ssid, channel=int(channel or state["channel"]))
+            paths.wifi_conf().parent.mkdir(parents=True, exist_ok=True)
+            paths.wifi_conf().write_text(f"IFACE=wlx00c0ca1234\nSSID={ssid}\nCHANNEL={state['channel']}\n")
+            return 0, "ok\n", ""
+        if args[0] in ("up", "down"):
+            state["on"] = args[0] == "up"
+            return 0, "", ""
+        out = f"available=1\niface=wlx00c0ca1234\nssid={state['ssid']}\nchannel={state['channel']}\npresent=1\n"
+        out += f"active={int(state['on'])}\n--- stations\n"
+        if state["on"]:
+            out += "Station aa:bb:cc:dd:ee:01 (on wlx00c0ca1234)\n\tsignal:  \t-44 dBm\n\tconnected time:\t75 seconds\n"
+        out += "--- leases\n" + ("1 aa:bb:cc:dd:ee:01 10.42.0.23 * *\n" if state["on"] else "")
+        return 0, out, ""
+    benchwifi.runner = run
+
+
 def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Pi simulada para probar el CLI espbench")
     ap.add_argument("--port", type=int, default=8099)
     ap.add_argument("--uvicorn", action="store_true")
+    ap.add_argument("--wifi", action="store_true", help="con un dongle WiFi simulado, sin configurar (sin dongle ni sudo)")
     a = ap.parse_args(argv)
     if "ESP_BASE" not in os.environ:
         raise SystemExit("seteá ESP_BASE a un directorio temporal")
+    if a.wifi:
+        sim_wifi()
     bench = Bench("uvicorn" if a.uvicorn else "adapter", port=a.port,
                   partial_timeout=device_log.PARTIAL_TIMEOUT).start()
     bench.add_board("ttyUSB0", "AA:BB:CC:DD:EE:01", key="sim-board")

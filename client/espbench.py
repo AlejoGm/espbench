@@ -9,10 +9,11 @@ espbench — CLI para agentes (y humanos) sobre client/espbench_lib.py.
     espbench note <dev> "texto" | --clear
     espbench set <dev> chip=esp32-s3 conectividad+=lte uso-=ci estado=
     espbench props [add|rm <categoria> <valor> [--label L] [--desc D] [--warn] [--exclude-pick]]
+    espbench wifi [on [--for 8h] | off] [--bench B]
     espbench status|who|reserve|release|restart-session <dev>
     espbench events <dev>|--all [--type a,b] [--since A] [--limit N]
     espbench logs <dev> [--since A] [--until X] [--around E] [--before N] [--after N] [--grep re]
-                        [--src s] [--max-lines N] [--timeout D] [--for D]
+                        [--src s] [--cat c,c] [--level E,W] [--max-lines N] [--timeout D] [--for D]
     espbench send <dev> "txt" [--no-enter] [--until X] [--for D] [--timeout D] [--max-lines N]
     espbench flash <dev> [--build-dir B] [--no-encrypt] [--erase] [--verify[=10s]] [--until X] [--timeout D]
     espbench reset <dev> [--bootloader] [--verify[=10s]] [--until X] [--timeout D]
@@ -337,6 +338,76 @@ def cmd_props(c: lib.Client, a, out: Out) -> int:
     return out.emit({"ok": True, "category": cat, "value": r.get("value")}, _human_props)
 
 
+def _hhmm(iso) -> str:
+    return iso[11:16] if isinstance(iso, str) and len(iso) >= 16 else "?"
+
+
+def _human_wifi(r: dict) -> None:
+    if not r.get("available"):
+        print("Este bench no tiene WiFi.")
+        return
+    if r.get("configured") is False:
+        print(f"WiFi: sin configurar (dongle {r.get('iface') or '?'}): dashboard del bench → WiFi → Configurar")
+        return
+    head = "prendida" if r.get("on") else "apagada" if r.get("on") is False else "¿?"
+    parts = [f"WiFi: {head}", r.get("ssid") or "?"]
+    if r.get("channel"):
+        parts.append(f"canal {r['channel']}")
+    if r.get("on") and r.get("until"):
+        parts.append(f"hasta {_hhmm(r['until'])}" + (f" ({r['by']})" if r.get("by") else ""))
+    print(" · ".join(parts))
+    if r.get("error"):
+        print(f"  ⚠ {r['error']}")
+    for cl in r.get("clients") or []:
+        mins = (cl.get("connected_s") or 0) // 60
+        sig = f"{cl['signal_dbm']} dBm" if cl.get("signal_dbm") is not None else ""
+        print(f"  {cl.get('board') or cl['mac']:<18} {cl.get('ip') or '-':<14} {sig:<8} conectada hace {mins} min")
+    if r.get("on") and not r.get("clients"):
+        print("  (ninguna placa conectada)")
+
+
+def _wifi_status(c: lib.Client) -> dict:
+    try:
+        r = c.request("GET", "/api/wifi") or {}
+    except EspbenchError as e:
+        if e.error == "not_found":
+            raise EspbenchError("unsupported", "este bench no tiene /api/wifi: actualizalo")
+        raise
+    if not r.get("available"):
+        raise EspbenchError("unsupported", "este bench no tiene WiFi (dongle + 'sudo espbench-wifi setup')")
+    return r
+
+
+def cmd_wifi(c: lib.Client, a, out: Out) -> int:
+    """WiFi del banco (docs/specs/bench-wifi.md). Sin host: el único bench que tiene WiFi, o --bench."""
+    if a.action not in (None, "on", "off"):
+        raise EspbenchError("bad_request", "espbench wifi [on|off] [--for D]")
+    for_s = lib.parse_duration(a.for_, "--for") if a.for_ else None
+    if for_s is not None and a.action != "on":
+        raise EspbenchError("bad_request", "--for va con 'wifi on' (cuánto queda prendida)")
+    if a.multi is not None:
+        found, errors = [], []
+        for b, bc in a.multi:
+            try:
+                found.append((b, bc, _wifi_status(bc)))
+            except EspbenchError as e:
+                errors.append(e)
+        if not found:
+            raise EspbenchError("unsupported", "ningún bench tiene WiFi configurado")
+        if len(found) > 1:
+            names = ", ".join(b.name for b, _, _ in found)
+            raise EspbenchError("ambiguous", f"hay WiFi en varios benches ({names}): elegí uno con --bench <bench>")
+        b, c, st = found[0]
+        out.extra["bench"] = b.name
+    else:
+        st = _wifi_status(c)
+    if a.action is None:
+        return out.emit({"ok": True, **st}, _human_wifi)
+    body = {"action": a.action, "for_s": for_s, "user": c.config.lock_user or None, **c.config.creds()}
+    r = c.request("POST", "/api/wifi", body=body) or {}
+    return out.emit({"ok": True, **r}, _human_wifi)
+
+
 def cmd_status(c: lib.Client, a, out: Out) -> int:
     board = c.resolve(a.dev, need_mac=False)
     r = {"ok": True, "board": board.label}
@@ -649,7 +720,7 @@ def _discover(cfg: lib.Config, a, out: Out, found: "lib.Benches") -> None:
     """Sin host: `ls` / `events --all` van a todos los benches (a.multi); un
     comando con <dev> va al bench donde está la placa (cfg.host) y la nombra por
     su MAC (lo que se pidió puede ser `<dev>@<bench>`)."""
-    if a.fn in (cmd_ls, cmd_pick, cmd_props) or (a.fn is cmd_events and getattr(a, "all", False)):
+    if a.fn in (cmd_ls, cmd_pick, cmd_props, cmd_wifi) or (a.fn is cmd_events and getattr(a, "all", False)):
         a.multi = [(b, lib.Client(lib.config_for_bench(cfg, b), log=out.log)) for b in found.list()]
         if a.fn is cmd_props and not a.multi:
             raise EspbenchError("not_found", f"no se encontró ningún bench. {found.why_empty()}")
@@ -725,6 +796,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--desc")
     sp.add_argument("--warn", action="store_true", help="(estado) estilo de advertencia")
     sp.add_argument("--exclude-pick", action="store_true", help="(estado) pick / ls --free no la eligen")
+
+    sp = add("wifi", cmd_wifi, "WiFi del banco para las placas: estado, on [--for D], off", dev=False)
+    sp.add_argument("action", nargs="?", metavar="on|off")
+    sp.add_argument("--for", dest="for_", metavar="D", help="con on: cuánto queda prendida (default 8 h, máx 12h)")
 
     add("status", cmd_status, "estado, salud y últimos eventos de una placa")
     add("who", cmd_who, "quién tiene el lock / la reserva")

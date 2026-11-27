@@ -30,6 +30,7 @@
                 <div class="meta-editor" id="loc-editor"></div></div>
         </div>
         <div class="mchips" id="bench-chips"></div>
+        <div class="wifi-menu hidden" id="wifi-menu" role="dialog" aria-label="WiFi del banco"></div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
             <div style="display:flex;gap:6px">
                 <button class="pill" id="btn-cleanup" title="Borrar sesiones de log y flasheos viejos de las placas"><i class="ti ti-eraser" aria-hidden="true"></i>Liberar espacio</button>
@@ -92,9 +93,112 @@
         document.getElementById('bench-chips').innerHTML = EB.benchChips(h).map(function(c) {
             return '<span class="mchip ' + c.level + '" title="' + esc(c.label) + '"><i class="ti ti-' + c.icon + '" aria-hidden="true"></i><b>' +
                    esc(c.value) + '</b> ' + esc(c.label) + '</span>';
-        }).join('') + '<span id="pin-chip"></span>';
+        }).join('') + '<span id="wifi-slot"></span><span id="pin-chip"></span>';
         renderPin();
+        renderWifi();
     }
+
+    // ── WiFi del banco (api/wifi; sin dongle configurado no se muestra nada) ──
+    var wifi = null, wifiHours = 8, wifiBusy = false, wifiMode = 'menu';   // wifiMode: 'menu' o 'config' (el formulario)
+
+    function renderWifi() {
+        var slot = document.getElementById('wifi-slot');
+        if (slot) slot.innerHTML = EB.wifiChipHtml(wifi);
+        var menu = document.getElementById('wifi-menu');
+        if (!EB.wifiView(wifi)) { menu.classList.add('hidden'); return; }
+        // Con el formulario abierto no se re-renderiza: se perdería lo escrito.
+        if (!menu.classList.contains('hidden') && !wifiBusy && wifiMode !== 'config' && wifi.configured !== false)
+            menu.innerHTML = EB.wifiMenuHtml(wifi, wifiHours);
+    }
+
+    function loadWifi() {
+        return getJson('api/wifi').then(function(w) { wifi = w; renderWifi(); }, function() { wifi = null; renderWifi(); });
+    }
+
+    function wifiPost(body, path) {
+        return EBAuth.fetch(path || 'api/wifi', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+            .then(function(r) { return r.json().then(function(d) { return [r.status, d]; }); });
+    }
+
+    function lockPair() {
+        var user = '', token = '';
+        try { user = localStorage.getItem('eb.lockUser') || ''; token = localStorage.getItem('eb.lockToken') || ''; } catch (e) {}
+        return {user: user || null, lock_user: user || null, lock_token: token || null};
+    }
+
+    // POST con la confirmación del 423 (placa reservada por otro) y el reintento con force.
+    function wifiSend(body, path) {
+        return wifiPost(body, path).then(function(res) {
+            if (res[0] !== 423) return res;
+            if (!confirm(EB.errorText(res[1], res[0]) + '\n\n¿Cambiar el WiFi igual?')) return null;
+            body.force = true;
+            return wifiPost(body, path);
+        });
+    }
+
+    function wifiSave(menu) {
+        var v = {ssid: menu.querySelector('[name=ssid]').value, password: menu.querySelector('[name=password]').value,
+                 channel: menu.querySelector('[name=channel]').value};
+        var errEl = menu.querySelector('[data-err]');
+        var err = EB.wifiConfigCheck(v, !!(wifi && wifi.configured));
+        if (err) { errEl.textContent = err; return; }
+        var body = Object.assign(lockPair(), {ssid: v.ssid, channel: +v.channel});
+        if (v.password) body.password = v.password;
+        wifiBusy = true;
+        errEl.textContent = 'Guardando…';
+        wifiSend(body, 'api/wifi/config').then(function(res) {
+            if (!res) { errEl.textContent = ''; return; }
+            if (res[0] >= 400) { errEl.textContent = EB.errorText(res[1], res[0]); return; }
+            wifi = res[1];
+            wifiMode = 'menu';
+            menu.innerHTML = EB.wifiMenuHtml(wifi, wifiHours);
+            if (wifi.warning) alert(wifi.warning);
+        }).catch(function() { errEl.textContent = 'Error de conexión'; })
+          .then(function() { wifiBusy = false; renderWifi(); });
+    }
+
+    function wifiAct(action, hours) {
+        var body = lockPair();
+        if (action === 'on') body.for_s = hours * 3600;
+        body.action = action;
+        wifiBusy = true;
+        wifiSend(body).then(function(res) {
+            if (!res) return;
+            if (res[0] >= 400) { alert('No se pudo cambiar el WiFi: ' + EB.errorText(res[1], res[0])); return; }
+            wifi = res[1];
+        }).catch(function() { alert('No se pudo cambiar el WiFi: error de conexión'); })
+          .then(function() { wifiBusy = false; renderWifi(); });
+    }
+
+    document.getElementById('bench-chips').addEventListener('click', function(e) {
+        if (!e.target.closest('#wifi-chip')) return;
+        var menu = document.getElementById('wifi-menu');
+        var open = menu.classList.toggle('hidden') === false;
+        if (open) {
+            wifiHours = 8;
+            wifiMode = wifi && wifi.configured === false ? 'config' : 'menu';
+            menu.innerHTML = EB.wifiMenuHtml(wifi, wifiHours, null, wifiMode);
+            if (wifiMode === 'menu') loadWifi();
+        }
+    });
+    document.getElementById('wifi-menu').addEventListener('click', function(e) {
+        // Los botones redibujan el menú: el que se tocó queda fuera de la página y el "click afuera" de
+        // abajo lo tomaría como afuera y cerraría el menú. Un click adentro no sigue de largo.
+        e.stopPropagation();
+        var b = e.target.closest('button');
+        if (!b || wifiBusy) return;
+        if (b.dataset.pick) { wifiHours = +b.dataset.pick; this.innerHTML = EB.wifiMenuHtml(wifi, wifiHours); return; }
+        if (b.dataset.cfg) { wifiMode = 'config'; this.innerHTML = EB.wifiMenuHtml(wifi, wifiHours, null, 'config'); return; }
+        if (b.dataset.cancel) { wifiMode = 'menu'; this.innerHTML = EB.wifiMenuHtml(wifi, wifiHours); return; }
+        if (b.dataset.save) { wifiSave(this); return; }
+        if (b.dataset.act) wifiAct(b.dataset.act, +(b.dataset.hours || wifiHours));
+    });
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#wifi-menu') && !e.target.closest('#wifi-chip')) { document.getElementById('wifi-menu').classList.add('hidden'); wifiMode = 'menu'; }
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { document.getElementById('wifi-menu').classList.add('hidden'); wifiMode = 'menu'; }
+    });
 
     var update = null;
     function renderPin() {
@@ -120,6 +224,7 @@
         }).catch(function() {});
         getJson('api/bench/health').then(renderHealth).catch(function() {});
         getJson('api/update').then(function(u) { update = u; renderPin(); }).catch(function() {});
+        loadWifi();
     }
 
     // Ubicación del bench (automática por IP, o fijada a mano): el ícono dice cuál; click → override manual.
