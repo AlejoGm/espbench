@@ -41,7 +41,7 @@ import threading
 import time
 from typing import Optional
 
-from server import events
+from server import events, logcat
 from server.serial_watch import line_kind
 
 try:                        # regex: el mismo dialecto que re, con timeout (remote/requirements.txt)
@@ -595,12 +595,17 @@ class _LogicalMatcher:
 # ---------- salida ----------
 
 class _Output:
-    """Filtro (src, grep), colapso del progreso de esptool y cabeza + cola."""
+    """Filtro (src, grep, categoría y nivel), colapso del progreso de esptool y cabeza + cola.
+    La categoría se calcula para todas las líneas en orden (logcat: la herencia mira la anterior)."""
 
-    def __init__(self, max_lines: int, grep, src: str, raw: bool):
+    def __init__(self, max_lines: int, grep, src: str, raw: bool, cats: Optional[set] = None,
+                 lvls: Optional[set] = None):
         self.max = max_lines
         self.head_n = min(HEAD_LINES, max_lines // 2)
         self.grep, self.src, self.raw = grep, src, raw
+        self.cats, self.lvls = cats, lvls
+        self.classifier = (logcat.Classifier(logcat.load()["categories"])
+                           if cats is not None or lvls is not None else None)
         self.head: list = []
         self.tail = collections.deque(maxlen=max_lines - self.head_n)
         self.count = 0
@@ -608,9 +613,12 @@ class _Output:
         self.date: Optional[str] = None
 
     def add(self, line: Line) -> None:
+        clean = line.clean()
+        if self.classifier is not None:
+            if not logcat.passes(self.classifier.feed(line.origin, clean), self.cats, self.lvls):
+                return
         if self.src == "serial" and not line.serial or self.src == "taglog" and line.origin != "|":
             return
-        clean = line.clean()
         if self.grep is not None and not self.grep.search(clean):
             return
         if _PROGRESS_RE.search(clean):
@@ -665,16 +673,22 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
                around: Optional[str] = None, before=None, after=None,
                max_lines=None, grep: Optional[str] = None, src: Optional[str] = None,
                raw: bool = False, echo: Optional[str] = None,
-               live: bool = True, now: Optional[float] = None) -> dict:
+               live: bool = True, now: Optional[float] = None,
+               cat: Optional[str] = None, level: Optional[str] = None) -> dict:
     """Rango del log (respuesta de §7.3). `live`: el proceso de la placa sigue
     escribiendo esa sesión (si no, session_ended). `echo`: texto mandado con
-    send; la primera línea lógica que termina con él no cuenta para el match."""
+    send; la primera línea lógica que termina con él no cuenta para el match.
+    `cat` / `level`: filtro por categoría y nivel (logcat), como grep: no toca el until."""
     now = dt.datetime.now().timestamp() if now is None else now
     max_lines = max(1, min(_int(max_lines, "max_lines", DEFAULT_MAX_LINES), MAX_MAX_LINES))
     src = src or "all"
     if src not in ("all", "serial", "taglog"):
         raise RangeError("bad_request", "src tiene que ser serial, taglog o all")
     grep_re = Pattern(grep, "grep") if grep else None
+    try:
+        cats, lvls = logcat.parse_filter(cat, level, logcat.load())
+    except ValueError as e:
+        raise RangeError("bad_request", str(e))
     before, after = _int(before, "before"), _int(after, "after")
     if around and (since or until):
         raise RangeError("bad_request", "around no se combina con since/until")
@@ -705,7 +719,7 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
                     matcher = _LogicalMatcher(kind, what, skip_at, echo)
                     matcher.seed(start.sess.f, start.offset)
         sess = start.sess
-        out = _Output(max_lines, grep_re, src, raw)
+        out = _Output(max_lines, grep_re, src, raw, cats, lvls)
         end = limit
         for line in _forward(sess.f, start.offset, limit):
             out.add(line)
@@ -739,6 +753,8 @@ def read_range(home, since: Optional[str] = None, until: Optional[str] = None,
             "session_ended": sess.sid != current or not live,
             "events": evs_in,
             "server_time": _server_time(now),
+            **({"filter": {"cat": sorted(cats) if cats else None, "level": sorted(lvls) if lvls else None}}
+               if cats or lvls else {}),
         }
 
 

@@ -2,7 +2,7 @@
 
 Remote ESP32 firmware deployment system. Build on your dev machine, flash to an ESP32 connected to a Raspberry Pi (or an Ubuntu PC) over TCP. Includes a persistent serial monitor and web dashboard.
 
-**Version:** 0.52.0
+**Version:** 0.54.0
 
 ---
 
@@ -242,6 +242,7 @@ idf.py build && espbench flash mi-board --verify --json        # flash + primer 
 espbench send mi-board "status" --until "OK" --json
 espbench events mi-board --type panic --json
 espbench logs mi-board --around panic --max-lines 80 --json
+espbench logs mi-board --since 30m --cat controlador,nube --level E,W --json   # solo errores y warnings de Modbus y MQTT
 espbench release mi-board --json
 ```
 
@@ -304,6 +305,8 @@ placa que bootea, contesta `status` y crashea con `panic`); después `ESPBENCH_H
 ## Dashboard
 
 Web UI at `http://<pi-ip>:8080`, light or dark theme: the bench (temperature, RAM, disk, load, uptime), each board with its status, uptime, last log and 24 h activity, and a live serial monitor with events, history and console.
+
+The monitor filters the log by **category** (cellular modem, controller/Modbus, cloud/MQTT, WiFi/BLE, system, OTA, memory, bench, other) and **level** (errors, warnings, info): chips with the line count of each, several at once. The category comes from the ESP-IDF tag (`I (123) BG95: ...`), a regex for untagged lines, or the line before (a backtrace belongs to its panic). The default catalog has the tags of Sensify's firmware; a bench can replace it with `/opt/esp/meta/log_categories.json` (`{"categories": [{"id", "label", "tags": ["BG95", "MB_*"], "lines": ["^Unregistered"]}]}`, see `remote/server/logcat.py`). Same filter in the CLI: `espbench logs --cat --level`.
 
 An `espbench test` run shows up live: the board reads **Testing** with a progress bar (passed, failed, the test running now), the monitor marks where each test starts and ends in the log and lists every case in its **Tests** tab (click one for its log). Restarts and panics during a run belong to the tests: they don't mark the board as broken.
 

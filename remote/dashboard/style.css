@@ -280,6 +280,27 @@ body.device-page { height: 100dvh; display: flex; flex-direction: column; overfl
 .tool-btn.active { background: var(--ink); color: var(--page); }
 .tool-btn--panic { color: var(--bad); }
 .tool-sep { flex: 1; }
+/* Filtro por categoría y nivel del log (EB.logCatBarHtml): chips en una línea que se desliza */
+.logcat-bar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.logcat-bar::-webkit-scrollbar { display: none; }
+.logcat-bar.hidden { display: none; }
+.lc-group { display: inline-flex; gap: 4px; flex: none; }
+.lc-chip, .lc-clear {
+    height: 26px; padding: 0 10px; border-radius: 999px; border: none; background: var(--card); color: var(--ink2);
+    font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    box-shadow: var(--shadow); flex: none; cursor: pointer;
+}
+.lc-chip:hover, .lc-clear:hover { color: var(--ink); }
+.lc-chip .lc-n { font-weight: 500; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.lc-chip.zero { opacity: .55; }
+.lc-chip.on { background: var(--ink); color: var(--page); }
+.lc-chip.on .lc-n { color: inherit; opacity: .7; }
+.lc-lvl-e:not(.on) { color: var(--bad); }
+.lc-lvl-w:not(.on) { color: var(--warn); }
+.lc-lvl-e.on { background: var(--bad); color: #fff; }
+.lc-lvl-w.on { background: var(--warn); color: #fff; }
+.lc-clear { background: none; box-shadow: none; color: var(--ink3); padding: 0 6px; }
+.lc-clear .ti { font-size: 14px; }
 .line-count { font-size: 11.5px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding: 0 4px; }
 
 .device-main { flex: 1; display: flex; gap: 8px; min-height: 0; }

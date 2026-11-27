@@ -394,7 +394,8 @@ boot ─────► devremote.service ────────────�
 | `POST /api/device/{tty}/test` `{phase, run_id, ...}` | Aviso de `espbench test` (`testrun.py`): start (total, project, user, stale_s), case (el test que empieza), result (cómo terminó), end (status `done`/`aborted`). Actualiza la corrida de la placa y registra el evento `test`. Como `send`: `expect_mac`, 423 si la reservó otro; 404 `not_found` si el run_id no es la corrida actual, 400 si el aviso no corresponde |
 | `GET /api/board/{key}/test` | `{run}`: la última corrida con cada caso (cursores de inicio y fin en el log) y `status` (`running`, `done`, `aborted`, `interrupted` = sin avisos por más de `stale_s`), o `null` |
 | `WS /ws/device/{tty}` | `LogStreamer`: el log del device en vivo |
-| `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
+| `GET /api/board/{key}/log?since=&until=&around=&before=&after=&max_lines=&grep=&src=&cat=&level=&raw=&echo=` | Rango del log de una placa (`logrange.py`, ver abajo) |
+| `GET /api/log-categories` | Catálogo de categorías del log (`logcat.py`): el del bench (`meta/log_categories.json`) o el default, con `banco` y `otros` al final, `levels`, `source` y `error` si el archivo del bench está roto |
 | `GET /api/board/{key}/events?type=a,b&since=&limit=&order=&counts=` | Eventos de la placa, ordenados por (sesión, offset): los últimos `limit` (50), o los primeros desde `since` con `order=asc`; `more` si quedaron afuera; `counts=1`: además `{tipo: n}` de todos desde `since` (sin el filtro de tipo) |
 
 - **Token (opcional)**: si existe `/opt/esp/api_token` (`auth.py`, se lee en cada
@@ -523,7 +524,8 @@ bloquea nada por una nota o una propiedad; el CLI y el dashboard los muestran, y
   `before`/`after` líneas. No se combina con `since`/`until`.
 - **Salida**: líneas compactas (`HH:MM:SS.mmm <origen> <texto>`, con fecha si no es
   la de `date`), sin ANSI salvo `raw=1`, progreso de esptool colapsado, `src`
-  (`serial`/`taglog`/`all`), `grep`, y con más de `max_lines` (default 200, tope
+  (`serial`/`taglog`/`all`), `grep`, `cat`/`level` (categoría y nivel de `logcat.py`, calculados sobre todas
+  las líneas en orden por la herencia; la respuesta trae `filter` si se pidió), y con más de `max_lines` (default 200, tope
   5000) las primeras 50 + las últimas y un marcador. `session_ended`: la sesión del
   rango no es la actual o no hay proceso vivo escribiéndola. `partial` siempre es
   `null`: la línea en curso vive en la memoria del proceso del device (sale al

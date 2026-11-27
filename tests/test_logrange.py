@@ -417,6 +417,39 @@ def test_src_grep_and_raw(b):
     assert e.value.error == "bad_request"
 
 
+def test_cat_and_level_filter():
+    """logcat: categoría por tag (o regex), herencia de la línea suelta, nivel; no toca el until."""
+    b = Board()
+    b.add("16:00:01.000", ">", "I (10) BG95 ./lib/QuectelBG95/QuectelBG95.cpp:1 f(): registrando")
+    b.add("16:00:01.100", ">", "Unregistered")
+    b.add("16:00:02.000", ">", "E (20) MB_CONTROLLER_MASTER: mbc_master_get_parameter(74): fallo")
+    b.add("16:00:02.100", ">", "trama 01 03 00 10")
+    b.add("16:00:03.000", ">", "W (30) MQTT ./m.cpp:3 Connect(): reintento")
+    b.add("16:00:04.000", "|", "WARN  | protocol       | algo del server")
+    mb = ["E (20) MB_CONTROLLER_MASTER: mbc_master_get_parameter(74): fallo", "trama 01 03 00 10"]
+    r = rr(cat="controlador")
+    assert bodies(r) == mb and r["filter"] == {"cat": ["controlador"], "level": None}
+    assert bodies(rr(level="E")) == mb
+    assert bodies(rr(level="w")) == ["W (30) MQTT ./m.cpp:3 Connect(): reintento", "WARN  | protocol       | algo del server"]
+    # Unregistered es de celular pero sin nivel: con --level no sale
+    assert bodies(rr(cat="celular")) == ["I (10) BG95 ./lib/QuectelBG95/QuectelBG95.cpp:1 f(): registrando",
+                                         "Unregistered"]
+    assert len(rr(cat="celular", level="I")["lines"]) == 1
+    assert bodies(rr(cat="celular,nube", grep="reintento")) == ["W (30) MQTT ./m.cpp:3 Connect(): reintento"]
+    assert bodies(rr(cat="banco", src="serial")) == []
+    assert "filter" not in rr()
+    # el until busca en todas las líneas, no solo en las que pasan el filtro
+    r = rr(cat="controlador", until="re:reintento")
+    assert r["until_found"] and r["match"].endswith("reintento") and bodies(r) == mb
+    for kw in ({"cat": "radio"}, {"level": "X"}):
+        with pytest.raises(RangeError) as e:
+            rr(**kw)
+        assert e.value.error == "bad_request"
+    with pytest.raises(RangeError) as e:
+        rr(cat="radio")
+    assert "celular" in e.value.message                    # dice cuáles hay
+
+
 def test_esptool_progress_is_collapsed():
     b = Board()
     b.add("16:00:01.000", "|", "INFO  | flash          | write_flash...")
